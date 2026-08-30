@@ -62,6 +62,7 @@ from .meta_eligibility import (
     SoloRaidSchedule,
     classify_meta_epoch_usage,
     post_epoch_completed_raids,
+    to_solo_raid_usage_evidence,
 )
 from .meta_usage import (
     CharacterUsageWindow,
@@ -192,4 +193,5 @@ __all__ = [
     "select_seed_candidates",
     "summarize_enikk_rankings",
     "teams_are_disjoint",
+    "to_solo_raid_usage_evidence",
 ]
