@@ -48,6 +48,42 @@ class PairSynergyProbeTests(unittest.TestCase):
             ],
         )
 
+    def test_same_pair_keeps_context_specific_observations(self):
+        probes = (
+            PairSynergyProbe(
+                pair=("X", "Y"),
+                reference=("A", "B", "C", "D", "E"),
+                positions=(0, 1),
+                source="context-positive",
+            ),
+            PairSynergyProbe(
+                pair=("X", "Y"),
+                reference=("F", "G", "H", "I", "J"),
+                positions=(0, 1),
+                source="context-negative",
+            ),
+        )
+        evaluator = FakeEvaluator(
+            {
+                ("A", "B", "C", "D", "E"): 100,
+                ("X", "B", "C", "D", "E"): 120,
+                ("A", "Y", "C", "D", "E"): 130,
+                ("X", "Y", "C", "D", "E"): 170,
+                ("F", "G", "H", "I", "J"): 100,
+                ("X", "G", "H", "I", "J"): 140,
+                ("F", "Y", "H", "I", "J"): 130,
+                ("X", "Y", "H", "I", "J"): 160,
+            }
+        )
+
+        rows = measure_pair_probes(evaluator, probes)
+
+        self.assertEqual(tuple(row.interaction_delta for row in rows), (20, -10))
+        self.assertEqual(
+            tuple(row.probe.source for row in rows),
+            ("context-positive", "context-negative"),
+        )
+
     def test_pair_placement_order_is_explicit(self):
         probe = PairSynergyProbe(
             pair=("Y", "X"),
