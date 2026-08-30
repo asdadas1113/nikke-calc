@@ -27,7 +27,17 @@ from .evaluator import (
     MorisEvaluator,
 )
 from .global_search import Allocation, select_global_allocation
-from .marginal import MarginalMeasurement, measure_marginals_with_candidates
+from .marginal import (
+    CandidateMarginalPlan,
+    CandidateMarginalPlanEntry,
+    MarginalMeasurement,
+    MarginalObservation,
+    MarginalValue,
+    measure_marginals,
+    measure_marginals_with_candidates,
+    measure_planned_marginals_with_candidates,
+    plan_candidate_specific_marginals,
+)
 from .pipeline import (
     AllocationRefinementResult,
     PipelineStageMetrics,
@@ -48,6 +58,8 @@ __all__ = [
     "BurstStructureReport",
     "BurstStructureValidator",
     "CacheIdentity",
+    "CandidateMarginalPlan",
+    "CandidateMarginalPlanEntry",
     "CandidateTeam",
     "ConstraintSet",
     "Evaluation",
@@ -55,6 +67,8 @@ __all__ = [
     "EvaluatorStats",
     "FieldProvenance",
     "MarginalMeasurement",
+    "MarginalObservation",
+    "MarginalValue",
     "MorisEvaluator",
     "OneSwapNeighbor",
     "PairSynergyObservation",
@@ -68,11 +82,14 @@ __all__ = [
     "enumerate_legal_teams",
     "evaluate_allocation_with_one_swap_refinement",
     "generate_one_swap_neighbors",
+    "measure_marginals",
     "measure_marginals_with_candidates",
     "measure_pair_probes",
+    "measure_planned_marginals_with_candidates",
     "normalize_account_bundle",
     "normalize_account_sync",
     "normalize_blablalink_worker_payload",
+    "plan_candidate_specific_marginals",
     "run_exhaustive_validation",
     "select_blablalink_area",
     "select_global_allocation",
