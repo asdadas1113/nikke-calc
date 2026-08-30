@@ -12,6 +12,20 @@ from .anytime import AnytimeSearchResult, AnytimeStageMetrics, run_anytime_searc
 from .blablalink import normalize_blablalink_worker_payload, select_blablalink_area
 from .budget import BudgetedEvaluator, SearchBudget, SearchBudgetExhausted
 from .candidates import CandidateTeam
+from .cold_pool import (
+    ColdDecision,
+    ColdPoolPartition,
+    ColdRestorationResult,
+    RestorationStep,
+    SoloRaidUsageEvidence,
+    StructuralDemand,
+    StructuralFeasibility,
+    UsageClass,
+    build_burst_role_map,
+    check_structural_feasibility,
+    partition_meta_guided_roster,
+    restore_cold_until_feasible,
+)
 from .constraints import (
     BurstMetadata,
     BurstStructureReport,
@@ -38,6 +52,11 @@ from .marginal import (
     measure_marginals_with_candidates,
     measure_planned_marginals_with_candidates,
     plan_candidate_specific_marginals,
+)
+from .overload import (
+    OverloadKnowledge,
+    OverloadPieceEvidence,
+    derive_overload_piece_evidence,
 )
 from .pipeline import (
     AllocationRefinementResult,
@@ -72,6 +91,9 @@ __all__ = [
     "CandidateMarginalPlan",
     "CandidateMarginalPlanEntry",
     "CandidateTeam",
+    "ColdDecision",
+    "ColdPoolPartition",
+    "ColdRestorationResult",
     "ConstraintSet",
     "Evaluation",
     "EvaluationTimings",
@@ -82,6 +104,8 @@ __all__ = [
     "MarginalValue",
     "MorisEvaluator",
     "OneSwapNeighbor",
+    "OverloadKnowledge",
+    "OverloadPieceEvidence",
     "PairSynergyObservation",
     "PairSynergyProbe",
     "PipelineStageMetrics",
@@ -89,11 +113,19 @@ __all__ = [
     "ProxyView",
     "ProxyViewCandidate",
     "ProxyViewHit",
+    "RestorationStep",
     "SearchBudget",
     "SearchBudgetExhausted",
+    "SoloRaidUsageEvidence",
+    "StructuralDemand",
+    "StructuralFeasibility",
     "TeamRequirement",
+    "UsageClass",
     "ValidationMetrics",
+    "build_burst_role_map",
     "build_planned_marginal_prefix_views",
+    "check_structural_feasibility",
+    "derive_overload_piece_evidence",
     "enumerate_legal_teams",
     "evaluate_allocation_with_one_swap_refinement",
     "generate_one_swap_neighbors",
@@ -104,8 +136,10 @@ __all__ = [
     "normalize_account_bundle",
     "normalize_account_sync",
     "normalize_blablalink_worker_payload",
+    "partition_meta_guided_roster",
     "plan_candidate_specific_marginals",
     "reorder_candidate_marginal_plan",
+    "restore_cold_until_feasible",
     "run_anytime_search_round",
     "run_exhaustive_validation",
     "select_blablalink_area",
