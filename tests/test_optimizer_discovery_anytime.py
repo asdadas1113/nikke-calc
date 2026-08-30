@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 
 from optimizer import CacheIdentity, MorisEvaluator, SearchBudget, run_anytime_search_round
-from optimizer.discovery import generate_candidate_discovery_bundle
+from optimizer.discovery import generate_multi_view_candidate_discovery
 
 
 def make_evaluator(scores):
@@ -48,12 +48,11 @@ class DiscoveryAnytimeTests(unittest.TestCase):
         evaluator = make_evaluator(scores)
         cache = {}
 
-        def bundle(marginal):
+        def discovery(context):
             if "value" not in cache:
-                proxy = {name: row.mean_delta for name, row in marginal.values.items()}
-                cache["value"] = generate_candidate_discovery_bundle(
+                cache["value"] = generate_multi_view_candidate_discovery(
                     ("C", "D", "E", "F"),
-                    proxy,
+                    context.proxy_views,
                     team_size=2,
                     team_count=2,
                     single_team_beam_width=6,
@@ -74,8 +73,8 @@ class DiscoveryAnytimeTests(unittest.TestCase):
             roster=("C", "D", "E", "F"),
             reference_teams=(("A", "B"),),
             candidate_teams=(),
-            candidate_builder=lambda marginal: bundle(marginal).ordinary_teams,
-            protected_candidate_channel_builder=lambda marginal: bundle(marginal).protected_channels,
+            candidate_builder=lambda context: discovery(context).ordinary_teams,
+            protected_candidate_channel_builder=lambda context: discovery(context).protected_channels,
             positions_per_candidate=1,
             candidate_limit=1,
             team_count=2,
