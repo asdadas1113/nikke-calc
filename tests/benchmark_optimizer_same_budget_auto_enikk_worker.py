@@ -1,12 +1,13 @@
 """Automatic Worker Pure-vs-Meta benchmark with Enikk composition preparation.
 
-This wrapper owns only *common* public-composition setup:
+This wrapper owns only common setup before the canonical automatic comparison:
 1. parse an Enikk Teams dump by repository resource ids;
 2. gate it against the full owned roster;
 3. use a separate Moris evaluator to resolve bounded unknown slot placements;
-4. write selected ordered references and optional exploration-only seeds into a
-   temporary plan;
-5. delegate the actual Pure-vs-Meta comparison to
+4. resolve either explicit meta epochs OR curated change events for the owned roster;
+5. write selected ordered references, optional exploration-only seeds, and resolved
+   explicit epochs into temporary inputs;
+6. delegate the actual Pure-vs-Meta comparison to
    ``benchmark_optimizer_same_budget_auto_worker.py``.
 
 Reference discovery calls are reported separately and are never hidden inside one
@@ -20,6 +21,7 @@ import json
 import subprocess
 import sys
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +40,7 @@ from optimizer import (  # noqa: E402
     collect_enikk_team_dump_compositions,
     prepare_external_references,
 )
+from optimizer.meta_epoch_input import resolve_meta_epoch_input  # noqa: E402
 
 AUTO_RUNNER = TEST_DIR / "benchmark_optimizer_same_budget_auto_worker.py"
 
@@ -94,6 +97,54 @@ def _source_summary(collection, prepared) -> dict[str, Any]:
     }
 
 
+def _resolved_meta_payload(
+    payload: dict[str, Any],
+    roster: Sequence[str],
+) -> tuple[dict[str, Any], dict[str, int]]:
+    """Normalize epochs/change_events into the legacy explicit ``epochs`` shape.
+
+    The canonical auto-worker runner can therefore stay unchanged. Presence of a
+    key counts as choosing that mode: even ``epochs: {}`` together with
+    ``change_events: []`` is rejected as ambiguous.
+    """
+
+    parsed = base.parse_meta_evidence(payload)
+    explicit_epochs = parsed["epochs"] if "epochs" in payload else None
+    event_rows = payload.get("change_events") if "change_events" in payload else None
+    if event_rows is not None and (
+        not isinstance(event_rows, list)
+        or not all(isinstance(row, dict) for row in event_rows)
+    ):
+        raise ValueError("meta.change_events must be a list of objects")
+
+    resolved = resolve_meta_epoch_input(
+        roster,
+        through=parsed["completed_through"],
+        explicit_epochs=explicit_epochs,
+        change_event_rows=event_rows,
+        source="benchmark-meta-epoch-input",
+    )
+    out = json.loads(json.dumps(payload, ensure_ascii=False))
+    out.pop("change_events", None)
+    out["epochs"] = {
+        name: {
+            "knowledge": row.knowledge.value,
+            **(
+                {"valid_from": row.valid_from.isoformat()}
+                if row.valid_from is not None
+                else {}
+            ),
+            "source": row.source,
+            "reason": row.reason,
+        }
+        for name, row in resolved.items()
+    }
+    counts: dict[str, int] = {}
+    for row in resolved.values():
+        counts[row.knowledge.value] = counts.get(row.knowledge.value, 0) + 1
+    return out, counts
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--worker", type=Path, required=True)
@@ -118,6 +169,10 @@ def main() -> None:
         raise ValueError("strict Worker account audit failed before Enikk reference preparation")
 
     plan = base.load(args.plan)
+    meta_payload, epoch_counts = _resolved_meta_payload(
+        base.load(args.meta),
+        snapshot.roster,
+    )
     config = dict(plan.get("config") or {})
     if config.get("rng_mode") not in (None, "expected"):
         raise ValueError("same-budget benchmark requires rng_mode=expected")
@@ -182,9 +237,15 @@ def main() -> None:
     _append_external_seeds(delegated_plan, prepared, external_seed_mode)
 
     with tempfile.TemporaryDirectory(prefix="nikke-optimizer-enikk-") as tmp:
-        plan_path = Path(tmp) / "plan.json"
+        root = Path(tmp)
+        plan_path = root / "plan.json"
+        meta_path = root / "meta.json"
         plan_path.write_text(
             json.dumps(delegated_plan, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        meta_path.write_text(
+            json.dumps(meta_payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         command = [
@@ -195,7 +256,7 @@ def main() -> None:
             "--plan",
             str(plan_path),
             "--meta",
-            str(args.meta),
+            str(meta_path),
             "--engine-commit",
             args.engine_commit,
             "--level-mode",
@@ -225,6 +286,17 @@ def main() -> None:
             "source": f"enikk:S{args.enikk_raid}:teams-dump",
             "external_seed_mode": external_seed_mode,
             **_source_summary(collection, prepared),
+        }
+        result["meta_epoch_setup"] = {
+            "resolved_owned_character_count": len(snapshot.roster),
+            "knowledge_counts": dict(sorted(epoch_counts.items())),
+            "input_mode": (
+                "change_events"
+                if "change_events" in base.load(args.meta)
+                else "explicit_epochs"
+                if "epochs" in base.load(args.meta)
+                else "none"
+            ),
         }
         print(json.dumps(result, ensure_ascii=False, indent=2))
 
