@@ -53,6 +53,13 @@ from .marginal import (
     measure_planned_marginals_with_candidates,
     plan_candidate_specific_marginals,
 )
+from .meta_usage import (
+    CharacterUsageWindow,
+    EnikkSeasonUsageSnapshot,
+    SeasonUsageObservation,
+    aggregate_character_window,
+    summarize_enikk_rankings,
+)
 from .overload import (
     OverloadKnowledge,
     OverloadPieceEvidence,
@@ -91,10 +98,12 @@ __all__ = [
     "CandidateMarginalPlan",
     "CandidateMarginalPlanEntry",
     "CandidateTeam",
+    "CharacterUsageWindow",
     "ColdDecision",
     "ColdPoolPartition",
     "ColdRestorationResult",
     "ConstraintSet",
+    "EnikkSeasonUsageSnapshot",
     "Evaluation",
     "EvaluationTimings",
     "EvaluatorStats",
@@ -116,12 +125,14 @@ __all__ = [
     "RestorationStep",
     "SearchBudget",
     "SearchBudgetExhausted",
+    "SeasonUsageObservation",
     "SoloRaidUsageEvidence",
     "StructuralDemand",
     "StructuralFeasibility",
     "TeamRequirement",
     "UsageClass",
     "ValidationMetrics",
+    "aggregate_character_window",
     "build_burst_role_map",
     "build_planned_marginal_prefix_views",
     "check_structural_feasibility",
@@ -145,5 +156,6 @@ __all__ = [
     "select_blablalink_area",
     "select_global_allocation",
     "select_proxy_view_candidates",
+    "summarize_enikk_rankings",
     "teams_are_disjoint",
 ]
