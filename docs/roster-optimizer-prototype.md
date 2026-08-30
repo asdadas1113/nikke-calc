@@ -65,3 +65,84 @@ Do not add more heuristics until a small synthetic/exhaustive harness exposes a 
 - wall time
 
 Any fix should be tied to an observed failure and the failing roster should become a regression case.
+
+## Proposed meta-guided roster filtering and user review controls
+
+This section records a candidate design only.  It is not yet an implemented optimizer policy, and numeric low-usage thresholds remain **TBD pending data inspection and benchmarks**.
+
+### Motivation
+
+The main runtime bottleneck is expensive Moris `simulate()` calls.  Large accounts can own far more characters than they have permanently invested in, so spending equal marginal/search budget on every owned character may be wasteful.  The proposed default experience is therefore a **meta-guided search** that may temporarily move very unlikely candidates into a reversible cold pool before expensive evaluation.  Moris simulation remains the truth for teams that are actually evaluated.
+
+Because external raid usage affects which characters receive search budget, this is explicitly meta-guided behavior rather than pure simulation.  A pure-simulation path must remain available, and meta-guided filtering must relax or fall back when it prevents a viable five-team search.
+
+### Initial external data scope
+
+For the MVP, external usage evidence should be limited to **Solo Raid** data, with Enikk as the current leading source candidate.  Union Raid data is deliberately excluded from the initial rule so that a Solo Raid optimizer is not biased by a different mode.  Union Raid may be investigated later only if real false-negative cases show that it adds useful protection or diagnostic evidence.
+
+The exact definition of `low_usage` is intentionally unresolved.  Do **not** hard-code an arbitrary percentage threshold yet.  Before choosing a rule, inspect multiple recent Solo Raid seasons, coverage, character release timing, observed usage distribution, and niche characters that spike on specific bosses.  Missing or insufficient data should fail open rather than being treated as low usage.
+
+### Cold-pool eligibility
+
+The proposed conservative eligibility rule is:
+
+`cold_eligible = low_usage AND overload_piece_count == 0`
+
+Both conditions are required.
+
+- Any character with **at least one Overload equipment piece** is protected from this usage-based cold filter.  Overload is treated as a strong signal of permanent account investment.
+- `overload_piece_count == 0` does **not** itself mean that a character is weak or unused; it only makes the character eligible for the separate low-usage check.
+- A low-usage character with account investment remains searchable.
+- A zero-Overload character with meaningful Solo Raid usage remains searchable.
+
+The first implementation should prefer this simple, auditable rule over a guessed composite investment score.  Additional protection signals such as unusually high skill/favorite investment may be considered later only after measured false-negative cases justify them.
+
+### Signals that must not be used for pruning
+
+Current displayed character level, Synchro Device membership, and current combat power must **not** be pruning evidence.
+
+A character can appear as level 1 simply because it is not currently assigned to the Synchro Device and can become usable immediately when assigned.  Combat power also inherits level effects and would reintroduce the same bias indirectly.  Solo Raid evaluation should continue to use the explicit level policy already owned by the calculator/profile layer rather than treating current UI level as account investment.
+
+### Reversible relaxation and beginner accounts
+
+Cold filtering is a search-budget policy, not hard legality.  Characters moved to the cold pool must remain recoverable.
+
+After initial filtering, perform a cheap structural check before expensive simulation.  If the active pool cannot support five non-overlapping structurally legal teams, restore cold characters until the requirement can be met.  Merely reaching 25 characters is not sufficient because burst structure can still make five legal teams impossible.
+
+This naturally weakens filtering for beginner accounts:
+
+- mature/wide roster: potentially substantial cold filtering,
+- smaller roster: partial restoration,
+- very small roster: filtering may effectively disappear,
+- fewer than 25 owned characters: five complete non-overlapping teams are mathematically impossible and should be reported as such rather than blamed on filtering.
+
+If meta filtering must be relaxed until it is effectively absent, record the run as a pure-simulation fallback (or equivalent provenance) rather than pretending that meaningful meta filtering occurred.
+
+### Search modes and provenance
+
+Current proposed user-facing/default behavior:
+
+- **Meta-guided**: default; may use Solo Raid usage evidence plus the zero-Overload condition to cold-filter candidates.
+- **Meta-guided / relaxed**: meta filtering started active but cold candidates had to be restored for structural viability or search coverage.
+- **Pure Sim**: external usage data does not remove candidates from the search space; should remain available as an advanced/manual choice and as an automatic fallback when required.
+
+External usage data should affect candidate search allocation only.  It must not silently add damage bonuses or otherwise alter Moris scores.  Final allocation among actually simulated candidates remains based on Moris evaluation and exact set packing over the evaluated pool.
+
+### User candidate controls
+
+Keep explicit user intent above meta filtering.  Proposed states are:
+
+- **Normal**: use the ordinary search policy.
+- **Priority review**: do not force the character into the final allocation, but guarantee meaningful search/evaluation attention.  This state bypasses cold filtering.
+- **Force include**: final result must include the requested character subject to the explicit hard constraint semantics.
+- **Force exclude**: character is excluded from search by explicit user request.
+
+`Priority review` exists to answer a question that force-inclusion cannot answer: “I think this character should be strong; did the optimizer simply fail to examine it?”  It should guarantee evaluation opportunity without giving the character a score bonus.  Candidate-generation details and exact review budget remain TBD and should be benchmarked rather than guessed.
+
+A useful diagnostic is to compare, within the already evaluated candidate pool, the best unrestricted global allocation against the best allocation requiring the priority-reviewed character.  This can distinguish “examined but not selected” from “additional review exposed a missed strong candidate,” while still avoiding claims of global optimality outside the evaluated pool.
+
+### Optional diagnostic logging
+
+If a user explicitly opts in, priority-review outcomes could become valuable optimizer-quality data.  In particular, a character absent from the normal search result but entering the final five teams after priority review is a concrete candidate-generation false-negative worth preserving as a regression case.
+
+Logging should be opt-in, minimize collected data, avoid account identifiers/raw profiles by default, and record both successful and unsuccessful priority reviews to avoid selection bias.  Useful aggregate/provenance fields may include optimizer/engine version, search budget, active/cold counts, whether the reviewed character had been cold-filtered, additional simulation calls, final-selection outcome, score delta, and search-stage provenance.  Any expansion into detailed build data should require a demonstrated analytical need and a separate privacy review.
