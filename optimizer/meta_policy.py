@@ -7,7 +7,9 @@ The lower-level modules deliberately stay separate:
   applies an explicit low-usage policy;
 - ``overload`` proves whether account evidence shows zero/present/unknown OL;
 - ``cold_pool`` partitions LOW + proven-OL0 characters reversibly and restores
-  deferred characters only when structural feasibility requires it.
+  deferred characters only when structural feasibility requires it;
+- ``cold_exploration`` gives a small caller-owned subset of still-Cold members a
+  temporary search look without changing their classification.
 
 This module only wires those audited inputs together. Missing meta-epoch evidence
 is converted to UNKNOWN and therefore fails open to Primary. No Moris score is
@@ -20,6 +22,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 
+from .cold_exploration import ColdExplorationPlan, plan_cold_exploration
 from .cold_pool import (
     ColdPoolPartition,
     ColdRestorationResult,
@@ -76,6 +79,26 @@ class PreparedMetaGuidedRoster:
     @property
     def structurally_feasible(self) -> bool:
         return self.restoration.feasibility.feasible
+
+
+@dataclass(frozen=True)
+class PreparedMetaGuidedSearchRoster:
+    """Structural preparation plus temporary bounded Cold exploration."""
+
+    prepared: PreparedMetaGuidedRoster
+    exploration: ColdExplorationPlan
+
+    @property
+    def search_roster(self) -> tuple[str, ...]:
+        return self.exploration.search_roster
+
+    @property
+    def explored_cold(self) -> tuple[str, ...]:
+        return self.exploration.selected_characters
+
+    @property
+    def still_deferred_cold(self) -> tuple[str, ...]:
+        return self.exploration.deferred
 
 
 def classify_roster_meta_usage(
@@ -212,4 +235,58 @@ def prepare_meta_guided_roster(
         usage=built.usage,
         initial_partition=built.partition,
         restoration=restoration,
+    )
+
+
+def prepare_meta_guided_search_roster(
+    roster: Sequence[str],
+    snapshots: Sequence[EnikkSeasonUsageSnapshot],
+    epochs_by_character: Mapping[str, MetaEpochEvidence],
+    overload_by_character: Mapping[str, OverloadPieceEvidence],
+    roles_by_character: Mapping[str, Sequence[str]],
+    demand: StructuralDemand,
+    *,
+    schedule: SoloRaidSchedule,
+    completed_through: date,
+    policy: LowUsagePolicy,
+    restoration_batch_size: int,
+    cold_exploration_limit: int,
+    protected_names: Sequence[str] = (),
+) -> PreparedMetaGuidedSearchRoster:
+    """Prepare the temporary roster that a Meta-guided search round may inspect.
+
+    The first phase restores Cold only when structural legality requires it. The
+    second phase gives at most ``cold_exploration_limit`` still-deferred members a
+    temporary search look using ``plan_cold_exploration``. The original Cold
+    classification is retained; exploration is not promotion and does not add a
+    score bonus.
+
+    Both numeric policy values are caller-owned so later Fast/Standard/Precise
+    presets can be benchmarked instead of silently becoming primitive defaults.
+    """
+
+    prepared = prepare_meta_guided_roster(
+        roster,
+        snapshots,
+        epochs_by_character,
+        overload_by_character,
+        roles_by_character,
+        demand,
+        schedule=schedule,
+        completed_through=completed_through,
+        policy=policy,
+        restoration_batch_size=restoration_batch_size,
+        protected_names=protected_names,
+    )
+    exploration = plan_cold_exploration(
+        prepared.active_roster,
+        prepared.remaining_cold,
+        prepared.usage.usage_by_character,
+        roles_by_character,
+        demand,
+        limit=cold_exploration_limit,
+    )
+    return PreparedMetaGuidedSearchRoster(
+        prepared=prepared,
+        exploration=exploration,
     )
