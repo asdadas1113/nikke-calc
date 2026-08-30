@@ -45,6 +45,12 @@ from .pipeline import (
     evaluate_allocation_with_one_swap_refinement,
 )
 from .priority import reorder_candidate_marginal_plan
+from .proxy_views import (
+    ProxyView,
+    ProxyViewCandidate,
+    ProxyViewHit,
+    select_proxy_view_candidates,
+)
 from .refinement import OneSwapNeighbor, generate_one_swap_neighbors
 from .synergy import PairSynergyObservation, PairSynergyProbe, measure_pair_probes
 from .validation import ValidationMetrics, enumerate_legal_teams, run_exhaustive_validation
@@ -79,6 +85,9 @@ __all__ = [
     "PairSynergyProbe",
     "PipelineStageMetrics",
     "ProvenanceStatus",
+    "ProxyView",
+    "ProxyViewCandidate",
+    "ProxyViewHit",
     "SearchBudget",
     "SearchBudgetExhausted",
     "TeamRequirement",
@@ -99,5 +108,6 @@ __all__ = [
     "run_exhaustive_validation",
     "select_blablalink_area",
     "select_global_allocation",
+    "select_proxy_view_candidates",
     "teams_are_disjoint",
 ]
