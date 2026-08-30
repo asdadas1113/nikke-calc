@@ -2,8 +2,8 @@
 
 This module deliberately contains no defaults. A caller chooses every beam width,
 team limit, allocation width, and placement policy. The same character proxy map
-feeds both the ordinary single-team universe and the protected non-overlap
-allocation channels, avoiding separate hidden scoring systems.
+feeds ordinary single-team discovery, core-completion protection, and non-overlap
+allocation protection, avoiding separate hidden scoring systems.
 """
 
 from __future__ import annotations
@@ -32,11 +32,38 @@ class CandidateDiscoveryBundle:
         return self.ordinary.teams
 
     @property
-    def protected_channels(self) -> tuple[tuple[Team, ...], ...]:
+    def core_channels(self) -> tuple[tuple[Team, ...], ...]:
+        """Group generated core completions by the exact required-member relation."""
+
+        order: list[tuple[str, ...]] = []
+        grouped: dict[tuple[str, ...], list[Team]] = {}
+        for row in self.ordinary.candidates:
+            if not row.required_members:
+                continue
+            key = tuple(row.required_members)
+            if key not in grouped:
+                grouped[key] = []
+                order.append(key)
+            grouped[key].append(row.members)
+        return tuple(tuple(grouped[key]) for key in order)
+
+    @property
+    def allocation_channels(self) -> tuple[tuple[Team, ...], ...]:
         return tuple(
             tuple(row.members for row in channel)
             for channel in self.allocation.candidate_channels
         )
+
+    @property
+    def protected_channels(self) -> tuple[tuple[Team, ...], ...]:
+        """Core coverage first, then multi-team allocation coverage.
+
+        Channel order is only a stable tie-break for evaluation scheduling. No
+        channel receives a score bonus; the anytime orchestrator rank-round-robin
+        interleaves all supplied channels before actual Moris evaluation.
+        """
+
+        return self.core_channels + self.allocation_channels
 
 
 def generate_candidate_discovery_bundle(
@@ -56,12 +83,15 @@ def generate_candidate_discovery_bundle(
     legal: TeamValidator | None = None,
     placement_expander: PlacementExpander | None = None,
 ) -> CandidateDiscoveryBundle:
-    """Build ordinary and multi-team coverage from exactly one proxy mapping.
+    """Build ordinary and protected coverage from exactly one proxy mapping.
 
-    ``ordinary`` feeds the usual proxy Top-K/multi-view selector. ``allocation``
-    supplies separate protected channels so a cheap non-overlap path is not erased
-    merely because one of its squads ranks below the strongest overlapping single
-    teams. Neither channel changes actual Moris scores.
+    ``ordinary`` feeds the usual proxy Top-K/multi-view selector. Required-core
+    completions are also regrouped as protected channels, so an intentionally
+    explored relation cannot vanish merely because its additive score is low.
+    ``allocation`` supplies separate non-overlap protected channels so single-team
+    Top-K cannot erase the entire cheap five-team hypothesis.
+
+    Every protected team still receives its actual Moris score before it can win.
     """
 
     ordinary = generate_additive_beam_candidates(
