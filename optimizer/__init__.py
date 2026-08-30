@@ -14,6 +14,12 @@ from .anytime import (
     CandidateDiscoveryContext,
     run_anytime_search_round,
 )
+from .automatic_search import (
+    AutomaticDiscoveryPolicy,
+    AutomaticPlacementMode,
+    AutomaticSearchResult,
+    run_automatic_anytime_search_round,
+)
 from .blablalink import normalize_blablalink_worker_payload, select_blablalink_area
 from .budget import BudgetedEvaluator, SearchBudget, SearchBudgetExhausted
 from .candidate_generation import (
@@ -151,6 +157,7 @@ from .reference_discovery import (
     balanced_placement_order,
     discover_reference_placements,
 )
+from .reference_pipeline import ExternalReferencePreparation, prepare_external_references
 from .reference_sources import (
     ReferenceSourceAdaptation,
     SkippedReferenceEvidence,
@@ -196,6 +203,9 @@ __all__ = [
     "AnytimeSearchResult",
     "AnytimeStageMetrics",
     "AuditedAccountSnapshot",
+    "AutomaticDiscoveryPolicy",
+    "AutomaticPlacementMode",
+    "AutomaticSearchResult",
     "AvailabilityKnowledge",
     "BudgetedEvaluator",
     "BurstMetadata",
@@ -227,6 +237,7 @@ __all__ = [
     "ExternalCompositionEvidence",
     "ExternalHypothesisPlan",
     "ExternalNameMapping",
+    "ExternalReferencePreparation",
     "FieldProvenance",
     "FirstPositiveAvailability",
     "GeneratedCandidate",
@@ -325,10 +336,12 @@ __all__ = [
     "plan_candidate_specific_marginals",
     "plan_cold_exploration",
     "post_epoch_completed_raids",
+    "prepare_external_references",
     "prepare_meta_guided_roster",
     "prepare_meta_guided_search_roster",
     "reorder_candidate_marginal_plan",
     "restore_cold_until_feasible",
+    "run_automatic_anytime_search_round",
     "run_anytime_search_round",
     "run_exhaustive_validation",
     "run_same_budget_comparison",
