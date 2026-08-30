@@ -34,7 +34,7 @@ def legal_pair(team):
 
 
 class CandidateBuilderAnytimeTests(unittest.TestCase):
-    def test_builder_runs_after_marginal_and_supplies_proxy_universe(self):
+    def test_builder_runs_after_marginal_and_receives_proxy_views(self):
         scores = {
             ("A", "B"): 100,
             ("C", "B"): 120,
@@ -44,8 +44,9 @@ class CandidateBuilderAnytimeTests(unittest.TestCase):
         evaluator = make_evaluator(scores)
         seen = {}
 
-        def builder(marginal):
-            seen["values"] = set(marginal.values)
+        def builder(context):
+            seen["values"] = set(context.measurement.values)
+            seen["views"] = tuple(view.name for view in context.proxy_views)
             return (("C", "D"),)
 
         result = run_anytime_search_round(
@@ -62,6 +63,7 @@ class CandidateBuilderAnytimeTests(unittest.TestCase):
         )
 
         self.assertEqual(seen["values"], {"C", "D"})
+        self.assertEqual(seen["views"], ("marginal-prefix-1",))
         self.assertEqual(result.proxy_selected, (("C", "D"),))
         self.assertEqual(result.total_score, 250.0)
         self.assertEqual(evaluator.stats.simulate_calls, 4)
@@ -81,7 +83,7 @@ class CandidateBuilderAnytimeTests(unittest.TestCase):
             roster=("C", "D"),
             reference_teams=(("A", "B"),),
             candidate_teams=(),
-            candidate_builder=lambda marginal: (("C", "D"),),
+            candidate_builder=lambda context: (("C", "D"),),
             positions_per_candidate=1,
             candidate_limit=0,
             team_count=1,
