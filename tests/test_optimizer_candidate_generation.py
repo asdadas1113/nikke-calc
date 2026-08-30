@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import unittest
 
-from optimizer.candidate_generation import generate_additive_beam_candidates
+from optimizer.candidate_generation import (
+    generate_additive_allocation_beam_candidates,
+    generate_additive_beam_candidates,
+)
 
 
 class CandidateGenerationTests(unittest.TestCase):
@@ -69,7 +72,7 @@ class CandidateGenerationTests(unittest.TestCase):
         self.assertTrue(all("A" not in team for team in result.teams))
         self.assertGreater(result.rejected_illegal, 0)
 
-    def test_placement_expander_may_emit_multiple_ordered_variants(self):
+    def test_placement_variants_are_interleaved_across_memberships(self):
         scores = {"A": 3, "B": 2, "C": 1}
 
         def placements(members):
@@ -81,10 +84,64 @@ class CandidateGenerationTests(unittest.TestCase):
             scores,
             team_size=2,
             beam_width=3,
-            global_limit=2,
+            global_limit=3,
             placement_expander=placements,
         )
-        self.assertEqual(result.teams[:2], (("A", "B"), ("B", "A")))
+        # AB/BA must not monopolize the output before AC receives a first look.
+        self.assertEqual(result.teams[:2], (("A", "B"), ("A", "C")))
+        self.assertIn(("B", "A"), result.teams)
+
+    def test_single_team_top_k_can_lack_full_non_overlap_supply(self):
+        scores = {name: 10 - i for i, name in enumerate("ABCDEFGHIJ")}
+        result = generate_additive_beam_candidates(
+            tuple(scores),
+            scores,
+            team_size=2,
+            beam_width=10,
+            global_limit=10,
+        )
+        covered = {name for team in result.teams for name in team}
+        self.assertNotIn("J", covered)
+
+    def test_allocation_beam_protects_a_complete_disjoint_path(self):
+        scores = {name: 10 - i for i, name in enumerate("ABCDEFGHIJ")}
+        result = generate_additive_allocation_beam_candidates(
+            tuple(scores),
+            scores,
+            team_size=2,
+            team_count=5,
+            team_beam_width=10,
+            team_options_per_state=3,
+            allocation_beam_width=6,
+            allocation_limit=2,
+        )
+
+        self.assertTrue(result.allocations)
+        best = result.allocations[0]
+        self.assertEqual(len(best.teams), 5)
+        flattened = [name for team in best.teams for name in team]
+        self.assertEqual(len(flattened), len(set(flattened)))
+        self.assertEqual(set(flattened), set(scores))
+        self.assertEqual(best.proxy_total, sum(scores.values()))
+        self.assertTrue(set(best.teams) <= set(result.teams))
+
+    def test_allocation_beam_never_adds_a_diversity_bonus(self):
+        scores = {name: 6 - i for i, name in enumerate("ABCDEF")}
+        result = generate_additive_allocation_beam_candidates(
+            tuple(scores),
+            scores,
+            team_size=2,
+            team_count=3,
+            team_beam_width=6,
+            team_options_per_state=3,
+            allocation_beam_width=4,
+            allocation_limit=1,
+        )
+        allocation = result.allocations[0]
+        self.assertEqual(
+            allocation.proxy_total,
+            sum(scores[name] for team in allocation.teams for name in team),
+        )
 
     def test_missing_proxy_score_fails_instead_of_guessing(self):
         with self.assertRaisesRegex(ValueError, "missing character proxy scores"):
