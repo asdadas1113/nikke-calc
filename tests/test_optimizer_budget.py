@@ -66,6 +66,36 @@ class SearchBudgetTests(unittest.TestCase):
         self.assertEqual(budgeted.used_simulate_calls, 0)
         self.assertEqual(budgeted.remaining_simulate_calls, 0)
 
+    def test_nested_stage_budget_reserves_parent_budget_for_later_stages(self):
+        evaluator = make_evaluator({("A",): 10, ("B",): 20, ("C",): 30})
+        whole_search = BudgetedEvaluator(evaluator, SearchBudget(3))
+        stage = BudgetedEvaluator(whole_search, SearchBudget(1))
+
+        stage.evaluate(("A",))
+        cached = stage.evaluate(("A",))
+        self.assertTrue(cached.cache_hit)
+        self.assertEqual(stage.used_simulate_calls, 1)
+        self.assertEqual(whole_search.used_simulate_calls, 1)
+
+        with self.assertRaises(SearchBudgetExhausted):
+            stage.evaluate(("B",))
+
+        # The stage cap is exhausted, but the parent still has two calls left.
+        whole_search.evaluate(("B",))
+        whole_search.evaluate(("C",))
+        self.assertEqual(whole_search.used_simulate_calls, 3)
+        self.assertEqual(whole_search.remaining_simulate_calls, 0)
+
+    def test_parent_budget_still_blocks_nested_stage(self):
+        evaluator = make_evaluator({("A",): 10})
+        whole_search = BudgetedEvaluator(evaluator, SearchBudget(0))
+        stage = BudgetedEvaluator(whole_search, SearchBudget(5))
+
+        self.assertTrue(stage.can_evaluate(("A",)))
+        with self.assertRaises(SearchBudgetExhausted):
+            stage.evaluate(("A",))
+        self.assertEqual(evaluator.stats.simulate_calls, 0)
+
     def test_cache_preflight_matches_evaluate_defaults_and_inputs(self):
         evaluator = make_evaluator({("A",): 10})
         evaluator.evaluate(("A",), config={"duration": 30}, enemy={"def": 123})
