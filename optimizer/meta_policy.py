@@ -85,7 +85,7 @@ def classify_roster_meta_usage(
     *,
     schedule: SoloRaidSchedule,
     completed_through: date,
-    policy: LowUsagePolicy = LowUsagePolicy(),
+    policy: LowUsagePolicy,
 ) -> MetaUsageRosterResult:
     """Classify every owned character with missing epoch evidence failing open."""
 
@@ -133,7 +133,7 @@ def build_meta_guided_partition(
     *,
     schedule: SoloRaidSchedule,
     completed_through: date,
-    policy: LowUsagePolicy = LowUsagePolicy(),
+    policy: LowUsagePolicy,
     protected_names: Sequence[str] = (),
 ) -> MetaGuidedPartitionResult:
     """Build the reversible Primary/Cold partition from explicit evidence.
@@ -171,9 +171,9 @@ def prepare_meta_guided_roster(
     *,
     schedule: SoloRaidSchedule,
     completed_through: date,
-    policy: LowUsagePolicy = LowUsagePolicy(),
+    policy: LowUsagePolicy,
+    restoration_batch_size: int,
     protected_names: Sequence[str] = (),
-    restoration_batch_size: int = 1,
 ) -> PreparedMetaGuidedRoster:
     """Partition, then restore only as much Cold roster as structure requires.
 
@@ -182,6 +182,9 @@ def prepare_meta_guided_roster(
     If Primary is already structurally feasible, no Cold member is restored. If
     Primary is not feasible, the existing lexicographic restoration policy adds
     small batches until feasibility is recovered or Cold is exhausted.
+
+    The low-usage policy and restoration batch size are required caller inputs so
+    provisional benchmark values cannot silently become production defaults.
 
     A result that remains infeasible is returned as such instead of silently
     disabling the meta filter or inventing characters. The caller can then report
