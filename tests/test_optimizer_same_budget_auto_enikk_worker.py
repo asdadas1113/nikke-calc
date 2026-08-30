@@ -34,6 +34,18 @@ def prepared():
     )
 
 
+def meta_payload():
+    return {
+        "completed_through": "2026-08-31",
+        "policy": {"completed_seasons": 8, "max_peak_usage": 0.01},
+        "schedule": {"periods": [], "complete": True, "source": "fixture"},
+        "snapshots": [],
+        "restoration_batch_size": 1,
+        "cold_exploration_limit": 0,
+        "protected_names": [],
+    }
+
+
 class SameBudgetAutoEnikkWorkerTests(unittest.TestCase):
     def test_external_seed_mode_meta_only_does_not_touch_pure(self):
         plan = {}
@@ -55,6 +67,40 @@ class SameBudgetAutoEnikkWorkerTests(unittest.TestCase):
     def test_external_seed_mode_must_be_explicit_valid_value(self):
         with self.assertRaisesRegex(ValueError, "off/both/pure/meta"):
             RUNNER._append_external_seeds({}, prepared(), "auto")
+
+    def test_change_events_are_resolved_to_explicit_owned_epochs(self):
+        payload = meta_payload()
+        payload["change_events"] = [
+            {
+                "character": "A",
+                "effective_on": "2026-05-01",
+                "effect": "reset",
+                "kind": "favorite-item",
+                "source": "patch-source",
+            }
+        ]
+        resolved, counts = RUNNER._resolved_meta_payload(payload, ("A", "B"))
+
+        self.assertNotIn("change_events", resolved)
+        self.assertEqual(resolved["epochs"]["A"]["knowledge"], "known")
+        self.assertEqual(resolved["epochs"]["A"]["valid_from"], "2026-05-01")
+        self.assertEqual(resolved["epochs"]["B"]["knowledge"], "unknown")
+        self.assertEqual(counts, {"known": 1, "unknown": 1})
+
+    def test_explicit_epochs_and_change_events_are_rejected_together(self):
+        payload = meta_payload()
+        payload["epochs"] = {}
+        payload["change_events"] = []
+        with self.assertRaisesRegex(ValueError, "either explicit epochs or change_events"):
+            RUNNER._resolved_meta_payload(payload, ("A",))
+
+    def test_no_epoch_mode_becomes_unknown_for_every_owned_character(self):
+        resolved, counts = RUNNER._resolved_meta_payload(meta_payload(), ("A", "B"))
+        self.assertEqual(counts, {"unknown": 2})
+        self.assertEqual(
+            {row["knowledge"] for row in resolved["epochs"].values()},
+            {"unknown"},
+        )
 
 
 if __name__ == "__main__":
