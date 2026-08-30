@@ -1,15 +1,13 @@
 """Budgeted orchestration over explicit candidate discovery inputs.
 
 The caller may supply a cheap candidate-team universe/order directly or build one
-after marginal evidence is measured. Separately, bounded protected candidate
-channels may nominate teams for actual Moris evaluation without changing their
-scores. This layer still does not prescribe a roster-wide generator or hidden
-search constants.
+after marginal evidence is measured. Experimental builders receive both the raw
+measurement and the independent planned-prefix ProxyViews so automatic discovery
+does not have to collapse context-sensitive evidence back into one mean scalar.
 
-A caller may feed ``prior_candidates`` from an earlier round back into a later
-round. With the same MorisEvaluator/cache identity, those evaluations are cache
-hits and remain in the candidate pool, so increasing the budget cannot discard a
-previously found allocation merely because the proxy shortlist changed.
+Separately, bounded protected candidate channels may nominate teams for actual
+Moris evaluation without changing their scores. This layer still does not
+prescribe roster-wide beam widths, candidate limits, or other hidden constants.
 """
 
 from __future__ import annotations
@@ -29,6 +27,7 @@ from .marginal import (
     plan_candidate_specific_marginals,
 )
 from .proxy_views import (
+    ProxyView,
     build_planned_marginal_prefix_views,
     select_proxy_view_candidates,
 )
@@ -37,11 +36,19 @@ from .seeds import CoreSeed, ExactCompSeed, SeedSelection, select_seed_candidate
 
 Team = tuple[str, ...]
 TeamValidator = Callable[[Team], bool]
-CandidateBuilder = Callable[[MarginalMeasurement], Iterable[Sequence[str]]]
-CandidateChannelBuilder = Callable[
-    [MarginalMeasurement], Iterable[Iterable[Sequence[str]]]
-]
 CandidateRow = tuple[Team, float, str]
+
+
+@dataclass(frozen=True)
+class CandidateDiscoveryContext:
+    measurement: MarginalMeasurement
+    proxy_views: tuple[ProxyView, ...]
+
+
+CandidateBuilder = Callable[[CandidateDiscoveryContext], Iterable[Sequence[str]]]
+CandidateChannelBuilder = Callable[
+    [CandidateDiscoveryContext], Iterable[Iterable[Sequence[str]]]
+]
 
 
 @dataclass(frozen=True)
@@ -93,7 +100,7 @@ def _top_proxy_teams(
     limit: int,
     legal: TeamValidator | None,
 ) -> tuple[tuple[Team, float], ...]:
-    """Keep top-K additive marginal teams without materializing the universe."""
+    """Backward-compatible mean-marginal Top-K for static candidate universes."""
 
     if limit <= 0:
         return ()
@@ -130,8 +137,13 @@ def _protected_candidate_rows(
     """Normalize score-neutral coverage channels after marginal measurement.
 
     Every member must already have marginal evidence. An unobserved character is
-    never assigned a zero/neutral proxy merely to force it into ordinary search;
-    Cold or otherwise unmeasured bypass belongs in the explicit seed path.
+    never assigned a zero/neutral *eligibility* merely to force it into ordinary
+    search; Cold or otherwise unmeasured bypass belongs in the explicit seed path.
+
+    The returned proxy score itself is deliberately 0.0. Channel order came from
+    the builder's independent discovery policy, and actual Moris scores replace
+    this placeholder before final allocation. Thus a protected channel cannot
+    reintroduce a mean-marginal strength scalar by accident.
     """
 
     values = marginal.values
@@ -157,7 +169,7 @@ def _protected_candidate_rows(
             rows.append(
                 (
                     team,
-                    float(sum(values[name].mean_delta for name in team)),
+                    0.0,
                     f"budgeted-protected-channel:{channel_index}",
                 )
             )
@@ -231,21 +243,20 @@ def run_anytime_search_round(
     generation, protected/seed/proxy candidate evaluation, exact allocation,
     optional bounded one-swap refinement, then exact allocation again.
 
-    ``candidate_builder`` receives the completed ``MarginalMeasurement`` and
-    replaces ``candidate_teams`` for ordinary proxy discovery. It is outside the
-    evaluator budget and must not call Moris; widths and limits remain caller
-    policy. Static ``candidate_teams`` remains backward compatible.
+    Experimental builders receive ``CandidateDiscoveryContext`` containing both
+    the raw marginal measurement and every distinct measured prefix ProxyView.
+    They remain outside the evaluator budget and must not call Moris. Static
+    ``candidate_teams`` remains the backward-compatible path.
 
-    ``protected_candidate_channel_builder`` also runs only after marginal
-    measurement. It may return bounded channels such as teams belonging to cheap
-    non-overlap proxy allocations. Those teams are rank-round-robin interleaved
-    with seed and normal proxy candidates so single-team Top-K cannot erase the
-    whole coverage hypothesis. Protection changes only which teams get evaluated:
-    actual Moris scores still decide the exact final allocation.
+    ``protected_candidate_channel_builder`` may return bounded channels such as
+    generated core completions or teams belonging to cheap non-overlap proxy
+    allocations. Those teams are rank-round-robin interleaved with seed and normal
+    proxy candidates. Protection changes only which teams get evaluated: actual
+    Moris scores still decide the exact final allocation.
 
     Protected ordinary channels require marginal evidence for every member. They
-    cannot smuggle an unobserved/Cold character in as a fake zero-score candidate;
-    explicit seed-only Cold bypass remains the separate mechanism for that case.
+    cannot smuggle an unobserved/Cold character into ordinary search; explicit
+    seed-only Cold bypass remains separate.
     """
 
     if team_count <= 0:
@@ -314,8 +325,15 @@ def run_anytime_search_round(
         evaluated_teams=len(marginal.evaluated_candidates),
     )
 
+    views = build_planned_marginal_prefix_views(plan, marginal)
+    discovery_context = CandidateDiscoveryContext(
+        measurement=marginal,
+        proxy_views=views,
+    )
     ordinary_source: Iterable[Sequence[str]] = (
-        candidate_builder(marginal) if candidate_builder is not None else candidate_teams
+        candidate_builder(discovery_context)
+        if candidate_builder is not None
+        else candidate_teams
     )
     candidate_source: Iterable[Sequence[str]]
     seed_candidate_source: Iterable[Sequence[str]]
@@ -339,7 +357,6 @@ def run_anytime_search_round(
             )
         )
     else:
-        views = build_planned_marginal_prefix_views(plan, marginal)
         proxy_rows = tuple(
             (
                 item.members,
@@ -356,7 +373,7 @@ def run_anytime_search_round(
 
     protected_rows = (
         _protected_candidate_rows(
-            protected_candidate_channel_builder(marginal),
+            protected_candidate_channel_builder(discovery_context),
             marginal,
             legal=legal,
         )
