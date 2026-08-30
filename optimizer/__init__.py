@@ -67,8 +67,10 @@ from .meta_eligibility import (
 from .meta_policy import (
     MetaGuidedPartitionResult,
     MetaUsageRosterResult,
+    PreparedMetaGuidedRoster,
     build_meta_guided_partition,
     classify_roster_meta_usage,
+    prepare_meta_guided_roster,
 )
 from .meta_usage import (
     CharacterUsageWindow,
@@ -153,6 +155,7 @@ __all__ = [
     "PairSynergyObservation",
     "PairSynergyProbe",
     "PipelineStageMetrics",
+    "PreparedMetaGuidedRoster",
     "ProvenanceStatus",
     "ProxyView",
     "ProxyViewCandidate",
@@ -193,6 +196,7 @@ __all__ = [
     "partition_meta_guided_roster",
     "plan_candidate_specific_marginals",
     "post_epoch_completed_raids",
+    "prepare_meta_guided_roster",
     "reorder_candidate_marginal_plan",
     "restore_cold_until_feasible",
     "run_anytime_search_round",
