@@ -31,6 +31,22 @@ This is important because copying one ranker's complete five-person squad would 
 
 Role relationships such as `Crown + healer` should initially be resolved by an external/tag policy into concrete core hypotheses. The optimizer core should not learn healer strength semantics or add role bonuses merely to support a seed.
 
+### External composition order provenance
+
+A five-character array from an external ranking site is **not automatically an ordered squad**. `seed_sources.py` keeps three states explicit:
+
+- `PROVEN_ORDERED`: the source contract independently establishes that serialization/display order is actual NIKKE slot order; only this may become `ExactCompSeed`;
+- `MEMBERSHIP_ONLY`: the source intentionally represents only the five members; it becomes a five-member `CoreSeed`;
+- `UNKNOWN_ORDER`: the source shows/serializes an array but no reliable contract proves what that order means; it also becomes a five-member `CoreSeed`.
+
+The full-membership CoreSeed is intentional. It protects the observed five-character relationship while allowing the caller's ordinary candidate/placement path to supply an ordered candidate. This layer does not enumerate all 5! placements.
+
+Current Enikk `SRRankings.teams.characters` normalization defaults to `UNKNOWN_ORDER`. The public Enikk Campaign UI explicitly has aggregation modes where identical rosters are grouped with slot order ignored, so array/display order must not be promoted by analogy or assumption. A later source-specific contract can explicitly promote Solo Raid evidence to `PROVEN_ORDERED` if verified.
+
+Likewise, the current public Let's Doro Solo Raid UI clearly exposes ranker squad compositions but no retrieved public contract yet establishes that its five displayed portraits are authoritative in-game slot positions. Treat those compositions as membership evidence until that contract is verified.
+
+Incomplete or ambiguous character mapping is skipped instead of fuzzy-matched. External rank, average damage, use count, or tier information is deliberately absent from the seed-source API and therefore cannot leak into Moris scores or final allocation.
+
 ### Cold interaction
 
 A seed may temporarily inspect a Cold character without promoting that character into ordinary Primary search.
@@ -118,7 +134,8 @@ Synthetic regressions should keep proving both directions:
 
 1. a pair/core whose members have weak individual marginal evidence can be recovered because a seed guarantees a real look;
 2. a famous/registered seed with weak Moris damage loses normally in final allocation;
-3. known first-positive availability does not substitute for missing meta epoch evidence.
+3. known first-positive availability does not substitute for missing meta epoch evidence;
+4. an external five-member array with unverified order cannot become an ExactCompSeed.
 
 Production comparison remains Meta-guided vs Pure Sim under the **same number of new Moris `simulate()` calls**. The primary metric is final non-overlapping five-team damage, not proxy recall alone.
 
