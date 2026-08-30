@@ -136,12 +136,12 @@ True Top-5 teams appeared at proxy ranks **9, 18, 7, 2, 19** respectively.
 
 Balancing reference coverage improved the previous rank-22 failure to rank 7, but it displaced other real top teams and left Top-5 recall unchanged at 60%. Marginal cost rose from 46 to 89 actual simulations. On this fixture, simply increasing reference count is therefore **not justified as the next fix**.
 
-### Failure interpretation and next experiment
+### Failure interpretation
 
 The failure is consistent with two distinct proxy limitations that should be tested separately:
 
 1. additive marginal values can over-rank teams whose individual members look valuable but whose cheap burst-role structure is inefficient;
-2. additive marginals cannot represent pair/core interaction by construction.
+2. additive marginals cannot represent context-sensitive pair/core interaction by construction.
 
 No full 5-team real-roster exhaustive optimum, ordered-placement exhaustive optimum, or production-scale candidate budget has been measured yet; those remain `TBD`.
 
@@ -183,4 +183,37 @@ The signal correctly identified several obvious false-positive teams as slow-cyc
 
 ### Decision
 
-Do **not** promote this RoleFit into production optimizer scoring yet. It is useful as a diagnostic of structural false positives, but the observed recall failure remains after those teams are demoted. The next experiment should target context-sensitive pair/core interaction implicated by the saved failure case, without measuring all character pairs.
+Do **not** promote this RoleFit into production optimizer scoring yet. It is useful as a diagnostic of structural false positives, but the observed recall failure remains after those teams are demoted.
+
+## Failure-driven selective pair probes 2026-08-30
+
+Implementation commits introduced `optimizer/synergy.py` as an explicit probe primitive rather than an all-pairs enumerator. Benchmark run: `33315102493`, CPython 3.13.15 / Ubuntu 24.04. Draft PR #5 was closed without merge and its temporary workflow commit was removed from prototype history.
+
+The benchmark reused the already measured marginal proxy and Top-5 truth from the exact same engine/build fixture. It measured only three four-point probes covering two failure-linked pairs, so no 54-team exhaustive rerun was needed.
+
+| metric | measured result |
+| --- | ---: |
+| explicit probes | 3 |
+| unique pairs | 2 |
+| actual `simulate()` calls after cache reuse | 11 |
+| runtime | 28.327515 s |
+| all roster pairs enumerated | no |
+
+Measured four-point interaction residuals:
+
+- `크라운 + 나가`, around the true-#3 failure context: **-242,387,321**.
+- `볼륨 + 크라운`, context targeting true #2: **-35,906,913**.
+- `볼륨 + 크라운`, context targeting true #5: **+577,438,478**.
+- the two-context arithmetic mean for `볼륨 + 크라운` was **+270,765,782**, but the sign reversal is the more important result.
+
+Applying these pair means back to every team containing the pair was tested only as a diagnostic sensitivity check, not as a proposed production rule.
+
+For `minimal-3`, Top-5 recall at candidate limit 12 stayed **60%** for alpha `0.25 / 0.50 / 1.00`; the true-#3 team was pushed from raw rank 22 to ranks 25 / 28 / 34 because the globally applied Crown+Naga residual was negative.
+
+For `balanced-6`, recall at limit 12 rose from **60% to 80%** at alpha `0.50` and `1.00`, but this was not stable across the other reference variant and the Crown+Naga failure team again moved downward. Therefore the apparent gain is not evidence for a transferable global pair weight.
+
+### Decision
+
+Reject a global scalar `Syn(A,B)` as the default proxy representation. The same pair can change sign dramatically with the surrounding three members and replacement baseline. Preserve pair measurements as **context-specific observations**.
+
+The selective probe primitive remains useful because every paired probe team is already an actually simulated candidate. Future pair/core work should therefore use probes to expand/rescue a small set of suspicious compositions and feed their real Moris scores back into the evaluated candidate pool, rather than broadcasting one pair bonus across unrelated teams.
