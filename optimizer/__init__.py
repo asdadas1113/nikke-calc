@@ -53,6 +53,13 @@ from .marginal import (
     measure_planned_marginals_with_candidates,
     plan_candidate_specific_marginals,
 )
+from .meta_availability import (
+    AvailabilityKnowledge,
+    FirstPositiveAvailability,
+    completed_raids_after_first_positive,
+    derive_first_positive_availability,
+    derive_roster_first_positive_availability,
+)
 from .meta_eligibility import (
     LowUsagePolicy,
     MetaEpochEvidence,
@@ -118,6 +125,7 @@ __all__ = [
     "AnytimeSearchResult",
     "AnytimeStageMetrics",
     "AuditedAccountSnapshot",
+    "AvailabilityKnowledge",
     "BudgetedEvaluator",
     "BurstMetadata",
     "BurstStructureReport",
@@ -139,6 +147,7 @@ __all__ = [
     "ExactCompSeed",
     "ExternalNameMapping",
     "FieldProvenance",
+    "FirstPositiveAvailability",
     "LowUsagePolicy",
     "MarginalMeasurement",
     "MarginalObservation",
@@ -182,7 +191,10 @@ __all__ = [
     "check_structural_feasibility",
     "classify_meta_epoch_usage",
     "classify_roster_meta_usage",
+    "completed_raids_after_first_positive",
+    "derive_first_positive_availability",
     "derive_overload_piece_evidence",
+    "derive_roster_first_positive_availability",
     "enumerate_legal_teams",
     "evaluate_allocation_with_one_swap_refinement",
     "generate_one_swap_neighbors",
