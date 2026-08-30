@@ -4,6 +4,7 @@ import unittest
 
 from optimizer.meta_usage import (
     aggregate_character_window,
+    build_external_name_mapping,
     summarize_enikk_rankings,
 )
 
@@ -18,6 +19,36 @@ NAME_MAP = {
 
 def team(*characters: str) -> dict:
     return {"characters": list(characters)}
+
+
+class ExternalNameMappingTests(unittest.TestCase):
+    def test_resource_id_mapping_excludes_ambiguous_external_label(self):
+        source = (
+            {"resource_id": 101, "name_localkey": "Rei"},
+            {"resource_id": 102, "name_localkey": "Rei"},
+            {"resource_id": 103, "name_localkey": "Liter"},
+        )
+        result = build_external_name_mapping(
+            source,
+            {101: "레이", 102: "라이", 103: "리타"},
+        )
+
+        self.assertEqual(result.mapping, {"Liter": "리타"})
+        self.assertEqual(result.ambiguous_labels, {"Rei": ("라이", "레이")})
+        self.assertEqual(result.unmapped_source_rows, 0)
+        self.assertEqual(result.source_row_count, 3)
+
+    def test_missing_resource_mapping_is_counted_not_fuzzy_matched(self):
+        result = build_external_name_mapping(
+            (
+                {"resource_id": 101, "name_localkey": "Liter"},
+                {"resource_id": 999, "name_localkey": "Looks Familiar"},
+                {"resource_id": None, "name_localkey": "Broken"},
+            ),
+            {101: "리타"},
+        )
+        self.assertEqual(result.mapping, {"Liter": "리타"})
+        self.assertEqual(result.unmapped_source_rows, 2)
 
 
 class SeasonUsageTests(unittest.TestCase):
