@@ -5,6 +5,7 @@ from datetime import date
 
 from optimizer.cold_pool import StructuralDemand
 from optimizer.meta_eligibility import (
+    LowUsagePolicy,
     MetaEpochEvidence,
     MetaEpochKnowledge,
     SoloRaidPeriod,
@@ -13,6 +14,9 @@ from optimizer.meta_eligibility import (
 from optimizer.meta_policy import prepare_meta_guided_roster
 from optimizer.meta_usage import EnikkSeasonUsageSnapshot
 from optimizer.overload import OverloadKnowledge, OverloadPieceEvidence
+
+
+POLICY = LowUsagePolicy(completed_seasons=8, max_peak_usage=0.01)
 
 
 def schedule() -> SoloRaidSchedule:
@@ -83,6 +87,7 @@ class PrepareMetaGuidedRosterTests(unittest.TestCase):
             demand,
             schedule=schedule(),
             completed_through=date(2026, 10, 7),
+            policy=POLICY,
             restoration_batch_size=1,
         )
 
@@ -114,6 +119,8 @@ class PrepareMetaGuidedRosterTests(unittest.TestCase):
             demand,
             schedule=schedule(),
             completed_through=date(2026, 10, 7),
+            policy=POLICY,
+            restoration_batch_size=1,
         )
 
         self.assertEqual(result.initial_partition.cold, ("F3",))
@@ -142,6 +149,8 @@ class PrepareMetaGuidedRosterTests(unittest.TestCase):
             demand,
             schedule=schedule(),
             completed_through=date(2026, 10, 7),
+            policy=POLICY,
+            restoration_batch_size=1,
         )
 
         self.assertFalse(result.structurally_feasible)
