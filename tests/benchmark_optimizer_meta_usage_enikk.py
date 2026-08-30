@@ -1,12 +1,12 @@
 """Public Enikk Solo Raid usage-distribution study.
 
-This is a network benchmark/data-inspection script, not a unit test.  It fetches
-public Enikk GraphQL rankings and prints threshold-free evidence for recent
-completed seasons.  No account/profile data is read or uploaded.
+This is a network benchmark/data-inspection script, not a unit test. It fetches
+public Enikk GraphQL rankings and prints threshold-free evidence for completed
+seasons. No account/profile data is read or uploaded.
 
-The script deliberately does not declare ``low_usage``.  For historical zeroes
+The script deliberately does not declare ``low_usage``. For historical zeroes
 it uses only a conservative established cohort: a character must have appeared
-at least once on or before the start season of the inspected window.  Positive
+at least once on or before the start season of the inspected window. Positive
 appearance proves the character existed by then; absence before first appearance
 is not interpreted as zero/release evidence.
 """
@@ -22,9 +22,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from optimizer.meta_usage import aggregate_character_window, summarize_enikk_rankings
+from optimizer.meta_usage import (
+    aggregate_character_window,
+    build_external_name_mapping,
+    summarize_enikk_rankings,
+)
 
 ENDPOINT = "https://enikk.app/api/graphql"
+PEAK_BINS = (0.0035, 0.01, 0.02, 0.05, 0.10)
 
 
 def graphql(query: str, variables: dict | None = None) -> dict:
@@ -60,40 +65,13 @@ def local_resource_map() -> dict[int, str]:
     return out
 
 
-def fetch_name_map() -> tuple[dict[str, str], int, int, dict[str, tuple[str, ...]]]:
-    """Map Enikk labels by resource id; ambiguous labels are excluded, never overwritten."""
-
+def fetch_name_map():
     data = graphql("{ characters { resource_id name_localkey } }")
-    by_resource = local_resource_map()
     rows = data.get("characters") or []
-    candidates: dict[str, set[str]] = {}
-    unmapped = 0
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        try:
-            rid = int(row.get("resource_id"))
-        except (TypeError, ValueError):
-            unmapped += 1
-            continue
-        local = by_resource.get(rid)
-        external = row.get("name_localkey")
-        if local is None or external is None:
-            unmapped += 1
-            continue
-        candidates.setdefault(str(external), set()).add(local)
-
-    collisions = {
-        external: tuple(sorted(names))
-        for external, names in candidates.items()
-        if len(names) > 1
-    }
-    mapping = {
-        external: next(iter(names))
-        for external, names in candidates.items()
-        if len(names) == 1
-    }
-    return mapping, len(rows), unmapped, collisions
+    return build_external_name_mapping(
+        (row for row in rows if isinstance(row, dict)),
+        local_resource_map(),
+    )
 
 
 def fetch_summaries() -> dict[int, str]:
@@ -132,27 +110,30 @@ def pct(value: float | None) -> str:
     return "NA" if value is None else f"{value * 100:.3f}%"
 
 
-def descriptive_window(snapshots, raids: tuple[int, ...], first_seen: dict[str, int]) -> None:
+def window_rows(snapshots, raids: tuple[int, ...], first_seen: dict[str, int]):
     start = raids[0]
     established = sorted(name for name, first in first_seen.items() if first <= start)
     rows = []
     for name in established:
         stats = aggregate_character_window(name, snapshots, eligible_raids=raids)
-        if not stats.complete_for_requested_window:
-            continue
-        rows.append(stats)
+        if stats.complete_for_requested_window:
+            rows.append(stats)
+    return established, rows
 
+
+def peak_bin_counts(rows) -> tuple[int, ...]:
+    return tuple(sum((row.peak_usage or 0.0) <= bound for row in rows) for bound in PEAK_BINS)
+
+
+def descriptive_window(snapshots, raids: tuple[int, ...], first_seen: dict[str, int]) -> None:
+    established, rows = window_rows(snapshots, raids, first_seen)
     print(f"\nWINDOW {len(raids)} seasons: S{raids[0]}-S{raids[-1]}")
     print(f"  conservative established cohort: {len(established)}")
     print(f"  complete mapped/coverage cohort: {len(rows)}")
     if not rows:
         return
 
-    # Descriptive bins only.  They are printed to inspect the empirical lower
-    # tail and are NOT candidate production cutoffs.
-    peak_bins = (0.0035, 0.01, 0.02, 0.05, 0.10)
-    for bound in peak_bins:
-        count = sum((row.peak_usage or 0.0) <= bound for row in rows)
+    for bound, count in zip(PEAK_BINS, peak_bin_counts(rows)):
         print(f"  peak <= {bound * 100:.2f}%: {count}")
 
     by_positive_seasons: dict[int, int] = {}
@@ -179,6 +160,20 @@ def descriptive_window(snapshots, raids: tuple[int, ...], first_seen: dict[str, 
         )
 
 
+def rolling_summary(snapshots, raids: tuple[int, ...], first_seen: dict[str, int], size: int) -> None:
+    print(f"\nROLLING SUMMARY {size}-season windows")
+    print("  columns: window cohort complete zero_all peak<=0.35/1/2/5/10%")
+    for offset in range(0, len(raids) - size + 1):
+        window = tuple(raids[offset : offset + size])
+        established, rows = window_rows(snapshots, window, first_seen)
+        zero_all = sum(len(row.positive_raids) == 0 for row in rows)
+        counts = "/".join(str(count) for count in peak_bin_counts(rows))
+        print(
+            f"  S{window[0]}-S{window[-1]} cohort={len(established)} complete={len(rows)} "
+            f"zero_all={zero_all} peak_bins={counts}"
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -192,6 +187,11 @@ def main() -> None:
         default="6,8,10",
         help="suffix window lengths to inspect; default 6,8,10",
     )
+    parser.add_argument(
+        "--rolling-summary",
+        action="store_true",
+        help="also print compact rolling-window lower-tail counts",
+    )
     args = parser.parse_args()
     raids: tuple[int, ...] = args.raids
     windows = tuple(int(part.strip()) for part in args.windows.split(",") if part.strip())
@@ -203,13 +203,15 @@ def main() -> None:
     if missing_summaries:
         raise RuntimeError(f"requested raids absent from Enikk summaries: {missing_summaries}")
 
-    name_map, source_catalog_count, unmapped_catalog, collisions = fetch_name_map()
+    external_map = fetch_name_map()
     print(
-        f"Enikk character catalog: {source_catalog_count}; unambiguous local mappings: {len(name_map)}; "
-        f"resource-unmapped rows: {unmapped_catalog}; ambiguous external labels: {len(collisions)}"
+        f"Enikk character catalog: {external_map.source_row_count}; "
+        f"unambiguous local mappings: {len(external_map.mapping)}; "
+        f"resource-unmapped rows: {external_map.unmapped_source_rows}; "
+        f"ambiguous external labels: {len(external_map.ambiguous_labels)}"
     )
-    if collisions:
-        for external, names in sorted(collisions.items()):
+    if external_map.ambiguous_labels:
+        for external, names in external_map.ambiguous_labels.items():
             print(f"  ambiguous label {external!r}: {names}")
 
     snapshots = []
@@ -218,7 +220,7 @@ def main() -> None:
         snapshot = summarize_enikk_rankings(
             raid,
             rankings,
-            name_map,
+            external_map.mapping,
             boss=summaries.get(raid),
         )
         snapshots.append(snapshot)
@@ -239,7 +241,7 @@ def main() -> None:
             print("  unknown external names:", snapshot.unknown_external_names[:20])
 
     # First positive observation is a conservative proof that the character was
-    # available by that season.  It is NOT the actual release season.
+    # available by that season. It is NOT the actual release season.
     first_seen: dict[str, int] = {}
     for snapshot in snapshots:
         for name, count in snapshot.player_appearances.items():
@@ -249,6 +251,8 @@ def main() -> None:
     for size in windows:
         window_raids = tuple(raids[-size:])
         descriptive_window(snapshots, window_raids, first_seen)
+        if args.rolling_summary:
+            rolling_summary(snapshots, raids, first_seen, size)
 
 
 if __name__ == "__main__":
