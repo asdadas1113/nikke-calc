@@ -66,7 +66,6 @@ EVALUATE_KWARGS = {
     "verbose": False,
 }
 CANDIDATE_LIMIT = 12
-POSITIONS_PER_CANDIDATE = 2
 MAX_REFINEMENT_SEEDS = 5
 TRUE_TOP5 = (
     (("리타", "크라운", "홍련", "앨리스", "모더니아"), 1_785_817_889),
@@ -111,7 +110,7 @@ def recall_of(keys: set[tuple[str, ...]]) -> float:
     return len(truth & keys) / len(truth)
 
 
-def main(reference_variant: str) -> None:
+def main(reference_variant: str, positions_per_candidate: int) -> None:
     references = REFERENCE_VARIANTS[reference_variant]
     burst = BurstStructureValidator.from_moris()
     constraints = ConstraintSet(team_size=5, validators=(burst,))
@@ -120,7 +119,7 @@ def main(reference_variant: str) -> None:
     plan = plan_candidate_specific_marginals(
         ROSTER,
         references,
-        positions_per_candidate=POSITIONS_PER_CANDIDATE,
+        positions_per_candidate=positions_per_candidate,
         legal=constraints,
         position_priority=same_burst_first,
     )
@@ -181,6 +180,7 @@ def main(reference_variant: str) -> None:
     print("=== candidate-specific marginal + one-swap real Moris benchmark ===")
     print(f"engine_commit={ENGINE_COMMIT}")
     print(f"reference_variant={reference_variant}")
+    print(f"positions_per_candidate={positions_per_candidate}")
     print("truth_scope=one canonical roster-order placement per unordered 5-member team")
     print("marginal_probe_order=reference slot; proxy/refine placement=canonical roster order")
     print(f"reference_count={len(references)}")
@@ -246,5 +246,6 @@ if __name__ == "__main__":
         choices=tuple(REFERENCE_VARIANTS),
         required=True,
     )
+    parser.add_argument("--positions-per-candidate", type=int, default=2)
     args = parser.parse_args()
-    main(args.reference_variant)
+    main(args.reference_variant, args.positions_per_candidate)
