@@ -60,11 +60,13 @@ def local_resource_map() -> dict[int, str]:
     return out
 
 
-def fetch_name_map() -> tuple[dict[str, str], int, int]:
+def fetch_name_map() -> tuple[dict[str, str], int, int, dict[str, tuple[str, ...]]]:
+    """Map Enikk labels by resource id; ambiguous labels are excluded, never overwritten."""
+
     data = graphql("{ characters { resource_id name_localkey } }")
     by_resource = local_resource_map()
     rows = data.get("characters") or []
-    mapping: dict[str, str] = {}
+    candidates: dict[str, set[str]] = {}
     unmapped = 0
     for row in rows:
         if not isinstance(row, dict):
@@ -79,8 +81,19 @@ def fetch_name_map() -> tuple[dict[str, str], int, int]:
         if local is None or external is None:
             unmapped += 1
             continue
-        mapping[str(external)] = local
-    return mapping, len(rows), unmapped
+        candidates.setdefault(str(external), set()).add(local)
+
+    collisions = {
+        external: tuple(sorted(names))
+        for external, names in candidates.items()
+        if len(names) > 1
+    }
+    mapping = {
+        external: next(iter(names))
+        for external, names in candidates.items()
+        if len(names) == 1
+    }
+    return mapping, len(rows), unmapped, collisions
 
 
 def fetch_summaries() -> dict[int, str]:
@@ -190,11 +203,14 @@ def main() -> None:
     if missing_summaries:
         raise RuntimeError(f"requested raids absent from Enikk summaries: {missing_summaries}")
 
-    name_map, source_catalog_count, unmapped_catalog = fetch_name_map()
+    name_map, source_catalog_count, unmapped_catalog, collisions = fetch_name_map()
     print(
-        f"Enikk character catalog: {source_catalog_count}; mapped to local: {len(name_map)}; "
-        f"unmapped: {unmapped_catalog}"
+        f"Enikk character catalog: {source_catalog_count}; unambiguous local mappings: {len(name_map)}; "
+        f"resource-unmapped rows: {unmapped_catalog}; ambiguous external labels: {len(collisions)}"
     )
+    if collisions:
+        for external, names in sorted(collisions.items()):
+            print(f"  ambiguous label {external!r}: {names}")
 
     snapshots = []
     for raid in raids:
