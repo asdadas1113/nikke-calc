@@ -85,12 +85,15 @@ class CandidateGenerationTests(unittest.TestCase):
             scores,
             team_size=2,
             beam_width=3,
-            global_limit=3,
+            global_limit=4,
             placement_expander=placements,
         )
-        # AB/BA must not monopolize the output before AC receives a first look.
-        self.assertEqual(result.teams[:2], (("A", "B"), ("A", "C")))
-        self.assertIn(("B", "A"), result.teams)
+        # Every membership receives its first placement before AB receives BA.
+        self.assertEqual(
+            result.teams[:3],
+            (("A", "B"), ("A", "C"), ("B", "C")),
+        )
+        self.assertEqual(result.teams[3], ("B", "A"))
 
     def test_single_team_top_k_can_lack_full_non_overlap_supply(self):
         scores = {name: 10 - i for i, name in enumerate("ABCDEFGHIJ")}
@@ -162,8 +165,6 @@ class CandidateGenerationTests(unittest.TestCase):
         self.assertEqual(len(result.allocations[0].teams), 2)
         self.assertEqual(len(result.candidate_channels), 2)
         self.assertTrue(all(len(channel) == 2 for channel in result.candidate_channels))
-        # First placement of each membership is emitted before either membership's
-        # second permutation.
         first_memberships = [frozenset(team) for team in result.teams[:2]]
         self.assertEqual(len(set(first_memberships)), 2)
 
