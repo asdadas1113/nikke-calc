@@ -100,11 +100,9 @@ class BudgetedEvaluator:
         seed: int = 42,
         verbose: bool = False,
     ) -> bool:
-        """Whether this layer permits the request or it is already cached."""
+        """Whether every nested budget layer permits this request."""
 
-        if self.remaining_simulate_calls > 0:
-            return True
-        return self.is_cached(
+        cached = self.is_cached(
             members,
             characters=characters,
             config=config,
@@ -112,6 +110,20 @@ class BudgetedEvaluator:
             seed=seed,
             verbose=verbose,
         )
+        if cached:
+            return True
+        if self.remaining_simulate_calls <= 0:
+            return False
+        if isinstance(self._evaluator, BudgetedEvaluator):
+            return self._evaluator.can_evaluate(
+                members,
+                characters=characters,
+                config=config,
+                enemy=enemy,
+                seed=seed,
+                verbose=verbose,
+            )
+        return True
 
     def evaluate(
         self,
@@ -123,7 +135,7 @@ class BudgetedEvaluator:
         seed: int = 42,
         verbose: bool = False,
     ) -> Evaluation:
-        """Evaluate unless doing so would add a simulate call beyond this layer."""
+        """Evaluate unless doing so would exceed this or a parent budget."""
 
         if not self.can_evaluate(
             members,
