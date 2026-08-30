@@ -82,6 +82,16 @@ For the MVP, external usage evidence should be limited to **Solo Raid** data, wi
 
 The exact definition of `low_usage` is intentionally unresolved.  Do **not** hard-code an arbitrary percentage threshold yet.  Before choosing a rule, inspect multiple recent Solo Raid seasons, coverage, character release timing, observed usage distribution, and niche characters that spike on specific bosses.  Missing or insufficient data should fail open rather than being treated as low usage.
 
+### Draft usage-evidence window and refresh policy
+
+The first data study should compare **6-, 8-, and 10-completed-season windows**, with eight seasons only as the initial experiment center, not a production rule.  The goal is to identify characters that stay near the usage floor across different bosses while preserving niche characters that show a meaningful spike in at least one season.  Prefer peak/recency/coverage evidence over a single average usage number.
+
+A tentative per-character evidence record may include `eligible_seasons`, `observed_seasons`, `peak_usage`, `meaningful_seasons`, `seasons_since_meaningful_use`, reporting-floor/missing observations, and a final `used / low / insufficient` classification.  Exact thresholds for meaningful usage, minimum eligible seasons, and the reporting-floor interpretation are all **TBD**.
+
+Refresh the stable meta snapshot after a Solo Raid season is complete and its external aggregate is considered stable.  Runs during an active season should keep using the previous stable snapshot rather than allowing live usage to move the pruning boundary.  Meta snapshot/version provenance should record the latest incorporated completed Solo Raid season.  Fetch/update failure must retain the last known-good snapshot or fall back to Pure Sim; it must never turn missing source data into zero usage.
+
+New characters must fail open.  The optimizer does not need Moris to own exact release dates for the first implementation: it can track when a character first appears in the canonical roster relative to previous meta snapshots.  A newly seen character with insufficient completed Solo Raid history is classified as `insufficient`, not `low_usage`.  Initial bootstrap for characters that predate this tracking still needs an explicit one-time policy/data check.  Whether exact release dates are later worth maintaining remains TBD.
+
 ### Cold-pool eligibility
 
 The proposed conservative eligibility rule is:
