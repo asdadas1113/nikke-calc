@@ -56,8 +56,10 @@ from .marginal import (
 from .meta_usage import (
     CharacterUsageWindow,
     EnikkSeasonUsageSnapshot,
+    ExternalNameMapping,
     SeasonUsageObservation,
     aggregate_character_window,
+    build_external_name_mapping,
     summarize_enikk_rankings,
 )
 from .overload import (
@@ -107,6 +109,7 @@ __all__ = [
     "Evaluation",
     "EvaluationTimings",
     "EvaluatorStats",
+    "ExternalNameMapping",
     "FieldProvenance",
     "MarginalMeasurement",
     "MarginalObservation",
@@ -134,6 +137,7 @@ __all__ = [
     "ValidationMetrics",
     "aggregate_character_window",
     "build_burst_role_map",
+    "build_external_name_mapping",
     "build_planned_marginal_prefix_views",
     "check_structural_feasibility",
     "derive_overload_piece_evidence",
