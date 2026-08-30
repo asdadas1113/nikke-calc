@@ -26,10 +26,17 @@ class CandidateDiscoveryBundleTests(unittest.TestCase):
 
         core = next(row for row in bundle.ordinary.candidates if row.required_members)
         self.assertEqual(core.proxy_score, scores["G"] + scores["H"])
+        self.assertEqual(bundle.core_channels, ((("G", "H"),),))
+        self.assertEqual(bundle.protected_channels[0], (("G", "H"),))
+
         allocation = bundle.allocation.allocations[0]
         self.assertEqual(
             allocation.proxy_total,
             sum(scores[name] for team in allocation.teams for name in team),
+        )
+        self.assertEqual(
+            bundle.protected_channels[1:],
+            bundle.allocation_channels,
         )
 
     def test_protected_channels_keep_order_variants_per_membership(self):
@@ -50,6 +57,7 @@ class CandidateDiscoveryBundleTests(unittest.TestCase):
             placement_expander=all_permutation_placements,
         )
 
+        self.assertEqual(bundle.core_channels, ())
         self.assertEqual(len(bundle.protected_channels), 2)
         self.assertTrue(all(len(channel) == 2 for channel in bundle.protected_channels))
         for channel in bundle.protected_channels:
