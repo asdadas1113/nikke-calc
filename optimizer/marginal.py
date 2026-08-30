@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from statistics import fmean
 from typing import Callable, Iterable, Sequence
 
+from .candidates import CandidateTeam
 from .evaluator import MorisEvaluator
 
 TeamLegal = Callable[[tuple[str, ...]], bool]
@@ -32,23 +33,55 @@ class MarginalValue:
     observations: tuple[MarginalObservation, ...]
 
 
-def measure_marginals(
+@dataclass(frozen=True)
+class MarginalMeasurement:
+    """Marginal values plus every ordered team already measured by Moris.
+
+    ``evaluated_candidates`` contains reference baselines and all legal one-slot
+    trials actually requested from the evaluator. They are safe to feed into
+    the evaluated candidate pool when the same evaluator/account/config is
+    retained: subsequent evaluation becomes a cache hit instead of another
+    expensive ``simulate()`` call.
+    """
+
+    values: dict[str, MarginalValue]
+    evaluated_candidates: tuple[CandidateTeam, ...]
+
+
+def measure_marginals_with_candidates(
     evaluator: MorisEvaluator,
     roster: Iterable[str],
     reference_teams: Iterable[Sequence[str]],
     *,
     legal: TeamLegal | None = None,
     evaluate_kwargs: dict | None = None,
-) -> dict[str, MarginalValue]:
-    """Measure best one-for-one substitution value on several references.
+) -> MarginalMeasurement:
+    """Measure marginals and retain every already-simulated ordered team.
 
-    This is intentionally simple: it is a measurement primitive, not candidate
-    generation policy.  Later stages can restrict replaceable slots or select
-    only promising candidates before calling it.
+    This does not change which substitutions are evaluated. It only stops
+    throwing away their simulator scores after marginal deltas are computed.
+    Ordered placement is preserved exactly and duplicate ordered teams are
+    emitted once.
     """
+
     kwargs = dict(evaluate_kwargs or {})
     refs = [tuple(team) for team in reference_teams]
-    baselines = {team: evaluator.evaluate(team, **kwargs).score for team in refs}
+    measured: dict[tuple[str, ...], CandidateTeam] = {}
+
+    def evaluate(team: tuple[str, ...], source: str) -> float:
+        result = evaluator.evaluate(team, **kwargs)
+        measured.setdefault(
+            team,
+            CandidateTeam(
+                members=team,
+                proxy_score=result.score,
+                simulated_score=result.score,
+                source=source,
+            ),
+        )
+        return result.score
+
+    baselines = {team: evaluate(team, "marginal-reference") for team in refs}
     observations: dict[str, list[MarginalObservation]] = {name: [] for name in roster}
 
     for candidate in observations:
@@ -64,7 +97,7 @@ def measure_marginals(
                     continue
                 if legal is not None and not legal(trial_tuple):
                     continue
-                score = evaluator.evaluate(trial_tuple, **kwargs).score
+                score = evaluate(trial_tuple, "marginal-trial")
                 obs = MarginalObservation(
                     candidate, reference, replaced, baselines[reference], score
                 )
@@ -73,15 +106,39 @@ def measure_marginals(
             if best is not None:
                 observations[candidate].append(best)
 
-    out: dict[str, MarginalValue] = {}
+    values: dict[str, MarginalValue] = {}
     for candidate, rows in observations.items():
         if not rows:
             continue
         deltas = [row.delta for row in rows]
-        out[candidate] = MarginalValue(
+        values[candidate] = MarginalValue(
             candidate=candidate,
             mean_delta=fmean(deltas),
             best_delta=max(deltas),
             observations=tuple(rows),
         )
-    return out
+    return MarginalMeasurement(values=values, evaluated_candidates=tuple(measured.values()))
+
+
+def measure_marginals(
+    evaluator: MorisEvaluator,
+    roster: Iterable[str],
+    reference_teams: Iterable[Sequence[str]],
+    *,
+    legal: TeamLegal | None = None,
+    evaluate_kwargs: dict | None = None,
+) -> dict[str, MarginalValue]:
+    """Measure best one-for-one substitution value on several references.
+
+    Backward-compatible value-only wrapper. New orchestration that wants to
+    reuse already-simulated marginal teams should call
+    :func:`measure_marginals_with_candidates`.
+    """
+
+    return measure_marginals_with_candidates(
+        evaluator,
+        roster,
+        reference_teams,
+        legal=legal,
+        evaluate_kwargs=evaluate_kwargs,
+    ).values
