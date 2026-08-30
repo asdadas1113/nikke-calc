@@ -20,6 +20,7 @@ from optimizer.validation import enumerate_legal_teams, run_exhaustive_validatio
 
 ENGINE_COMMIT = "fb2fd9157aa14499daf6b9f185beb685d4393f90"
 ACCOUNT_SNAPSHOT = "benchmark-default-build-2026-08-30"
+REFERENCE_VARIANT = "balanced-6"
 
 # Combination order is the placement convention for this fixture. We do not try
 # all 5! placements; that limitation is printed and must stay in benchmark docs.
@@ -34,12 +35,16 @@ ROSTER = (
     "레드 후드",
 )
 
-# Three legal references, arranged so every roster member is absent from at least
-# one reference and can therefore receive at least one substitution observation.
+# Six legal references chosen to balance coverage. Every roster member is absent
+# from at least two references, so each marginal value is observed in multiple
+# contexts instead of being dominated by a single substitution baseline.
 REFERENCE_TEAMS = (
-    ("리타", "크라운", "홍련", "앨리스", "모더니아"),
-    ("볼륨", "나가", "홍련", "앨리스", "레드 후드"),
-    ("리타", "볼륨", "나가", "모더니아", "레드 후드"),
+    ("리타", "크라운", "나가", "앨리스", "모더니아"),
+    ("볼륨", "나가", "홍련", "모더니아", "레드 후드"),
+    ("리타", "볼륨", "홍련", "앨리스", "레드 후드"),
+    ("리타", "볼륨", "크라운", "홍련", "모더니아"),
+    ("리타", "크라운", "나가", "홍련", "레드 후드"),
+    ("볼륨", "크라운", "앨리스", "모더니아", "레드 후드"),
 )
 
 EVALUATE_KWARGS = {
@@ -94,6 +99,11 @@ def main() -> None:
     missing = [name for name in ROSTER if name not in marginals]
     if missing:
         raise RuntimeError(f"marginal fixture failed to observe: {missing}")
+    under_observed = [
+        name for name in ROSTER if len(marginals[name].observations) < 2
+    ]
+    if under_observed:
+        raise RuntimeError(f"balanced reference fixture under-observed: {under_observed}")
 
     def proxy_score(team: tuple[str, ...]) -> float:
         return sum(marginals[name].mean_delta for name in team)
@@ -143,6 +153,8 @@ def main() -> None:
     print("=== real Moris marginal/proxy benchmark ===")
     print(f"engine_commit={ENGINE_COMMIT}")
     print(f"account_snapshot={ACCOUNT_SNAPSHOT}")
+    print(f"reference_variant={REFERENCE_VARIANT}")
+    print(f"reference_count={len(REFERENCE_TEAMS)}")
     print(f"roster={ROSTER}")
     print("scope=single-team; one canonical placement per unordered 5-member combination")
     print("ordered_ground_truth=false (full ordered 5! placement space NOT tested)")
