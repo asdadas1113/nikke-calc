@@ -4,7 +4,7 @@ The optimizer deliberately consumes the *calculator-facing* sync artifact
 (`profiles/<name>.json`) instead of reimplementing blablalink raw API parsing.
 `scraper/profile_fetch.py` remains the source of truth for raw account sync.
 
-A snapshot keeps provenance and an explicit unknown-field policy.  Missing build
+A snapshot keeps provenance and an explicit unknown-field policy. Missing build
 fields are never silently called "observed" and the default policy is to reject
 simulation when a missing field would otherwise fall through to Moris' fixed
 build defaults.
@@ -17,10 +17,11 @@ import hashlib
 import json
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any, Mapping
 
 
-_CHAR_KEYS = frozenset({
+_SYNC_CHAR_KEYS = frozenset({
     "breakthrough",
     "core_enhancement",
     "affinity",
@@ -29,9 +30,6 @@ _CHAR_KEYS = frozenset({
     "equip_skills",
     "collection_stage",
     "favorite_stage",
-    "console",
-    "cube",
-    "level",
 })
 _REQUIRED_CHAR_KEYS = (
     "breakthrough",
@@ -57,6 +55,7 @@ _EQUIP_SKILL_KEYS = (
 )
 _LEVEL_MODES = ("fixed", "sync")
 _UNKNOWN_POLICIES = ("error", "moris-default")
+_FAVORITE_CHARS: frozenset[str] | None = None
 
 
 class ProvenanceStatus(str, Enum):
@@ -148,6 +147,22 @@ class AccountSnapshot:
         return tuple(out)
 
 
+def _favorite_characters() -> frozenset[str]:
+    """Characters for which a missing favorite_stage would silently mean stage 3."""
+    global _FAVORITE_CHARS
+    if _FAVORITE_CHARS is None:
+        from context import spec as char_spec
+
+        root = Path(char_spec.__file__).resolve().parent.parent
+        parsed = json.loads((root / "data" / "parsed_nikke.json").read_text(encoding="utf-8"))
+        _FAVORITE_CHARS = frozenset(
+            name
+            for name, row in parsed.items()
+            if isinstance(row, Mapping) and row.get("favorite_slots")
+        )
+    return _FAVORITE_CHARS
+
+
 class AccountSyncAdapter:
     """Normalize `profile_fetch.py` output into a stable AccountSnapshot."""
 
@@ -177,6 +192,7 @@ class AccountSyncAdapter:
         name = str(meta_in.get("name") or "account")
         provenance: list[FieldProvenance] = []
         chars: dict[str, dict[str, Any]] = {}
+        favorite_chars = _favorite_characters()
 
         for char_name in sorted(str(name) for name in raw_chars):
             source_entry = raw_chars[char_name]
@@ -185,15 +201,20 @@ class AccountSyncAdapter:
             bad = sorted(
                 key
                 for key in source_entry
-                if not str(key).startswith("_") and key not in _CHAR_KEYS
+                if not str(key).startswith("_") and key not in _SYNC_CHAR_KEYS
             )
             if bad:
                 raise ValueError(
-                    f"chars.{char_name} contains non-growth sync fields: {bad}"
+                    f"chars.{char_name} contains fields outside canonical profile-sync growth data: {bad}"
                 )
             entry = copy.deepcopy(dict(source_entry))
             chars[char_name] = entry
-            cls._record_character_provenance(char_name, entry, provenance)
+            cls._record_character_provenance(
+                char_name,
+                entry,
+                provenance,
+                requires_favorite_stage=char_name in favorite_chars,
+            )
 
         account: dict[str, Any] = {}
         for key in (
@@ -322,6 +343,8 @@ class AccountSyncAdapter:
         char_name: str,
         entry: Mapping[str, Any],
         provenance: list[FieldProvenance],
+        *,
+        requires_favorite_stage: bool,
     ) -> None:
         base = f"chars.{char_name}"
         for key in _REQUIRED_CHAR_KEYS:
@@ -361,14 +384,18 @@ class AccountSyncAdapter:
 
         equipment = entry.get("equipment") if isinstance(entry.get("equipment"), Mapping) else {}
         for part in _EQUIPMENT_PARTS:
-            if part not in equipment:
+            row = equipment.get(part)
+            if (
+                not isinstance(row, Mapping)
+                or ("level" not in row and "tier" not in row)
+            ):
                 provenance.append(
                     FieldProvenance(
                         f"{base}.equipment.{part}",
                         ProvenanceStatus.UNKNOWN,
                         "profile-sync",
                         True,
-                        "missing equipment part would otherwise inherit fixed-build equipment",
+                        "missing/empty equipment part would otherwise inherit fixed-build equipment",
                     )
                 )
 
@@ -384,6 +411,28 @@ class AccountSyncAdapter:
                         "profile-sync",
                         True,
                         "missing overload field would otherwise inherit fixed-build overload values",
+                    )
+                )
+
+        if requires_favorite_stage:
+            if "favorite_stage" not in entry:
+                provenance.append(
+                    FieldProvenance(
+                        f"{base}.favorite_stage",
+                        ProvenanceStatus.UNKNOWN,
+                        "profile-sync",
+                        True,
+                        "favorite character would otherwise inherit fixed-build favorite stage 3",
+                    )
+                )
+            else:
+                provenance.append(
+                    FieldProvenance(
+                        f"{base}.favorite_stage",
+                        ProvenanceStatus.OBSERVED,
+                        "profile-sync:favorite-item",
+                        True,
+                        "favorite stage selects the Moris skill revision",
                     )
                 )
 
