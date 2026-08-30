@@ -27,6 +27,10 @@ from .marginal import (
     measure_planned_marginals_with_candidates,
     plan_candidate_specific_marginals,
 )
+from .proxy_views import (
+    build_planned_marginal_prefix_views,
+    select_proxy_view_candidates,
+)
 from .refinement import OneSwapNeighbor, PlacementResolver, generate_one_swap_neighbors
 
 Team = tuple[str, ...]
@@ -113,7 +117,12 @@ def _top_proxy_teams(
     return tuple((team, score) for score, _neg_index, team in ranked)
 
 
-def _stage_metrics(before_calls: int, attempted: int, evaluated: int, budgeted: BudgetedEvaluator) -> AnytimeStageMetrics:
+def _stage_metrics(
+    before_calls: int,
+    attempted: int,
+    evaluated: int,
+    budgeted: BudgetedEvaluator,
+) -> AnytimeStageMetrics:
     return AnytimeStageMetrics(
         simulate_calls=budgeted.used_simulate_calls - before_calls,
         attempted_teams=attempted,
@@ -138,6 +147,8 @@ def run_anytime_search_round(
     refinement_positions: Sequence[int] | None = None,
     refinement_max_new: int = 0,
     placement_resolver: PlacementResolver | None = None,
+    marginal_max_simulate_calls: int | None = None,
+    proxy_view_limit_per_view: int | None = None,
     evaluate_kwargs: dict | None = None,
 ) -> AnytimeSearchResult:
     """Spend one explicit simulate-call budget without hiding search constants.
@@ -145,14 +156,26 @@ def run_anytime_search_round(
     Stage order is:
 
     1. candidate-specific marginal plan/measurement;
-    2. additive-marginal top-K full-team evaluation;
+    2. proxy-selected full-team evaluation;
     3. exact weighted set packing inside every evaluated candidate retained so far;
     4. optional bounded one-swap refinement around the current allocation;
     5. exact allocation again over the enlarged evaluated pool.
 
-    ``candidate_limit``, marginal probe depth, refinement inputs, and refinement
-    cap are all caller-owned. This keeps mode policy (fast/standard/precise) out
-    of the primitive until benchmarks justify actual values.
+    By default stage 2 preserves the original additive-marginal Top-K behavior.
+    When ``proxy_view_limit_per_view`` is supplied, distinct measured marginal
+    prefix interpretations are kept separate and their per-view Top-K sets are
+    unioned before simulation. Cross-view proxy scores never choose the final
+    allocation: every admitted team must still have a Moris score.
+
+    ``marginal_max_simulate_calls`` optionally places a child delta budget around
+    stage 1. The parent ``budget`` still caps the whole round, while the child cap
+    reserves parent budget for candidate evaluation/refinement. Cache hits remain
+    free through both layers.
+
+    ``candidate_limit``, marginal probe depth, optional stage cap, optional
+    per-view limit, refinement inputs, and refinement cap are all caller-owned.
+    This keeps mode policy (fast/standard/precise) out of the primitive until
+    benchmarks justify actual values.
 
     For monotonic continuation, pass the previous round's
     ``evaluated_candidates`` back as ``prior_candidates`` and reuse the same
@@ -164,6 +187,10 @@ def run_anytime_search_round(
         raise ValueError("team_count must be positive")
     if candidate_limit < 0:
         raise ValueError("candidate_limit must be non-negative")
+    if marginal_max_simulate_calls is not None and marginal_max_simulate_calls < 0:
+        raise ValueError("marginal_max_simulate_calls must be non-negative")
+    if proxy_view_limit_per_view is not None and proxy_view_limit_per_view < 0:
+        raise ValueError("proxy_view_limit_per_view must be non-negative")
     if refinement_max_new < 0:
         raise ValueError("refinement_max_new must be non-negative")
     if refinement_max_new and not refinement_incoming:
@@ -205,8 +232,14 @@ def run_anytime_search_round(
         legal=legal,
         position_priority=position_priority,
     )
+    marginal_evaluator: MorisEvaluator | BudgetedEvaluator = budgeted
+    if marginal_max_simulate_calls is not None:
+        marginal_evaluator = BudgetedEvaluator(
+            budgeted,
+            SearchBudget(marginal_max_simulate_calls),
+        )
     marginal = measure_planned_marginals_with_candidates(
-        budgeted,
+        marginal_evaluator,
         plan,
         evaluate_kwargs=kwargs,
     )
@@ -220,16 +253,37 @@ def run_anytime_search_round(
         evaluated_teams=len(marginal.evaluated_candidates),
     )
 
-    selected = _top_proxy_teams(
-        candidate_teams,
-        marginal,
-        limit=candidate_limit,
-        legal=legal,
-    )
+    selected: tuple[tuple[Team, float, str], ...]
+    if proxy_view_limit_per_view is None:
+        selected = tuple(
+            (team, score, "budgeted-proxy-top")
+            for team, score in _top_proxy_teams(
+                candidate_teams,
+                marginal,
+                limit=candidate_limit,
+                legal=legal,
+            )
+        )
+    else:
+        views = build_planned_marginal_prefix_views(plan, marginal)
+        selected = tuple(
+            (
+                item.members,
+                max(hit.score for hit in item.hits),
+                "budgeted-proxy-views:" + ",".join(item.source_views),
+            )
+            for item in select_proxy_view_candidates(
+                candidate_teams,
+                views,
+                limit_per_view=proxy_view_limit_per_view,
+                legal=legal,
+            )
+        )
+
     candidate_before = budgeted.used_simulate_calls
     candidate_attempted = 0
     candidate_evaluated = 0
-    for team, proxy_score in selected:
+    for team, proxy_score, source in selected:
         candidate_attempted += 1
         try:
             result = budgeted.evaluate(team, **kwargs)
@@ -242,7 +296,7 @@ def run_anytime_search_round(
                 members=team,
                 proxy_score=proxy_score,
                 simulated_score=result.score,
-                source="budgeted-proxy-top",
+                source=source,
             ),
         )
     candidate_stage = _stage_metrics(
@@ -303,7 +357,7 @@ def run_anytime_search_round(
     )
     return AnytimeSearchResult(
         marginal_measurement=marginal,
-        proxy_selected=tuple(team for team, _score in selected),
+        proxy_selected=tuple(team for team, _score, _source in selected),
         refinement_neighbors=tuple(neighbors),
         evaluated_candidates=tuple(candidates.values()),
         allocation_before_refine=allocation_before,
