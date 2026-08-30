@@ -54,4 +54,95 @@ This is a harness smoke/regression measurement, **not a Moris combat benchmark**
 
 The fixture deliberately makes the strongest single team (`AB=100`) a global-allocation trap: `AC + BD = 184` is better than locking `AB` first and taking a disjoint fallback. The current diversity filter retains both globally useful teams in its six-candidate pool, so no new heuristic is justified by this case.
 
-The runtime numbers above only verify that the harness ran; they are too small and synthetic to predict Moris optimizer wall time. Real-roster exhaustive and Moris-call measurements remain TBD.
+The runtime numbers above only verify that the harness ran; they are too small and synthetic to predict Moris optimizer wall time.
+
+## First real-Moris marginal/proxy fixture 2026-08-30
+
+This is the first optimizer-quality experiment using the real Moris combat evaluator. It is deliberately small and **is not full ordered NIKKE ground truth**.
+
+Common fixture:
+
+- repository: `asdadas1113/nikke-calc`
+- branch: `roster-optimizer-prototype`
+- session start HEAD: `8d511d2f0835d6cf7fbadc994a427af434c2bd05`
+- current cleaned benchmark fixture commit: `719a4475c9ac162ca24cd55e3199189593de1e43`
+- Moris upstream / engine identity: `fb2fd9157aa14499daf6b9f185beb685d4393f90`
+- account snapshot identity: `benchmark-default-build-2026-08-30`
+- runner: GitHub Actions `ubuntu-24.04`
+- Python: CPython 3.13.15
+- roster: `리타 / 볼륨 / 크라운 / 나가 / 홍련 / 앨리스 / 모더니아 / 레드 후드`
+- team count: 1
+- team size: 5
+- placement scope: one canonical placement per unordered 5-member combination
+- full ordered 5! placement search: **not measured**
+- legal teams after conservative burst hard constraints: 54
+- duration: 180 s
+- enemy DEF: 31,784
+- enemy element/core/parts special conditions: none
+- RNG: `expected`
+- seed: 42
+- candidate limit: 12
+- Top-N recall metric: N=5
+
+The exhaustive optimum inside this explicitly limited fixture was:
+
+`리타 / 크라운 / 홍련 / 앨리스 / 모더니아` = **1,785,817,889**.
+
+### Variant A — `minimal-3`
+
+GitHub Actions benchmark run: `33312943457`.
+
+Three reference teams were used. Every roster character received at least one marginal observation, but most received only one.
+
+| metric | measured result |
+| --- | ---: |
+| marginal `simulate()` calls | 46 |
+| marginal runtime | 123.120402 s |
+| exhaustive `simulate()` calls | 54 |
+| exhaustive runtime | 147.223756 s |
+| selected-candidate `simulate()` calls | 12 |
+| selected-candidate runtime | 39.900060 s |
+| total optimizer calls: marginal + selected | 58 |
+| true optimum survival | 100% |
+| true Top-5 recall | 60% (3/5) |
+| final / fixture exhaustive optimum | 100% |
+| proxy rank of true optimum | 1 |
+| `select_diverse(limit=12, penalty=0.20)` Top-5 recall | 60% |
+
+True Top-5 teams appeared at proxy ranks **1, 8, 22, 6, 13** respectively. The third-strongest real team therefore fell to proxy rank 22, establishing the first concrete recall failure for the additive marginal proxy.
+
+### Variant B — `balanced-6`
+
+GitHub Actions benchmark run: `33313327360`.
+
+Six reference teams were used so every roster character had at least two marginal observations.
+
+| metric | measured result |
+| --- | ---: |
+| marginal `simulate()` calls | 89 |
+| marginal runtime | 293.561895 s |
+| exhaustive `simulate()` calls | 54 |
+| exhaustive runtime | 175.379114 s |
+| selected-candidate `simulate()` calls | 12 |
+| selected-candidate runtime | 41.095275 s |
+| total optimizer calls: marginal + selected | 101 |
+| true optimum survival | 100% |
+| true Top-5 recall | 60% (3/5) |
+| final / fixture exhaustive optimum | 100% |
+| proxy rank of true optimum | 9 |
+| `select_diverse(limit=12, penalty=0.20)` Top-5 recall | 60% |
+
+True Top-5 teams appeared at proxy ranks **9, 18, 7, 2, 19** respectively.
+
+Balancing reference coverage improved the previous rank-22 failure to rank 7, but it displaced other real top teams and left Top-5 recall unchanged at 60%. Marginal cost rose from 46 to 89 actual simulations. On this fixture, simply increasing reference count is therefore **not justified as the next fix**.
+
+### Failure interpretation and next experiment
+
+The failure is consistent with two distinct proxy limitations that should be tested separately:
+
+1. additive marginal values can over-rank teams whose individual members look valuable but whose cheap burst-role structure is inefficient;
+2. additive marginals cannot represent pair/core interaction by construction.
+
+The next experiment will first add only a **cheap, soft burst/RoleFit signal** and re-rank this same measured fixture. It must not turn 40-second B1/B2 structures into hard-invalid teams. Pair/core synergy measurement will be added only if a concrete recall failure remains after the cheap structural signal is tested.
+
+No full 5-team real-roster exhaustive optimum, ordered-placement exhaustive optimum, or production-scale candidate budget has been measured yet; those remain `TBD`.
