@@ -15,6 +15,7 @@ from .constraints import (
     BurstStructureReport,
     BurstStructureValidator,
     ConstraintSet,
+    TeamRequirement,
     teams_are_disjoint,
 )
 from .evaluator import (
@@ -58,6 +59,7 @@ __all__ = [
     "PairSynergyProbe",
     "PipelineStageMetrics",
     "ProvenanceStatus",
+    "TeamRequirement",
     "ValidationMetrics",
     "enumerate_legal_teams",
     "evaluate_allocation_with_one_swap_refinement",
