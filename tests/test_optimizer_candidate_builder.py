@@ -38,7 +38,7 @@ class CandidateBuilderAnytimeTests(unittest.TestCase):
         scores = {
             ("A", "B"): 100,
             ("C", "B"): 120,
-            ("A", "D"): 115,
+            ("D", "B"): 115,
             ("C", "D"): 250,
         }
         evaluator = make_evaluator(scores)
@@ -70,7 +70,7 @@ class CandidateBuilderAnytimeTests(unittest.TestCase):
         scores = {
             ("A", "B"): 100,
             ("C", "B"): 120,
-            ("A", "D"): 115,
+            ("D", "B"): 115,
             ("C", "D"): 250,
         }
         evaluator = make_evaluator(scores)
