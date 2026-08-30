@@ -79,6 +79,9 @@ class BlablaLinkWorkerAdapterTests(unittest.TestCase):
         self.assertNotIn("synthetic-identifier-must-not-survive", encoded)
         self.assertNotIn("openid", encoded)
         self.assertNotIn("synthetic-identifier-must-not-survive", snapshot.snapshot_id)
+        console = next(item for item in snapshot.provenance if item.path == "_account.console")
+        self.assertEqual(console.status.value, "observed")
+        self.assertEqual(console.source, "profile-sync:raw-outpost")
 
     def test_selects_largest_area_unless_preferred_area_is_given(self):
         small = _area(83, ("네온",))
@@ -117,6 +120,16 @@ class BlablaLinkWorkerAdapterTests(unittest.TestCase):
         snapshot = normalize_blablalink_worker_payload({"areas": [area]})
         paths = {item.path for item in snapshot.blocking_unknowns}
         self.assertIn("chars.*.equip_skills.unmapped_function_type", paths)
+
+    def test_sync_mode_marks_synchro_observed_when_raw_outpost_matches(self):
+        snapshot = normalize_blablalink_worker_payload(
+            {"areas": [_area(83)]}, level_mode="sync"
+        )
+        synchro = next(
+            item for item in snapshot.provenance if item.path == "_account.synchro_level"
+        )
+        self.assertEqual(synchro.status.value, "observed")
+        self.assertEqual(synchro.source, "profile-sync:raw-outpost")
 
     def test_missing_outpost_console_is_not_hidden_by_fixed_build_default(self):
         area = _area(83, ("네온",))
