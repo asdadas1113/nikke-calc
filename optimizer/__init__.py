@@ -80,9 +80,11 @@ from .meta_policy import (
     MetaGuidedPartitionResult,
     MetaUsageRosterResult,
     PreparedMetaGuidedRoster,
+    PreparedMetaGuidedSearchRoster,
     build_meta_guided_partition,
     classify_roster_meta_usage,
     prepare_meta_guided_roster,
+    prepare_meta_guided_search_roster,
 )
 from .meta_usage import (
     CharacterUsageWindow,
@@ -188,6 +190,7 @@ __all__ = [
     "PairSynergyProbe",
     "PipelineStageMetrics",
     "PreparedMetaGuidedRoster",
+    "PreparedMetaGuidedSearchRoster",
     "ProvenanceStatus",
     "ProxyView",
     "ProxyViewCandidate",
@@ -239,6 +242,7 @@ __all__ = [
     "plan_cold_exploration",
     "post_epoch_completed_raids",
     "prepare_meta_guided_roster",
+    "prepare_meta_guided_search_roster",
     "reorder_candidate_marginal_plan",
     "restore_cold_until_feasible",
     "run_anytime_search_round",
