@@ -8,6 +8,7 @@ from .account import (
     normalize_account_sync,
 )
 from .account_bundle import AuditedAccountSnapshot, normalize_account_bundle
+from .anytime import AnytimeSearchResult, AnytimeStageMetrics, run_anytime_search_round
 from .blablalink import normalize_blablalink_worker_payload, select_blablalink_area
 from .budget import BudgetedEvaluator, SearchBudget, SearchBudgetExhausted
 from .candidates import CandidateTeam
@@ -52,6 +53,8 @@ __all__ = [
     "AccountSyncAdapter",
     "Allocation",
     "AllocationRefinementResult",
+    "AnytimeSearchResult",
+    "AnytimeStageMetrics",
     "AuditedAccountSnapshot",
     "BudgetedEvaluator",
     "BurstMetadata",
@@ -90,6 +93,7 @@ __all__ = [
     "normalize_account_sync",
     "normalize_blablalink_worker_payload",
     "plan_candidate_specific_marginals",
+    "run_anytime_search_round",
     "run_exhaustive_validation",
     "select_blablalink_area",
     "select_global_allocation",
