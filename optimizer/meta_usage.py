@@ -22,6 +22,66 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class ExternalNameMapping:
+    """Resource-id-grounded external-label mapping with ambiguity preserved.
+
+    Enikk ranking team rows currently expose character labels, while its
+    character catalog also exposes stable ``resource_id`` values.  Multiple
+    resource ids can share one external label.  Such a label must not be resolved
+    by last-write-wins: every colliding canonical character stays unmapped and
+    therefore fails open for zero-usage evidence.
+    """
+
+    mapping: Mapping[str, str]
+    ambiguous_labels: Mapping[str, tuple[str, ...]]
+    unmapped_source_rows: int
+    source_row_count: int
+
+
+def build_external_name_mapping(
+    source_characters: Iterable[Mapping[str, Any]],
+    local_name_by_resource_id: Mapping[int, str],
+) -> ExternalNameMapping:
+    """Join external labels to canonical names by resource id, never fuzzy text."""
+
+    candidates: dict[str, set[str]] = {}
+    unmapped = 0
+    source_count = 0
+    for row in source_characters:
+        if not isinstance(row, Mapping):
+            raise ValueError("source character rows must be mappings")
+        source_count += 1
+        try:
+            resource_id = int(row.get("resource_id"))
+        except (TypeError, ValueError):
+            unmapped += 1
+            continue
+        external = row.get("name_localkey")
+        local = local_name_by_resource_id.get(resource_id)
+        if external is None or local is None:
+            unmapped += 1
+            continue
+        candidates.setdefault(str(external), set()).add(str(local))
+
+    ambiguous = {
+        external: tuple(sorted(names))
+        for external, names in candidates.items()
+        if len(names) > 1
+    }
+    mapping = {
+        external: next(iter(names))
+        for external, names in candidates.items()
+        if len(names) == 1
+    }
+    return ExternalNameMapping(
+        mapping=dict(sorted(mapping.items())),
+        ambiguous_labels=dict(sorted(ambiguous.items())),
+        unmapped_source_rows=unmapped,
+        source_row_count=source_count,
+    )
+
+
+@dataclass(frozen=True)
 class SeasonUsageObservation:
     character: str
     raid: int
@@ -121,7 +181,6 @@ class CharacterUsageWindow:
         return len(self.usable_raids)
 
 
-
 def summarize_enikk_rankings(
     raid: int,
     rankings: Iterable[Mapping[str, Any]],
@@ -132,8 +191,9 @@ def summarize_enikk_rankings(
     """Normalize one raw ``SRRankings`` response without assigning a cutoff.
 
     ``name_map`` maps Enikk external character labels from ``teams.characters``
-    to local canonical names.  Production acquisition should build it from
-    Enikk's character ``resource_id`` catalog rather than string similarity.
+    to local canonical names.  Production acquisition should build it with
+    :func:`build_external_name_mapping` from resource ids rather than string
+    similarity; ambiguous external labels must be absent from the mapping.
     """
 
     if raid <= 0:
