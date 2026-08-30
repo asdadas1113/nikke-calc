@@ -17,6 +17,7 @@ from optimizer.overload import OverloadKnowledge, OverloadPieceEvidence
 
 
 ROSTER = ("low", "used", "missing-epoch", "invested")
+POLICY = LowUsagePolicy(completed_seasons=8, max_peak_usage=0.01)
 
 
 def schedule() -> SoloRaidSchedule:
@@ -79,6 +80,7 @@ class MetaPolicyTests(unittest.TestCase):
             },
             schedule=schedule(),
             completed_through=date(2026, 10, 7),
+            policy=POLICY,
         )
 
         by_name = {row.character: row for row in result.decisions}
@@ -107,6 +109,7 @@ class MetaPolicyTests(unittest.TestCase):
             },
             schedule=schedule(),
             completed_through=date(2026, 10, 7),
+            policy=POLICY,
         )
 
         self.assertEqual(result.partition.cold, ("low",))
@@ -124,6 +127,7 @@ class MetaPolicyTests(unittest.TestCase):
             {"low": ol("low", OverloadKnowledge.ZERO, 0)},
             schedule=schedule(),
             completed_through=date(2026, 10, 7),
+            policy=POLICY,
             protected_names=("low",),
         )
 
