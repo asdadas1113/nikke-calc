@@ -357,3 +357,82 @@ Temporary draft PRs #8 and #9 were closed without merge. Their temporary benchma
 A true 50–80-character **actual account** benchmark is still `TBD`. The repository intentionally excludes private `profiles/`, and no private account profile was committed or substituted with a guessed/max build for this measurement.
 
 When a gitignored real profile is available, large-roster metrics should be simulate-call count, runtime, refinement gain, five-team allocation gain/stability, and seed sensitivity. True recall cannot be claimed for the full 50–80 roster because exhaustive truth is intractable; retain exhaustive recall on tractable real-build subsets cut from that same account snapshot. Expand pair/core probing only if those measurements expose a concrete failure. Meta-Aware scoring remains deferred until this production-scale account validation is complete.
+
+## Audited profile-scale preparation 2026-08-30
+
+This milestone prepares the real 50–80-character measurement path. It deliberately adds **no new search heuristic** and records no fabricated/max-build production result.
+
+Baseline:
+
+- repository: `asdadas1113/nikke-calc`
+- branch: `roster-optimizer-prototype`
+- session start HEAD: `32dcbeb3e13c7135317a5e9524b10bf05378176b`
+- implementation/test head before these docs: `ac4177420254f0d540972933b7c5079485f75976`
+- Moris upstream / merge base: `fb2fd9157aa14499daf6b9f185beb685d4393f90`
+- private profile/raw account data committed: none
+- calculator/site/scraper source changed in this milestone: none
+
+### Raw-sidecar audit gap found
+
+Inspection of canonical `scraper/profile_fetch.py` found information that a calculator-facing profile alone cannot prove. Examples include an equipped overload `function_type` unknown to `FUNC_TO_EQUIP`, an equipped option id missing from the returned `state_effects` dictionary, unknown collection/favorite mapping, owned-character name mapping loss, and console freshness/preservation. Some of these are currently reported only through sync-time warnings, while the normalized profile may otherwise look numerically complete.
+
+`optimizer/account_bundle.py` therefore adds a read-only `profile + raw sidecar` audit layer without changing the profile format or duplicating raw API parsing. It reuses `profile_fetch.py`'s canonical overload mapping/table helpers. `AuditedAccountSnapshot` keeps the calculator-facing profile as the only build payload sent to Moris while raw data contributes provenance and fail-closed checks.
+
+Strict audit records/blocking behavior includes:
+
+- raw characters/details/profile roster-count and `name_code` consistency;
+- profile/raw account-area identity mismatch;
+- missing raw `state_effects` dictionary for equipped overload option ids;
+- unmapped equipped overload function types as `unknown`;
+- known overload values outside the local option-level table as `uncertain` rather than silently observed;
+- raw non-empty collection count that disagrees with normalized collection stages;
+- raw affinity 0 → calculator affinity 1 as an explicit policy default;
+- legacy console values without a freshness marker as `uncertain`, not freshly `observed`.
+
+The audited snapshot identity includes simulation-affecting audit provenance while excluding non-simulation bookkeeping such as `_unsynced`, so cache identity changes for meaningful uncertainty but not for an explanatory sync-slot flag.
+
+### Five-team allocation/refinement orchestration
+
+`optimizer/pipeline.py` adds orchestration around existing primitives only:
+
+1. rebuild every supplied candidate score through the current snapshot-bound evaluator, ignoring stale `simulated_score` values;
+2. run the existing exact candidate-pool global allocator;
+3. use the currently selected allocation teams as one-swap seeds;
+4. generate only the caller-specified incoming/position/budget neighborhood;
+5. evaluate those neighbors with the same evaluator;
+6. merge them into the evaluated pool and rerun exact global allocation.
+
+No roster-wide candidate discovery rule, pair score, RoleFit score, or meta rule was added. `tests/benchmark_optimizer_account_scale.py` is a local-only driver that accepts gitignored `profile`, `raw`, and an explicit plan. It reports marginal/candidate/refinement simulate calls, cache hits, timings, initial/refined five-team totals, refinement gain, and a fresh cache-disabled final re-evaluation. Its dry-run reports audit state without combat simulation. Full-roster recall is explicitly `null` because no exhaustive oracle exists at production scale.
+
+### Verification
+
+CI run `33320142542` on `ac417742...`:
+
+- first attempt: engine, optimizer and bridge passed; one pre-existing `site/src/ui.test.ts` timing-sensitive assertion failed (`simulateCalls` 1 vs 0) while its validation error text was correct;
+- no site/runtime/calculator source differed from upstream because of this milestone;
+- the same job was rerun with no code change and completed successfully.
+
+Successful rerun measurements:
+
+- calculator engine: **137 passed, 1 skipped**, 28.858 s;
+- optimizer: **59 passed**, 0.121 s;
+- bridge: **31 passed, 1 skipped**, 24.816 s;
+- browser: **24 files / 385 tests passed**, vitest duration 21.73 s;
+- golden snapshot: **29/29 passed**;
+- doclint and calculator damage cross-checks passed.
+
+The first browser failure is therefore recorded as a non-reproducing flaky test event, not hidden or treated as an optimizer regression.
+
+### Production-scale values still TBD
+
+No actual private 50–80-character account was available inside GitHub/Actions, so the following remain **TBD**:
+
+- real roster count used for benchmark;
+- marginal/candidate/refinement `simulate()` call budget;
+- wall-clock runtime;
+- initial five-team total;
+- one-swap refinement gain;
+- re-global-allocation gain/stability;
+- tractable real-build subset recall/optimum survival.
+
+The next measurement must use the real gitignored `profiles/<name>.json` and matching `.raw.json`; it must not substitute maximum/default build values for missing sync data. Pair/core expansion remains failure-driven, and Meta-Aware scoring remains deferred.
