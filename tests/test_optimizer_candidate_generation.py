@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from optimizer.candidate_generation import (
+    all_permutation_placements,
     generate_additive_allocation_beam_candidates,
     generate_additive_beam_candidates,
 )
@@ -123,7 +124,8 @@ class CandidateGenerationTests(unittest.TestCase):
         self.assertEqual(len(flattened), len(set(flattened)))
         self.assertEqual(set(flattened), set(scores))
         self.assertEqual(best.proxy_total, sum(scores.values()))
-        self.assertTrue(set(best.teams) <= set(result.teams))
+        candidate_memberships = {frozenset(team) for team in result.teams}
+        self.assertTrue(all(frozenset(team) in candidate_memberships for team in best.teams))
 
     def test_allocation_beam_never_adds_a_diversity_bonus(self):
         scores = {name: 6 - i for i, name in enumerate("ABCDEF")}
@@ -142,6 +144,28 @@ class CandidateGenerationTests(unittest.TestCase):
             allocation.proxy_total,
             sum(scores[name] for team in allocation.teams for name in team),
         )
+
+    def test_allocation_membership_width_is_not_consumed_by_order_permutations(self):
+        scores = {"A": 4, "B": 3, "C": 2, "D": 1}
+        result = generate_additive_allocation_beam_candidates(
+            tuple(scores),
+            scores,
+            team_size=2,
+            team_count=2,
+            team_beam_width=6,
+            team_options_per_state=2,
+            allocation_beam_width=3,
+            allocation_limit=1,
+            placement_expander=all_permutation_placements,
+        )
+
+        self.assertEqual(len(result.allocations[0].teams), 2)
+        self.assertEqual(len(result.candidate_channels), 2)
+        self.assertTrue(all(len(channel) == 2 for channel in result.candidate_channels))
+        # First placement of each membership is emitted before either membership's
+        # second permutation.
+        first_memberships = [frozenset(team) for team in result.teams[:2]]
+        self.assertEqual(len(set(first_memberships)), 2)
 
     def test_missing_proxy_score_fails_instead_of_guessing(self):
         with self.assertRaisesRegex(ValueError, "missing character proxy scores"):
