@@ -3,7 +3,11 @@ from __future__ import annotations
 import unittest
 
 from optimizer.candidate_generation import all_permutation_placements
-from optimizer.discovery import generate_candidate_discovery_bundle
+from optimizer.discovery import (
+    generate_candidate_discovery_bundle,
+    generate_multi_view_candidate_discovery,
+)
+from optimizer.proxy_views import ProxyView
 
 
 class CandidateDiscoveryBundleTests(unittest.TestCase):
@@ -63,6 +67,70 @@ class CandidateDiscoveryBundleTests(unittest.TestCase):
         for channel in bundle.protected_channels:
             self.assertEqual(set(channel[0]), set(channel[1]))
             self.assertNotEqual(channel[0], channel[1])
+
+    def test_multi_view_generation_does_not_collapse_opposite_rankings(self):
+        views = (
+            ProxyView("first", {"A": 10, "B": 9, "C": 1, "D": 0}),
+            ProxyView("deep", {"A": 1, "B": 0, "C": 10, "D": 9}),
+        )
+        result = generate_multi_view_candidate_discovery(
+            ("A", "B", "C", "D"),
+            views,
+            team_size=2,
+            team_count=2,
+            single_team_beam_width=4,
+            single_team_global_limit=1,
+            required_cores=(),
+            single_team_per_core_limit=0,
+            allocation_team_beam_width=4,
+            allocation_team_options_per_state=2,
+            allocation_beam_width=3,
+            allocation_limit=1,
+        )
+
+        self.assertEqual(result.source_views, ("first", "deep"))
+        self.assertEqual(result.ordinary_teams[:2], (("A", "B"), ("C", "D")))
+        self.assertEqual(result.skipped_views, ())
+
+    def test_incomplete_view_is_skipped_without_zero_filling(self):
+        result = generate_multi_view_candidate_discovery(
+            ("A", "B", "C", "D"),
+            (
+                ProxyView("incomplete", {"A": 10, "B": 9, "C": 1}),
+                ProxyView("complete", {"A": 4, "B": 3, "C": 2, "D": 1}),
+            ),
+            team_size=2,
+            team_count=2,
+            single_team_beam_width=4,
+            single_team_global_limit=2,
+            required_cores=(),
+            single_team_per_core_limit=0,
+            allocation_team_beam_width=4,
+            allocation_team_options_per_state=2,
+            allocation_beam_width=3,
+            allocation_limit=1,
+        )
+
+        self.assertEqual(result.source_views, ("complete",))
+        self.assertEqual(result.skipped_views[0].name, "incomplete")
+        self.assertEqual(result.skipped_views[0].missing_members, ("D",))
+
+    def test_all_incomplete_views_fail_instead_of_treating_missing_as_weak(self):
+        with self.assertRaisesRegex(ValueError, "no proxy view covers the full discovery roster"):
+            generate_multi_view_candidate_discovery(
+                ("A", "B", "C", "D"),
+                (ProxyView("partial", {"A": 4, "B": 3, "C": 2}),),
+                team_size=2,
+                team_count=2,
+                single_team_beam_width=4,
+                single_team_global_limit=2,
+                required_cores=(),
+                single_team_per_core_limit=0,
+                allocation_team_beam_width=4,
+                allocation_team_options_per_state=2,
+                allocation_beam_width=3,
+                allocation_limit=1,
+            )
 
 
 if __name__ == "__main__":
