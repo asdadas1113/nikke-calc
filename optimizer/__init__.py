@@ -107,6 +107,15 @@ from .proxy_views import (
     select_proxy_view_candidates,
 )
 from .refinement import OneSwapNeighbor, generate_one_swap_neighbors
+from .seed_sources import (
+    CompositionOrderKnowledge,
+    ExternalCompositionEvidence,
+    SeedSourceAdaptation,
+    SkippedCompositionEvidence,
+    adapt_external_compositions,
+    normalize_enikk_sr_team,
+    normalize_labeled_composition,
+)
 from .seeds import (
     CoreSeed,
     ExactCompSeed,
@@ -138,6 +147,7 @@ __all__ = [
     "ColdDecision",
     "ColdPoolPartition",
     "ColdRestorationResult",
+    "CompositionOrderKnowledge",
     "ConstraintSet",
     "CoreSeed",
     "EnikkSeasonUsageSnapshot",
@@ -145,6 +155,7 @@ __all__ = [
     "EvaluationTimings",
     "EvaluatorStats",
     "ExactCompSeed",
+    "ExternalCompositionEvidence",
     "ExternalNameMapping",
     "FieldProvenance",
     "FirstPositiveAvailability",
@@ -175,6 +186,8 @@ __all__ = [
     "SeasonUsageObservation",
     "SeedCandidate",
     "SeedSelection",
+    "SeedSourceAdaptation",
+    "SkippedCompositionEvidence",
     "SoloRaidPeriod",
     "SoloRaidSchedule",
     "SoloRaidUsageEvidence",
@@ -183,6 +196,7 @@ __all__ = [
     "TeamRequirement",
     "UsageClass",
     "ValidationMetrics",
+    "adapt_external_compositions",
     "aggregate_character_window",
     "build_burst_role_map",
     "build_external_name_mapping",
@@ -205,6 +219,8 @@ __all__ = [
     "normalize_account_bundle",
     "normalize_account_sync",
     "normalize_blablalink_worker_payload",
+    "normalize_enikk_sr_team",
+    "normalize_labeled_composition",
     "partition_meta_guided_roster",
     "plan_candidate_specific_marginals",
     "post_epoch_completed_raids",
