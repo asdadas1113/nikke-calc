@@ -1,6 +1,13 @@
 """Roster optimizer prototype built around the Moris simulator evaluator."""
 
 from .candidates import CandidateTeam
+from .constraints import (
+    BurstMetadata,
+    BurstStructureReport,
+    BurstStructureValidator,
+    ConstraintSet,
+    teams_are_disjoint,
+)
 from .evaluator import (
     CacheIdentity,
     Evaluation,
@@ -13,8 +20,12 @@ from .validation import ValidationMetrics, enumerate_legal_teams, run_exhaustive
 
 __all__ = [
     "Allocation",
+    "BurstMetadata",
+    "BurstStructureReport",
+    "BurstStructureValidator",
     "CacheIdentity",
     "CandidateTeam",
+    "ConstraintSet",
     "Evaluation",
     "EvaluationTimings",
     "EvaluatorStats",
@@ -23,4 +34,5 @@ __all__ = [
     "enumerate_legal_teams",
     "run_exhaustive_validation",
     "select_global_allocation",
+    "teams_are_disjoint",
 ]
