@@ -96,6 +96,24 @@ class MorisEvaluator:
         self._cache: dict[str, Evaluation] = {}
         self.stats = EvaluatorStats()
 
+    @property
+    def cache_identity(self) -> CacheIdentity | None:
+        """Read-only identity used to audit fair independent benchmark runs."""
+
+        return self._cache_identity
+
+    @property
+    def use_cache(self) -> bool:
+        """Whether this evaluator owns an evaluation cache."""
+
+        return self._use_cache
+
+    @property
+    def cache_size(self) -> int:
+        """Number of locally cached evaluation keys, without exposing entries."""
+
+        return len(self._cache)
+
     @classmethod
     def from_moris(
         cls,
