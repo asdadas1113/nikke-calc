@@ -157,6 +157,44 @@ class MorisEvaluator:
     def clear_cache(self) -> None:
         self._cache.clear()
 
+    def is_cached(
+        self,
+        members: Sequence[str],
+        *,
+        characters: Mapping[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
+        enemy: Mapping[str, Any] | None = None,
+        seed: int = 42,
+        verbose: bool = False,
+    ) -> bool:
+        """Return whether an identical evaluation can be served without simulate().
+
+        This is a side-effect-free preflight for search-budget orchestration. It
+        deliberately mirrors :meth:`evaluate` defaults and cache identity so a
+        caller never has to duplicate MorisEvaluator's cache-key semantics.
+        """
+
+        if not self._use_cache:
+            return False
+        ordered = tuple(members)
+        if not ordered:
+            raise ValueError("members must not be empty")
+        char_input = copy.deepcopy(dict(characters or {}))
+        config_input = copy.deepcopy(dict(config or {}))
+        config_input.setdefault("rng_mode", "expected")
+        config_input.setdefault("immune_blocks_burst", True)
+        enemy_input = copy.deepcopy(dict(enemy or {}))
+        key = self._cache_key(
+            ordered,
+            char_input,
+            config_input,
+            enemy_input,
+            seed=seed,
+            verbose=verbose,
+            cache_identity=self._cache_identity,
+        )
+        return key in self._cache
+
     def evaluate(
         self,
         members: Sequence[str],
