@@ -44,6 +44,7 @@ from .pipeline import (
     PipelineStageMetrics,
     evaluate_allocation_with_one_swap_refinement,
 )
+from .priority import reorder_candidate_marginal_plan
 from .refinement import OneSwapNeighbor, generate_one_swap_neighbors
 from .synergy import PairSynergyObservation, PairSynergyProbe, measure_pair_probes
 from .validation import ValidationMetrics, enumerate_legal_teams, run_exhaustive_validation
@@ -93,6 +94,7 @@ __all__ = [
     "normalize_account_sync",
     "normalize_blablalink_worker_payload",
     "plan_candidate_specific_marginals",
+    "reorder_candidate_marginal_plan",
     "run_anytime_search_round",
     "run_exhaustive_validation",
     "select_blablalink_area",
