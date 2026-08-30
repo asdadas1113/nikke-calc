@@ -1,0 +1,81 @@
+name: Optimizer evaluator benchmark
+
+on:
+  push:
+    branches:
+      - roster-optimizer-prototype
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Benchmark Moris evaluator path
+        shell: bash
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import statistics
+          import time
+
+          from context import spec as char_spec
+          from calculator.timeline import simulate
+
+          NAMES = ["리타", "크라운", "홍련", "앨리스", "나가"]
+          ENEMY = {
+              "def": 31_784,
+              "code": "",
+              "core_px": 0.0,
+              "has_parts": False,
+              "optimal_range_weapons": [],
+              "immune_windows": [],
+              "element_windows": [],
+          }
+          CONFIG_IN = {
+              "duration": 180,
+              "rng_mode": "expected",
+              "immune_blocks_burst": True,
+          }
+
+          # Load lazy character/data caches without paying that one-time cost in steady-state timings.
+          warm_squad = char_spec.build_squad(NAMES, {})
+          char_spec.build_config(warm_squad, CONFIG_IN)
+
+          def bench(label, fn, repeats=20):
+              values = []
+              for _ in range(repeats):
+                  t0 = time.perf_counter()
+                  fn()
+                  values.append(time.perf_counter() - t0)
+              print(
+                  f"BENCH {label} repeats={repeats} "
+                  f"median_ms={statistics.median(values) * 1000:.3f} "
+                  f"mean_ms={statistics.fmean(values) * 1000:.3f} "
+                  f"min_ms={min(values) * 1000:.3f} max_ms={max(values) * 1000:.3f}"
+              )
+
+          bench("build_squad", lambda: char_spec.build_squad(NAMES, {}))
+          squad_for_config = char_spec.build_squad(NAMES, {})
+          bench("build_config", lambda: char_spec.build_config(squad_for_config, CONFIG_IN))
+
+          def run_sim(verbose):
+              # simulate mutability must not leak between the two measurements.
+              squad = char_spec.build_squad(NAMES, {})
+              config = char_spec.build_config(squad, CONFIG_IN)
+              t0 = time.perf_counter()
+              result = simulate(squad, config=config, enemy=ENEMY, seed=42, verbose=verbose)
+              elapsed = time.perf_counter() - t0
+              print(
+                  f"BENCH simulate verbose={verbose} duration=180 "
+                  f"elapsed_s={elapsed:.6f} squad_total={result.squad_total} "
+                  f"hits={len(result.hits)} log={'yes' if result.log is not None else 'no'}"
+              )
+
+          run_sim(False)
+          run_sim(True)
+          PY
