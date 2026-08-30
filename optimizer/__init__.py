@@ -12,6 +12,11 @@ from .anytime import AnytimeSearchResult, AnytimeStageMetrics, run_anytime_searc
 from .blablalink import normalize_blablalink_worker_payload, select_blablalink_area
 from .budget import BudgetedEvaluator, SearchBudget, SearchBudgetExhausted
 from .candidates import CandidateTeam
+from .cold_exploration import (
+    ColdExplorationPick,
+    ColdExplorationPlan,
+    plan_cold_exploration,
+)
 from .cold_pool import (
     ColdDecision,
     ColdPoolPartition,
@@ -148,6 +153,8 @@ __all__ = [
     "CandidateTeam",
     "CharacterUsageWindow",
     "ColdDecision",
+    "ColdExplorationPick",
+    "ColdExplorationPlan",
     "ColdPoolPartition",
     "ColdRestorationResult",
     "CompositionOrderKnowledge",
@@ -229,6 +236,7 @@ __all__ = [
     "normalize_labeled_composition",
     "partition_meta_guided_roster",
     "plan_candidate_specific_marginals",
+    "plan_cold_exploration",
     "post_epoch_completed_raids",
     "prepare_meta_guided_roster",
     "reorder_candidate_marginal_plan",
