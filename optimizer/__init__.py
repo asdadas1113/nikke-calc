@@ -16,6 +16,7 @@ from .evaluator import (
     MorisEvaluator,
 )
 from .global_search import Allocation, select_global_allocation
+from .synergy import PairSynergyObservation, PairSynergyProbe, measure_pair_probes
 from .validation import ValidationMetrics, enumerate_legal_teams, run_exhaustive_validation
 
 __all__ = [
@@ -30,8 +31,11 @@ __all__ = [
     "EvaluationTimings",
     "EvaluatorStats",
     "MorisEvaluator",
+    "PairSynergyObservation",
+    "PairSynergyProbe",
     "ValidationMetrics",
     "enumerate_legal_teams",
+    "measure_pair_probes",
     "run_exhaustive_validation",
     "select_global_allocation",
     "teams_are_disjoint",
