@@ -181,14 +181,85 @@ Increasing reference coverage fixed one severe rank error (true #3: proxy 22 -> 
 Therefore:
 
 - do not simply increase reference count as the next algorithm change;
-- do not add all-pairs synergy yet;
-- first test a cheap **soft burst/RoleFit structural signal** against this saved failure case;
+- do not add all-pairs synergy;
+- first test a cheap soft burst/RoleFit structural signal against this saved failure case;
 - 40-second B1/B2 structures remain legal and may only receive a soft search penalty/bucket treatment;
 - if significant recall failures remain after that test, measure only the pair/core interactions implicated by those failures.
 
+---
+
+## 2026-08-30 — RoleFit diagnostic and context-sensitive pair probes
+
+- repository: `asdadas1113/nikke-calc`
+- branch: `roster-optimizer-prototype`
+- session start baseline for this work: `8d511d2f0835d6cf7fbadc994a427af434c2bd05`
+- Moris upstream remains: `fb2fd9157aa14499daf6b9f185beb685d4393f90`
+- RoleFit benchmark commit: `ddc1f155492087f433031b44e7555ee382193858`
+- pair API commits: `d1a6cb3e03a05c0dfd25ec5b68bfb5f9d5e6bbc4`, `44586abc97ea027ab94e853515d8c310fbc54bac`, `92fd646cb3ee11df27f7d8d83e4768776ff0dd7b`
+- pair benchmark fixture: `94edbf558dc1a51583b24f55ea2414dbe18eeab6`
+- calculator/site source files changed: none
+
+### RoleFit result
+
+A benchmark-local soft 20-second burst supply diagnostic was tested without changing legality.
+
+Actions run `33314412300`:
+
+- `minimal-3`: RoleFit did not improve Top-5 recall at any tested candidate limit; limit 12 remained 60%.
+- `balanced-6`: only limit 8 improved (40% -> 60% with a 75% fit bucket); limits 12 and 16 remained 60%.
+- all true Top-5 teams had zero burst-cycle deficit.
+- several raw proxy false positives with true ranks 27~32 were correctly recognized as deficit `0.166667` structures.
+
+Decision: keep RoleFit benchmark-local. It diagnoses some false positives but does not solve the important recall miss, so it is not promoted into production proxy scoring.
+
+### Selective pair API
+
+Added `optimizer/synergy.py` with `PairSynergyProbe`, `PairSynergyObservation`, and `measure_pair_probes()`.
+
+The API intentionally has no all-pairs enumeration path. A caller must explicitly provide:
+
+- pair
+- reference team
+- two replacement slots
+- source/reason
+
+It measures the fixed-slot four-point residual:
+
+`D(R+A+B) - D(R+A) - D(R+B) + D(R)`
+
+and preserves exact ordered placement. Hard-illegal probes raise instead of silently disappearing.
+
+### Real pair result
+
+Actions run `33315102493` measured only 3 probes / 2 unique pairs:
+
+- actual Moris `simulate()` calls after cache reuse: 11.
+- runtime: 28.327515 s.
+- `크라운+나가`: interaction `-242,387,321` in the failure-linked context.
+- `볼륨+크라운`: `-35,906,913` in one context and `+577,438,478` in another.
+
+The Volume+Crown sign reversal is decisive: a pair cannot safely be represented by one transferable scalar independent of the surrounding team.
+
+Diagnostic replay using pair means:
+
+- `minimal-3` limit-12 recall stayed 60% for alpha 0.25 / 0.50 / 1.00, and the missed Crown+Naga team moved farther down.
+- `balanced-6` reached 80% at alpha 0.50 / 1.00, but the gain did not transfer to the other reference variant and still harmed the Crown+Naga failure.
+
+### Decision / failure case
+
+Reject global additive `Syn(A,B)` as the default proxy model. Pair/core evidence must remain context-specific.
+
+The probe primitive is retained because its paired team is itself an actually simulated candidate. The intended future use is:
+
+1. a failure case, skill relation, meta core, or near-miss nominates a small interaction hypothesis;
+2. probe that exact context;
+3. add the actually measured paired variants to the candidate pool;
+4. rerun global allocation/refinement;
+5. do not broadcast the residual to unrelated teams.
+
 ### Next task
 
-1. add a benchmark-only cheap burst-cycle quality feature without touching Moris combat logic;
-2. compare raw marginal ranking, role-aware ranking, and candidate-limit recall on the same exhaustive fixture;
-3. promote the feature into optimizer production code only if the measured result justifies it;
-4. then decide whether selective pair/core synergy is necessary.
+1. use the saved marginal failure to test whether a small one-person/local-neighborhood refinement around actually simulated strong candidates recovers the missed compositions more efficiently than making the proxy more complicated;
+2. keep placement order explicit when generating swaps; membership-level and ordered-placement reachability must not be conflated;
+3. add context-specific pair probes only after local refinement or meta/skill evidence identifies a concrete gap;
+4. once a candidate-generation/refinement loop is stable, move back to 5-team global-allocation quality rather than optimizing single-team proxy rank indefinitely.
