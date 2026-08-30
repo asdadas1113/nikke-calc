@@ -282,3 +282,78 @@ A policy that stopped after the second seed would require 16 new unique team eva
 Bounded one-member local refinement is **justified as an optimizer primitive** by this saved failure case: unlike extra reference coverage, RoleFit reranking, or global pair weights, it recovered all true Top-5 teams in both reference variants without changing the proxy model.
 
 Do not hard-code `seed_count=3` from this fixture. One variant required three seeds while the other required two. Production policy still needs a call-budget rule, bottleneck/near-miss seed selection, and eventually a five-team global-allocation test. The next quality milestone should test refinement around teams relevant to the current five-team allocation rather than continuing to optimize this single-team fixture indefinitely.
+
+## Normalized AccountSnapshot real-Moris E2E 2026-08-30
+
+This milestone validates account-build propagation, **not production-scale search quality**. No private profile/account data is committed. The fixture uses the same calculator-facing shape emitted by `scraper/profile_fetch.py`, but all build values in the committed fixture are synthetic.
+
+Baseline and implementation:
+
+- repository: `asdadas1113/nikke-calc`
+- branch: `roster-optimizer-prototype`
+- session start HEAD: `6c6959ee6a98bb662170fb840c65221af9a9c30a`
+- permanent implementation/test head before docs: `ae6bfde39a3091e58dd58ab853aadd7542f26b35`
+- Moris upstream / engine identity: `fb2fd9157aa14499daf6b9f185beb685d4393f90`
+- E2E fixture: `tests/benchmark_optimizer_account_e2e_real.py`
+- final E2E Actions run: `33318423444`
+- final standard CI run before docs: `33318423434`
+- runner: GitHub Actions `ubuntu-24.04`, CPython 3.13.15
+
+`AccountSyncAdapter` consumes the calculator-facing profile-sync artifact rather than reimplementing raw blablalink parsing. `AccountSnapshot` records observed/preserved/defaulted/unknown/uncertain provenance, strips `openid` from its normalized payload, computes a stable build fingerprint, and stores its canonical profile as immutable JSON so callers cannot mutate the build after the fingerprint is established.
+
+Default policy is `unknown_policy="error"`: a missing simulation-affecting field blocks `GrowthProfile` creation instead of silently inheriting Moris fixed-build values. `unknown_policy="moris-default"` is an explicit opt-in fallback and still retains unknown provenance. Solo Raid level 400 is recorded as an intentional policy default. Cube data from sync is treated as an equipped-cube lower-bound observation and cube choice remains a separate case/default axis.
+
+The strict normalization specifically checks missing skill subfields, all four equipment parts, overload fields, account console, sync-mode synchro level, and `favorite_stage` for characters whose current canonical data has favorite-item skill revisions. Legacy per-character `level`/`cube` fields are rejected so they cannot bypass the normalized policy.
+
+`MorisEvaluator.from_moris_snapshot()` binds one snapshot through the existing `GrowthProfile → build_squad → build_config → simulate` path and uses `snapshot_id` as evaluator cache identity.
+
+### Synthetic profile-sync E2E fixture
+
+- roster: `리타 / 크라운 / 홍련 / 앨리스 / 모더니아 / 나가`
+- tested team: `리타 / 크라운 / 홍련 / 앨리스 / 모더니아`
+- refinement neighbor: `리타 / 크라운 / 홍련 / 앨리스 / 나가`
+- duration: 30 s
+- enemy DEF: 31,784
+- RNG: `expected`
+- seed: 42
+- two snapshots: synthetic invested build vs the same fixture with only Alice reduced to skills 1/1/1, affinity 1, no equipment, and no collection item
+
+| measurement | invested snapshot | weak-Alice snapshot |
+| --- | ---: | ---: |
+| snapshot id | `acct-e46722a42f5968efcabe668b` | `acct-06857f9b028afb6b18a5da44` |
+| direct Moris team score | 141,194,861 | 135,391,386 |
+| snapshot-bound candidate score | 141,194,861 | 135,391,386 |
+| Naga marginal mean | -6,506,586 | -703,111 |
+| one-swap neighbor score | 113,129,883 | 107,326,408 |
+| fresh final evaluator score | 141,194,861 | 135,391,386 |
+| optimizer evaluator `simulate()` calls | 5 | 5 |
+| fresh final evaluator calls | 1 | 1 |
+
+Measured propagation deltas after weakening Alice:
+
+- candidate/full-team score: **-5,803,475**.
+- one-swap neighbor score: **-5,803,475**.
+- marginal mean changes by **+5,803,475** (equivalently invested-minus-weak marginal delta `-5,803,475`).
+
+Direct Moris and the snapshot-bound evaluator matched exactly in both cases. The fresh final evaluator, created separately with cache disabled, also matched the selected candidate score exactly. Therefore the same normalized account build is verified to propagate through direct Moris, candidate evaluation, marginal measurement, one-swap refinement, allocation selection, and fresh final re-evaluation.
+
+The immutable-snapshot rerun reproduced every E2E number above exactly. Optimizer unit tests were **40/40** in the final benchmark run.
+
+### Standard CI on immutable-snapshot head
+
+Actions run `33318423434` completed successfully:
+
+- calculator engine: 137 tests passed, 1 skipped, 31.854 s.
+- optimizer: 40 tests passed in 0.032 s.
+- bridge: 31 tests passed, 1 skipped, 27.348 s.
+- browser: 24 files / 385 tests passed, 29.07 s total vitest duration.
+- golden snapshot: 29/29 passed.
+- doclint and calculator damage cross-checks passed.
+
+Temporary draft PRs #8 and #9 were closed without merge. Their temporary benchmark workflow commits were removed from `roster-optimizer-prototype` history after the measured runs.
+
+### Remaining production-scale measurement
+
+A true 50–80-character **actual account** benchmark is still `TBD`. The repository intentionally excludes private `profiles/`, and no private account profile was committed or substituted with a guessed/max build for this measurement.
+
+When a gitignored real profile is available, large-roster metrics should be simulate-call count, runtime, refinement gain, five-team allocation gain/stability, and seed sensitivity. True recall cannot be claimed for the full 50–80 roster because exhaustive truth is intractable; retain exhaustive recall on tractable real-build subsets cut from that same account snapshot. Expand pair/core probing only if those measurements expose a concrete failure. Meta-Aware scoring remains deferred until this production-scale account validation is complete.
