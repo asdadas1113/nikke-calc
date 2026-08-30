@@ -1,6 +1,6 @@
 # Meta-guided cold-pool design draft
 
-Status: design candidate only. This document supplements `docs/roster-optimizer-prototype.md`. Numeric usage thresholds, restoration batch sizes, exploration budgets, promotion thresholds, and mode presets remain **TBD pending data and benchmarks**.
+Status: implementation/design candidate. This document supplements `docs/roster-optimizer-prototype.md`. A first **benchmark candidate** for low-usage classification now exists from public Enikk backtesting, but it is not yet a locked production preset. Restoration batch sizes, exploration budgets, promotion thresholds, and final mode presets remain **TBD pending same-budget Moris benchmarks**.
 
 ## Purpose
 
@@ -29,7 +29,35 @@ The first restoration policy should stay auditable rather than hide a guessed co
 3. **recent or boss-specific evidence** — prefer characters with credible recent/niche Solo Raid evidence over equally cold characters with no such signal;
 4. stable canonical/input order as the final tie-break.
 
-Exact role definitions, usage cutoffs, recent/boss evidence rules, and restoration batch size are TBD and require empirical validation. Do not introduce a weighted restoration score until evidence shows that the simpler ordered policy fails.
+Exact role definitions, recent/boss evidence rules, and restoration batch size are TBD and require empirical validation. Do not introduce a weighted restoration score until evidence shows that the simpler ordered policy fails.
+
+## Public Enikk usage evidence and provisional boundary candidate
+
+Public Enikk `SRRankings` data for Solo Raid seasons 21–40 was inspected with no private account/profile data. Ranking coverage was 298–300 players per season, so one observed player corresponds to roughly 0.33% usage. Character names are joined through resource id; ambiguous external labels such as `Rei` and `Sakura` are excluded rather than guessed. Historical zeroes are used only for a conservative established cohort whose existence is proven by a positive observation on or before the start of the lookback window.
+
+Rolling lower-tail inspection showed that a short six-season window forgets old niche/rework evidence quickly, while ten seasons is substantially stickier. A one-step historical backtest then asked: if a character's **maximum** usage over the previous 6/8/10 seasons had stayed below a candidate boundary, how much was that same established character used in the next Solo Raid season?
+
+Key usage-only backtest results across S21–S40:
+
+| lookback | historical peak boundary | candidate-season cases | next season >=5% | next season >=10% | max next-season usage |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 6 seasons | <=0.35% | 250 | 6 | 6 | 85.0% |
+| 6 seasons | <=1.00% | 277 | 9 | 8 | 99.7% |
+| 8 seasons | <=0.35% | 171 | 0 | 0 | 1.0% |
+| 8 seasons | <=1.00% | 190 | 0 | 0 | 1.0% |
+| 8 seasons | <=2.00% | 209 | 2 | 2 | 99.7% |
+| 10 seasons | <=1.00% | 135 | 0 | 0 | 0.0% |
+| 10 seasons | <=2.00% | 147 | 0 | 0 | 1.0% |
+
+This rejects six seasons as the first production candidate: even the 0.35% lower tail contained large next-season breakouts. It also shows a sharp observed difference around the 8-season 1–2% boundary: `<=1%` had no >=5% next-season breakout in 190 candidate-season observations, while `<=2%` included two very large breakouts. Ten seasons is safer in this sample but retains historical evidence longer and therefore reduces pruning headroom.
+
+The first benchmark candidate is therefore:
+
+`low_usage_candidate = complete 8-season established window AND peak_usage <= 1%`
+
+This is **not yet a locked production default**. It is the policy to carry into same-budget Moris/account benchmarks. The public backtest measures usage-only breakout risk; the real cold rule is stricter because a character must also have **proven OL0**. Missing season coverage, uncertain release/eligibility, ambiguous name mapping, or other missing evidence must fail open and protect the character.
+
+Do not infer that 1% is an intrinsic game-strength boundary. It is an empirical search-budget candidate for this data interval and must be versioned with the usage snapshot. Re-run the study as more seasons accumulate or if the Enikk sampling population changes materially.
 
 ## Cold exploration even when Primary is feasible
 
@@ -84,7 +112,7 @@ A priority-review or cold-exploration case that promotes a previously deferred c
 
 ## Non-goals for the first implementation
 
-- No fixed low-usage percentage until multi-season Enikk distribution/coverage work is complete.
+- No declaration that the provisional 8-season / 1% boundary is final before same-budget Moris/account validation.
 - No level/Synchro/combat-power pruning.
 - No unknown Overload => zero coercion.
 - No meta bonus added to Moris damage.
