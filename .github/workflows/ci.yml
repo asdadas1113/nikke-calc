@@ -52,6 +52,9 @@ jobs:
           python -m unittest discover -s calculator -p 'test_*.py'
           python calculator/damage.py
 
+      - name: 옵티마이저 단위 테스트
+        run: python -m unittest discover -s tests -p 'test_optimizer_*.py'
+
       - name: 브리지 스모크 테스트
         working-directory: site
         run: python scripts/test-bridge.py
