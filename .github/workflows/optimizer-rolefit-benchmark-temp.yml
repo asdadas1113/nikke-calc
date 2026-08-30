@@ -1,0 +1,23 @@
+name: Temporary optimizer RoleFit benchmark
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [minimal-3, balanced-6]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Run real Moris RoleFit benchmark
+        run: PYTHONPATH=. python tests/benchmark_optimizer_marginal_real.py --reference-variant '${{ matrix.variant }}'
