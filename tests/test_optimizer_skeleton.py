@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from optimizer.candidates import CandidateTeam, select_diverse
 from optimizer.constraints import ConstraintSet, teams_are_disjoint
-from optimizer.evaluator import MorisEvaluator
+from optimizer.evaluator import CacheIdentity, MorisEvaluator
 from optimizer.global_search import select_global_allocation
 
 
@@ -25,7 +25,12 @@ class EvaluatorTest(unittest.TestCase):
             calls.append(("simulate", tuple(squad), dict(config), seed, verbose))
             return SimpleNamespace(squad_total=123.0)
 
-        evaluator = MorisEvaluator(build_squad, build_config, simulate)
+        evaluator = MorisEvaluator(
+            build_squad,
+            build_config,
+            simulate,
+            cache_identity=CacheIdentity("engine-sha", "account-snapshot"),
+        )
         first = evaluator.evaluate(("A", "B"), config={"duration": 10})
         second = evaluator.evaluate(("A", "B"), config={"duration": 10})
 
@@ -37,6 +42,21 @@ class EvaluatorTest(unittest.TestCase):
         self.assertEqual(sim_call[2]["rng_mode"], "expected")
         self.assertTrue(sim_call[2]["immune_blocks_burst"])
         self.assertFalse(sim_call[4])
+
+    def test_cached_evaluator_requires_engine_and_account_identity(self):
+        def passthrough(*args, **kwargs):
+            return SimpleNamespace(squad_total=0.0)
+
+        with self.assertRaisesRegex(ValueError, "cache_identity"):
+            MorisEvaluator(passthrough, passthrough, passthrough)
+
+        evaluator = MorisEvaluator(
+            passthrough,
+            passthrough,
+            passthrough,
+            use_cache=False,
+        )
+        self.assertIsNotNone(evaluator)
 
 
 class ConstraintTest(unittest.TestCase):
