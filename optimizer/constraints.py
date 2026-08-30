@@ -201,17 +201,49 @@ class BurstStructureValidator:
 
 
 @dataclass(frozen=True)
+class TeamRequirement:
+    """Named generic team-level hard requirement.
+
+    The optimizer intentionally does not know what the requirement represents.
+    A later policy may use this hook for healing, shields, mitigation, boss-specific
+    survival routes, or any other condition without teaching candidate discovery,
+    marginal measurement, or refinement about those concepts.
+    """
+
+    label: str
+    validator: TeamValidator
+
+    def __post_init__(self) -> None:
+        if not self.label.strip():
+            raise ValueError("team requirement label must be non-empty")
+
+    def __call__(self, members: tuple[str, ...]) -> bool:
+        return bool(self.validator(tuple(members)))
+
+
+@dataclass(frozen=True)
 class ConstraintSet:
     """Optimizer-side hard constraints.
 
     Moris-backed validators stay pluggable so the calculator remains the source
     of truth. Only conditions proven impossible should return False here.
+
+    `requirements` is the named extension point for future policy constraints.
+    It is deliberately domain-agnostic: no healer/sustain semantics live in the
+    optimizer core. The ConstraintSet itself is callable so every search stage
+    can receive the same legality object as its existing ``legal(team)`` hook.
     """
 
     team_size: int = 5
     include: frozenset[str] = field(default_factory=frozenset)
     exclude: frozenset[str] = field(default_factory=frozenset)
     validators: tuple[TeamValidator, ...] = ()
+    requirements: tuple[TeamRequirement, ...] = ()
+
+    def __post_init__(self) -> None:
+        labels = [requirement.label for requirement in self.requirements]
+        if len(labels) != len(set(labels)):
+            raise ValueError("team requirement labels must be unique")
 
     def validate_team(self, members: Sequence[str]) -> bool:
         team = tuple(members)
@@ -222,7 +254,27 @@ class ConstraintSet:
             return False
         if self.exclude.intersection(member_set):
             return False
-        return all(validator(team) for validator in self.validators)
+        if not all(validator(team) for validator in self.validators):
+            return False
+        return all(requirement(team) for requirement in self.requirements)
+
+    def failed_requirements(self, members: Sequence[str]) -> tuple[str, ...]:
+        """Return labels of named policy requirements rejected by this team.
+
+        Built-in shape/include/exclude/anonymous-validator failures are not mixed
+        into this diagnostic. This keeps future UI explanations stable without
+        forcing policy semantics into the optimizer core.
+        """
+
+        team = tuple(members)
+        return tuple(
+            requirement.label
+            for requirement in self.requirements
+            if not requirement(team)
+        )
+
+    def __call__(self, members: tuple[str, ...]) -> bool:
+        return self.validate_team(members)
 
 
 def teams_are_disjoint(teams: Iterable[Sequence[str]]) -> bool:
