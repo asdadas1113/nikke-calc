@@ -11,6 +11,11 @@ from .account_bundle import AuditedAccountSnapshot, normalize_account_bundle
 from .anytime import AnytimeSearchResult, AnytimeStageMetrics, run_anytime_search_round
 from .blablalink import normalize_blablalink_worker_payload, select_blablalink_area
 from .budget import BudgetedEvaluator, SearchBudget, SearchBudgetExhausted
+from .candidate_generation import (
+    CandidateGenerationResult,
+    GeneratedCandidate,
+    generate_additive_beam_candidates,
+)
 from .candidates import CandidateTeam
 from .cold_exploration import (
     ColdExplorationPick,
@@ -157,6 +162,7 @@ __all__ = [
     "BurstStructureReport",
     "BurstStructureValidator",
     "CacheIdentity",
+    "CandidateGenerationResult",
     "CandidateMarginalPlan",
     "CandidateMarginalPlanEntry",
     "CandidateTeam",
@@ -179,6 +185,7 @@ __all__ = [
     "ExternalNameMapping",
     "FieldProvenance",
     "FirstPositiveAvailability",
+    "GeneratedCandidate",
     "InvalidSameBudgetComparison",
     "LowUsagePolicy",
     "MalformedCompositionRow",
@@ -238,6 +245,7 @@ __all__ = [
     "derive_roster_first_positive_availability",
     "enumerate_legal_teams",
     "evaluate_allocation_with_one_swap_refinement",
+    "generate_additive_beam_candidates",
     "generate_one_swap_neighbors",
     "measure_marginals",
     "measure_marginals_with_candidates",
