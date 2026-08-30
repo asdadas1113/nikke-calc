@@ -53,6 +53,18 @@ class ExternalCompositionEvidence:
 
 
 @dataclass(frozen=True)
+class MalformedCompositionRow:
+    source: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class ExternalCompositionCollection:
+    evidence: tuple[ExternalCompositionEvidence, ...]
+    malformed_rows: tuple[MalformedCompositionRow, ...]
+
+
+@dataclass(frozen=True)
 class SkippedCompositionEvidence:
     evidence: ExternalCompositionEvidence
     reason: str
@@ -124,6 +136,73 @@ def normalize_enikk_sr_team(
         name_map,
         source=source,
         order_knowledge=order_knowledge,
+    )
+
+
+def collect_enikk_sr_compositions(
+    rankings: Sequence[Mapping[str, Any]],
+    name_map: Mapping[str, str],
+    *,
+    raid: int,
+    order_knowledge: CompositionOrderKnowledge = CompositionOrderKnowledge.UNKNOWN_ORDER,
+) -> ExternalCompositionCollection:
+    """Collect every usable Enikk Solo Raid team row with auditable provenance.
+
+    Malformed ranking/team rows are reported separately rather than silently
+    turning partial data into a seed. Mapping uncertainty remains attached to the
+    evidence itself so ``adapt_external_compositions`` can skip it explicitly.
+
+    Rank/damage/cp fields are not imported as seed weights. ``rank`` is used only
+    in the source label to make diagnostics traceable.
+    """
+
+    if raid <= 0:
+        raise ValueError("raid must be positive")
+
+    evidence: list[ExternalCompositionEvidence] = []
+    malformed: list[MalformedCompositionRow] = []
+    for row_index, row in enumerate(rankings, start=1):
+        if not isinstance(row, Mapping):
+            malformed.append(
+                MalformedCompositionRow(
+                    source=f"enikk:S{raid}:row{row_index}",
+                    reason="ranking-row-not-mapping",
+                )
+            )
+            continue
+
+        rank = row.get("rank")
+        rank_label = str(rank) if rank is not None else f"row{row_index}"
+        teams = row.get("teams")
+        if not isinstance(teams, Sequence) or isinstance(teams, (str, bytes)):
+            malformed.append(
+                MalformedCompositionRow(
+                    source=f"enikk:S{raid}:rank{rank_label}",
+                    reason="missing-team-sequence",
+                )
+            )
+            continue
+
+        for team_index, team in enumerate(teams, start=1):
+            source = f"enikk:S{raid}:rank{rank_label}:team{team_index}"
+            if not isinstance(team, Mapping):
+                malformed.append(MalformedCompositionRow(source, "team-row-not-mapping"))
+                continue
+            try:
+                normalized = normalize_enikk_sr_team(
+                    team,
+                    name_map,
+                    source=source,
+                    order_knowledge=order_knowledge,
+                )
+            except ValueError as exc:
+                malformed.append(MalformedCompositionRow(source, str(exc)))
+                continue
+            evidence.append(normalized)
+
+    return ExternalCompositionCollection(
+        evidence=tuple(evidence),
+        malformed_rows=tuple(malformed),
     )
 
 
