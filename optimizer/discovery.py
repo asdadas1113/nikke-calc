@@ -1,9 +1,13 @@
-"""Compose score-neutral candidate-generation channels from one proxy snapshot.
+"""Compose score-neutral candidate generation without collapsing proxy views.
 
-This module deliberately contains no defaults. A caller chooses every beam width,
-team limit, allocation width, and placement policy. The same character proxy map
-feeds ordinary single-team discovery, core-completion protection, and non-overlap
-allocation protection, avoiding separate hidden scoring systems.
+A previous failure study showed that first-probe and deeper marginal evidence can
+prefer different useful teams. Automatic candidate generation must not undo that
+by folding everything back into one universal scalar before the candidate pool
+exists. Each complete ProxyView therefore receives its own bounded discovery
+bundle; only the resulting candidate identities are unioned.
+
+This module contains no search defaults. Beam widths, limits, core coverage,
+allocation width, and placement policy are all caller-owned.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ from .candidate_generation import (
     generate_additive_allocation_beam_candidates,
     generate_additive_beam_candidates,
 )
+from .proxy_views import ProxyView
 
 
 @dataclass(frozen=True)
@@ -56,14 +61,54 @@ class CandidateDiscoveryBundle:
 
     @property
     def protected_channels(self) -> tuple[tuple[Team, ...], ...]:
-        """Core coverage first, then multi-team allocation coverage.
-
-        Channel order is only a stable tie-break for evaluation scheduling. No
-        channel receives a score bonus; the anytime orchestrator rank-round-robin
-        interleaves all supplied channels before actual Moris evaluation.
-        """
-
         return self.core_channels + self.allocation_channels
+
+
+@dataclass(frozen=True)
+class SkippedDiscoveryView:
+    name: str
+    missing_members: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class MultiViewCandidateDiscovery:
+    """Independent discovery bundles plus a fair identity-level union."""
+
+    bundles: tuple[tuple[str, CandidateDiscoveryBundle], ...]
+    skipped_views: tuple[SkippedDiscoveryView, ...]
+
+    @property
+    def source_views(self) -> tuple[str, ...]:
+        return tuple(name for name, _bundle in self.bundles)
+
+    @property
+    def ordinary_teams(self) -> tuple[Team, ...]:
+        """Rank-round-robin ordinary candidates across independent views."""
+
+        channels = [bundle.ordinary_teams for _name, bundle in self.bundles]
+        seen: set[Team] = set()
+        out: list[Team] = []
+        max_rank = max((len(channel) for channel in channels), default=0)
+        for rank in range(max_rank):
+            for channel in channels:
+                if rank >= len(channel):
+                    continue
+                team = channel[rank]
+                if team in seen:
+                    continue
+                seen.add(team)
+                out.append(team)
+        return tuple(out)
+
+    @property
+    def protected_channels(self) -> tuple[tuple[Team, ...], ...]:
+        """Keep every view's bounded core/allocation channels independent."""
+
+        return tuple(
+            channel
+            for _name, bundle in self.bundles
+            for channel in bundle.protected_channels
+        )
 
 
 def generate_candidate_discovery_bundle(
@@ -83,16 +128,7 @@ def generate_candidate_discovery_bundle(
     legal: TeamValidator | None = None,
     placement_expander: PlacementExpander | None = None,
 ) -> CandidateDiscoveryBundle:
-    """Build ordinary and protected coverage from exactly one proxy mapping.
-
-    ``ordinary`` feeds the usual proxy Top-K/multi-view selector. Required-core
-    completions are also regrouped as protected channels, so an intentionally
-    explored relation cannot vanish merely because its additive score is low.
-    ``allocation`` supplies separate non-overlap protected channels so single-team
-    Top-K cannot erase the entire cheap five-team hypothesis.
-
-    Every protected team still receives its actual Moris score before it can win.
-    """
+    """Build ordinary and protected coverage from exactly one proxy mapping."""
 
     ordinary = generate_additive_beam_candidates(
         roster,
@@ -118,3 +154,80 @@ def generate_candidate_discovery_bundle(
         placement_expander=placement_expander,
     )
     return CandidateDiscoveryBundle(ordinary=ordinary, allocation=allocation)
+
+
+def generate_multi_view_candidate_discovery(
+    roster: Sequence[str],
+    views: Sequence[ProxyView],
+    *,
+    team_size: int,
+    team_count: int,
+    single_team_beam_width: int,
+    single_team_global_limit: int,
+    required_cores: Sequence[Sequence[str]],
+    single_team_per_core_limit: int,
+    allocation_team_beam_width: int,
+    allocation_team_options_per_state: int,
+    allocation_beam_width: int,
+    allocation_limit: int,
+    legal: TeamValidator | None = None,
+    placement_expander: PlacementExpander | None = None,
+) -> MultiViewCandidateDiscovery:
+    """Run the same bounded discovery policy independently for every full view.
+
+    A view missing even one member of the discovery roster is skipped rather than
+    assigning that member a zero/default proxy. At least one complete view is
+    required; otherwise automatic generation must stop and the caller can spend
+    more marginal budget, broaden references, or use an explicit candidate plan.
+    """
+
+    names = tuple(str(name) for name in roster)
+    if not names or len(set(names)) != len(names):
+        raise ValueError("roster must contain unique members")
+    if not views:
+        raise ValueError("automatic multi-view discovery requires at least one proxy view")
+    view_names = tuple(view.name for view in views)
+    if len(set(view_names)) != len(view_names):
+        raise ValueError("proxy view names must be unique")
+
+    bundles: list[tuple[str, CandidateDiscoveryBundle]] = []
+    skipped: list[SkippedDiscoveryView] = []
+    for view in views:
+        missing = tuple(name for name in names if name not in view.values)
+        if missing:
+            skipped.append(SkippedDiscoveryView(view.name, missing))
+            continue
+        bundles.append(
+            (
+                view.name,
+                generate_candidate_discovery_bundle(
+                    names,
+                    view.values,
+                    team_size=team_size,
+                    team_count=team_count,
+                    single_team_beam_width=single_team_beam_width,
+                    single_team_global_limit=single_team_global_limit,
+                    required_cores=required_cores,
+                    single_team_per_core_limit=single_team_per_core_limit,
+                    allocation_team_beam_width=allocation_team_beam_width,
+                    allocation_team_options_per_state=allocation_team_options_per_state,
+                    allocation_beam_width=allocation_beam_width,
+                    allocation_limit=allocation_limit,
+                    legal=legal,
+                    placement_expander=placement_expander,
+                ),
+            )
+        )
+
+    if not bundles:
+        detail = "; ".join(
+            f"{row.name}: missing {row.missing_members}" for row in skipped
+        )
+        raise ValueError(
+            "no proxy view covers the full discovery roster"
+            + (f" ({detail})" if detail else "")
+        )
+    return MultiViewCandidateDiscovery(
+        bundles=tuple(bundles),
+        skipped_views=tuple(skipped),
+    )
