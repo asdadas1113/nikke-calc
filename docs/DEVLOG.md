@@ -118,3 +118,77 @@ No regression or hard-constraint failure was observed. Because false-negative pr
 1. run the first small real-Moris marginal-value experiment with an explicit fixed build snapshot and boss config.
 2. compare marginal/proxy candidate survival against exhaustive truth in that deliberately small search space.
 3. only add pair synergy or stronger diversity buckets if that experiment produces a concrete recall failure.
+
+---
+
+## 2026-08-30 — first real Moris marginal/proxy failure case
+
+- repository: `asdadas1113/nikke-calc`
+- branch: `roster-optimizer-prototype`
+- session start HEAD: `8d511d2f0835d6cf7fbadc994a427af434c2bd05`
+- cleaned benchmark fixture commit: `719a4475c9ac162ca24cd55e3199189593de1e43`
+- Moris upstream at start/end: `fb2fd9157aa14499daf6b9f185beb685d4393f90`
+- calculator/site source files changed: none
+
+### Implemented
+
+1. Added `tests/benchmark_optimizer_marginal_real.py` as an explicit, non-unit-test benchmark fixture.
+2. The fixture supports two reference variants:
+   - `minimal-3`: economical reference coverage.
+   - `balanced-6`: at least two marginal observations per roster character.
+3. Search scope is deliberately limited to one canonical placement per unordered 5-member combination and one final team. It must not be reported as full ordered or full five-team ground truth.
+4. Temporary benchmark workflow commits used to trigger GitHub Actions were removed from branch history. The net benchmark script was rewritten as one clean commit directly on top of the previous optimizer milestone.
+
+### Actual measured results
+
+Common fixture:
+
+- 8 real NIKKE characters.
+- 54 legal teams after conservative burst constraints.
+- 180 s, enemy DEF 31,784, no special element/core/parts condition.
+- expected RNG, seed 42.
+- candidate limit 12.
+- fixture exhaustive optimum: `리타 / 크라운 / 홍련 / 앨리스 / 모더니아` = `1,785,817,889`.
+
+`minimal-3`, Actions run `33312943457`:
+
+- marginal calls: 46, 123.120402 s.
+- exhaustive calls: 54, 147.223756 s.
+- selected-candidate calls: 12, 39.900060 s.
+- total optimizer calls: 58.
+- true optimum survival: 100%.
+- Top-5 recall: 60%.
+- final / exhaustive optimum: 100%.
+- true Top-5 proxy ranks: 1 / 8 / 22 / 6 / 13.
+
+`balanced-6`, Actions run `33313327360`:
+
+- marginal calls: 89, 293.561895 s.
+- exhaustive calls: 54, 175.379114 s.
+- selected-candidate calls: 12, 41.095275 s.
+- total optimizer calls: 101.
+- true optimum survival: 100%.
+- Top-5 recall: 60%.
+- final / exhaustive optimum: 100%.
+- true Top-5 proxy ranks: 9 / 18 / 7 / 2 / 19.
+
+Standard CI also completed successfully during both benchmark runs.
+
+### Failure / decision
+
+Increasing reference coverage fixed one severe rank error (true #3: proxy 22 -> 7) but displaced other top teams. Top-5 recall stayed at 60% while marginal calls rose from 46 to 89.
+
+Therefore:
+
+- do not simply increase reference count as the next algorithm change;
+- do not add all-pairs synergy yet;
+- first test a cheap **soft burst/RoleFit structural signal** against this saved failure case;
+- 40-second B1/B2 structures remain legal and may only receive a soft search penalty/bucket treatment;
+- if significant recall failures remain after that test, measure only the pair/core interactions implicated by those failures.
+
+### Next task
+
+1. add a benchmark-only cheap burst-cycle quality feature without touching Moris combat logic;
+2. compare raw marginal ranking, role-aware ranking, and candidate-limit recall on the same exhaustive fixture;
+3. promote the feature into optimizer production code only if the measured result justifies it;
+4. then decide whether selective pair/core synergy is necessary.
