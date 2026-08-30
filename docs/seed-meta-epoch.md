@@ -74,6 +74,22 @@ For Cold usage classification, a Solo Raid season counts only when:
 
 A change after a raid has started conservatively excludes that raid. Active raids are not counted.
 
+## First-positive availability evidence
+
+Historical usage archives may prove that a character existed even when an authoritative release date is unavailable. `meta_availability.py` records this separately from meta epoch evidence.
+
+A mapped positive Solo Raid observation proves only:
+
+> this character existed by this raid.
+
+It does **not** prove that the character was available when that raid started. Therefore the observed raid itself is excluded and the conservative availability floor begins on the day after that raid ends. `completed_raids_after_first_positive()` exposes only later completed raids whose start is after that floor.
+
+Positive observations remain useful even when some ranking rows are incomplete, because at least one actual appearance is still evidence. By contrast, an unmapped/ambiguous label, missing trusted raid period, incomplete schedule provenance, or no positive observation yields UNKNOWN/UNCERTAIN rather than an invented date.
+
+Most importantly, first-positive availability is **not MetaEpochEvidence**. It cannot prove that a later favorite item, skill revision, balance change, or significant bug fix did not reset the character's usage history. Production Cold classification therefore still requires an independently validated meta epoch; a known first-positive observation alone must continue to fail open to Primary.
+
+The intended use is provenance and conservative historical-cohort/backtest eligibility, not production pruning authorization.
+
 ## First benchmark policy
 
 The current public Enikk backtest candidate remains:
@@ -101,7 +117,8 @@ Unknown OL remains protected exactly as before.
 Synthetic regressions should keep proving both directions:
 
 1. a pair/core whose members have weak individual marginal evidence can be recovered because a seed guarantees a real look;
-2. a famous/registered seed with weak Moris damage loses normally in final allocation.
+2. a famous/registered seed with weak Moris damage loses normally in final allocation;
+3. known first-positive availability does not substitute for missing meta epoch evidence.
 
 Production comparison remains Meta-guided vs Pure Sim under the **same number of new Moris `simulate()` calls**. The primary metric is final non-overlapping five-team damage, not proxy recall alone.
 
