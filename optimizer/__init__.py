@@ -7,6 +7,7 @@ from .account import (
     ProvenanceStatus,
     normalize_account_sync,
 )
+from .account_bundle import AuditedAccountSnapshot, normalize_account_bundle
 from .candidates import CandidateTeam
 from .constraints import (
     BurstMetadata,
@@ -31,6 +32,7 @@ __all__ = [
     "AccountSnapshot",
     "AccountSyncAdapter",
     "Allocation",
+    "AuditedAccountSnapshot",
     "BurstMetadata",
     "BurstStructureReport",
     "BurstStructureValidator",
@@ -50,6 +52,7 @@ __all__ = [
     "enumerate_legal_teams",
     "generate_one_swap_neighbors",
     "measure_pair_probes",
+    "normalize_account_bundle",
     "normalize_account_sync",
     "run_exhaustive_validation",
     "select_global_allocation",
