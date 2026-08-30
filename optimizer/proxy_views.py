@@ -68,10 +68,11 @@ def build_planned_marginal_prefix_views(
     Planned marginal execution is depth-major: a candidate's first replacement
     slot is the earliest interpretation, later slots add alternative contexts.
     Instead of overwriting the first interpretation, this function returns one
-    additive view for each measured prefix.  For prefix ``d`` a character keeps
-    the best available delta among its first ``d`` planned slots.  If a later
-    slot was not measured because SearchBudget ended, its earlier value simply
-    carries forward.
+    additive view for each *distinct measured prefix*. For prefix ``d`` a
+    character keeps the best available delta among its first ``d`` planned
+    slots. If a later slot was not measured because SearchBudget ended, its
+    earlier value simply carries forward. An unchanged deeper prefix is omitted
+    so it cannot duplicate the same Top-K work.
 
     Scores are reconstructed only from ``measurement.evaluated_candidates`` and
     the immutable plan, so creating views costs no additional Moris evaluations.
@@ -91,6 +92,7 @@ def build_planned_marginal_prefix_views(
     depth_limit = planned_depth if max_depth is None else min(planned_depth, max_depth)
 
     views: list[ProxyView] = []
+    previous_values: dict[str, float] | None = None
     for depth in range(1, depth_limit + 1):
         values: dict[str, float] = {}
         for entry in plan.entries:
@@ -106,8 +108,10 @@ def build_planned_marginal_prefix_views(
                     deltas.append(score - baseline)
             if deltas:
                 values[entry.candidate] = max(deltas)
-        if values:
+        if values and values != previous_values:
             views.append(ProxyView(name=f"marginal-prefix-{depth}", values=values))
+        if values:
+            previous_values = values
     return tuple(views)
 
 
@@ -122,13 +126,13 @@ def select_proxy_view_candidates(
 
     The candidate stream is intentionally consumed once, so callers may pass a
     large generator rather than materializing every legal combination or
-    re-enumerating it per view.  Each view scores a team only when all members
-    have values in that view.  Exact score ties keep earlier input order.
+    re-enumerating it per view. Each view scores a team only when all members
+    have values in that view. Exact score ties keep earlier input order.
 
-    ``candidate_teams`` is expected to contain unique ordered teams.  Enforcing
+    ``candidate_teams`` is expected to contain unique ordered teams. Enforcing
     global duplicate detection here would require memory proportional to the
     full combinatorial universe, defeating the bounded-memory purpose of this
-    primitive.  Final selected teams are still deduplicated across views.
+    primitive. Final selected teams are still deduplicated across views.
     """
 
     if limit_per_view < 0:
@@ -156,7 +160,7 @@ def select_proxy_view_candidates(
             if not isfinite(score):
                 continue
 
-            # The weakest row sits at heap[0].  Earlier input order wins exact
+            # The weakest row sits at heap[0]. Earlier input order wins exact
             # score ties, hence ``-index`` is larger for earlier rows.
             row = (score, -index, team)
             heap = heaps[view_index]
