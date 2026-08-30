@@ -49,6 +49,7 @@ from .proxy_views import (
     ProxyView,
     ProxyViewCandidate,
     ProxyViewHit,
+    build_planned_marginal_prefix_views,
     select_proxy_view_candidates,
 )
 from .refinement import OneSwapNeighbor, generate_one_swap_neighbors
@@ -92,6 +93,7 @@ __all__ = [
     "SearchBudgetExhausted",
     "TeamRequirement",
     "ValidationMetrics",
+    "build_planned_marginal_prefix_views",
     "enumerate_legal_teams",
     "evaluate_allocation_with_one_swap_refinement",
     "generate_one_swap_neighbors",
