@@ -136,6 +136,33 @@ def derive_first_positive_availability(
     )
 
 
+def completed_raids_after_first_positive(
+    availability: FirstPositiveAvailability,
+    schedule: SoloRaidSchedule,
+    *,
+    completed_through: date,
+) -> tuple[int, ...]:
+    """Return completed raids safely known to start after first-positive evidence.
+
+    This helper is for provenance/backtest eligibility only. It must not be fed
+    into production Cold classification as a substitute for ``MetaEpochEvidence``.
+    UNKNOWN/UNCERTAIN availability or an incomplete schedule returns no eligible
+    raids rather than guessing.
+    """
+
+    if (
+        availability.knowledge is not AvailabilityKnowledge.KNOWN
+        or availability.valid_from is None
+        or not schedule.complete
+    ):
+        return ()
+    return tuple(
+        period.raid
+        for period in schedule.periods
+        if period.end_on <= completed_through and availability.valid_from <= period.start_on
+    )
+
+
 def derive_roster_first_positive_availability(
     roster: Sequence[str],
     snapshots: Sequence[EnikkSeasonUsageSnapshot],
