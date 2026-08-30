@@ -229,6 +229,9 @@ def _profile_from_area(area: Mapping[str, Any]) -> tuple[dict[str, Any], dict[st
         "characters": characters,
         "details": details,
         "state_effects": state_effects,
+        # Keep fresh outpost rows for provenance audit. The account identifier is
+        # still omitted; this is simulation input, not identity metadata.
+        "outpost": outpost,
     }
     return profile, raw_sidecar
 
