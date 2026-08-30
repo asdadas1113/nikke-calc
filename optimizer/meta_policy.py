@@ -6,7 +6,8 @@ The lower-level modules deliberately stay separate:
 - ``meta_eligibility`` decides whether a complete post-epoch window exists and
   applies an explicit low-usage policy;
 - ``overload`` proves whether account evidence shows zero/present/unknown OL;
-- ``cold_pool`` partitions LOW + proven-OL0 characters reversibly.
+- ``cold_pool`` partitions LOW + proven-OL0 characters reversibly and restores
+  deferred characters only when structural feasibility requires it.
 
 This module only wires those audited inputs together. Missing meta-epoch evidence
 is converted to UNKNOWN and therefore fails open to Primary. No Moris score is
@@ -21,8 +22,11 @@ from datetime import date
 
 from .cold_pool import (
     ColdPoolPartition,
+    ColdRestorationResult,
     SoloRaidUsageEvidence,
+    StructuralDemand,
     partition_meta_guided_roster,
+    restore_cold_until_feasible,
 )
 from .meta_eligibility import (
     LowUsagePolicy,
@@ -47,6 +51,31 @@ class MetaUsageRosterResult:
 class MetaGuidedPartitionResult:
     usage: MetaUsageRosterResult
     partition: ColdPoolPartition
+
+
+@dataclass(frozen=True)
+class PreparedMetaGuidedRoster:
+    """Meta partition after only the restoration needed for legal team supply."""
+
+    usage: MetaUsageRosterResult
+    initial_partition: ColdPoolPartition
+    restoration: ColdRestorationResult
+
+    @property
+    def active_roster(self) -> tuple[str, ...]:
+        return self.restoration.primary
+
+    @property
+    def remaining_cold(self) -> tuple[str, ...]:
+        return self.restoration.remaining_cold
+
+    @property
+    def restored(self) -> tuple[str, ...]:
+        return self.restoration.restored
+
+    @property
+    def structurally_feasible(self) -> bool:
+        return self.restoration.feasibility.feasible
 
 
 def classify_roster_meta_usage(
@@ -109,9 +138,10 @@ def build_meta_guided_partition(
 ) -> MetaGuidedPartitionResult:
     """Build the reversible Primary/Cold partition from explicit evidence.
 
-    ``protected_names`` is the existing Priority-review/Force-include bypass. A
-    later seed-aware controller may add temporary seed members to this list for a
-    particular probe without permanently reclassifying those characters.
+    ``protected_names`` is the existing Priority-review/Force-include bypass.
+    Seed probes should normally use the separate seed-only roster path in
+    ``run_anytime_search_round`` rather than permanently adding every seed member
+    here.
     """
 
     classified = classify_roster_meta_usage(
@@ -129,3 +159,54 @@ def build_meta_guided_partition(
         protected_names=protected_names,
     )
     return MetaGuidedPartitionResult(usage=classified, partition=partition)
+
+
+def prepare_meta_guided_roster(
+    roster: Sequence[str],
+    snapshots: Sequence[EnikkSeasonUsageSnapshot],
+    epochs_by_character: Mapping[str, MetaEpochEvidence],
+    overload_by_character: Mapping[str, OverloadPieceEvidence],
+    roles_by_character: Mapping[str, Sequence[str]],
+    demand: StructuralDemand,
+    *,
+    schedule: SoloRaidSchedule,
+    completed_through: date,
+    policy: LowUsagePolicy = LowUsagePolicy(),
+    protected_names: Sequence[str] = (),
+    restoration_batch_size: int = 1,
+) -> PreparedMetaGuidedRoster:
+    """Partition, then restore only as much Cold roster as structure requires.
+
+    This is deliberately a pre-search preparation step. It does not evaluate a
+    squad, rank characters by Moris damage, or choose a Cold-exploration budget.
+    If Primary is already structurally feasible, no Cold member is restored. If
+    Primary is not feasible, the existing lexicographic restoration policy adds
+    small batches until feasibility is recovered or Cold is exhausted.
+
+    A result that remains infeasible is returned as such instead of silently
+    disabling the meta filter or inventing characters. The caller can then report
+    insufficient roster structure or explicitly fall back to a broader policy.
+    """
+
+    built = build_meta_guided_partition(
+        roster,
+        snapshots,
+        epochs_by_character,
+        overload_by_character,
+        schedule=schedule,
+        completed_through=completed_through,
+        policy=policy,
+        protected_names=protected_names,
+    )
+    restoration = restore_cold_until_feasible(
+        built.partition,
+        built.usage.usage_by_character,
+        roles_by_character,
+        demand,
+        batch_size=restoration_batch_size,
+    )
+    return PreparedMetaGuidedRoster(
+        usage=built.usage,
+        initial_partition=built.partition,
+        restoration=restoration,
+    )
