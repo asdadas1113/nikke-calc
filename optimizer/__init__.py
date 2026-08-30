@@ -8,13 +8,23 @@ from .account import (
     normalize_account_sync,
 )
 from .account_bundle import AuditedAccountSnapshot, normalize_account_bundle
-from .anytime import AnytimeSearchResult, AnytimeStageMetrics, run_anytime_search_round
+from .anytime import (
+    AnytimeSearchResult,
+    AnytimeStageMetrics,
+    CandidateDiscoveryContext,
+    run_anytime_search_round,
+)
 from .blablalink import normalize_blablalink_worker_payload, select_blablalink_area
 from .budget import BudgetedEvaluator, SearchBudget, SearchBudgetExhausted
 from .candidate_generation import (
+    AllocationCandidateGenerationResult,
     CandidateGenerationResult,
     GeneratedCandidate,
+    GeneratedProxyAllocation,
+    all_permutation_placements,
+    generate_additive_allocation_beam_candidates,
     generate_additive_beam_candidates,
+    identity_placement,
 )
 from .candidates import CandidateTeam
 from .cold_exploration import (
@@ -44,12 +54,28 @@ from .constraints import (
     TeamRequirement,
     teams_are_disjoint,
 )
+from .discovery import (
+    CandidateDiscoveryBundle,
+    MultiViewCandidateDiscovery,
+    SkippedDiscoveryView,
+    generate_candidate_discovery_bundle,
+    generate_multi_view_candidate_discovery,
+)
+from .enikk_sources import (
+    build_enikk_resource_name_map,
+    collect_enikk_team_dump_compositions,
+)
 from .evaluator import (
     CacheIdentity,
     Evaluation,
     EvaluationTimings,
     EvaluatorStats,
     MorisEvaluator,
+)
+from .external_hypotheses import (
+    ExternalHypothesisPlan,
+    SkippedOwnedComposition,
+    build_external_hypothesis_plan,
 )
 from .global_search import Allocation, select_global_allocation
 from .marginal import (
@@ -118,6 +144,18 @@ from .proxy_views import (
     build_planned_marginal_prefix_views,
     select_proxy_view_candidates,
 )
+from .reference_discovery import (
+    EvaluatedReferencePlacement,
+    ReferenceComposition,
+    ReferenceDiscoveryResult,
+    balanced_placement_order,
+    discover_reference_placements,
+)
+from .reference_sources import (
+    ReferenceSourceAdaptation,
+    SkippedReferenceEvidence,
+    adapt_external_reference_compositions,
+)
 from .refinement import OneSwapNeighbor, generate_one_swap_neighbors
 from .same_budget import (
     InvalidSameBudgetComparison,
@@ -147,11 +185,13 @@ from .seeds import (
 )
 from .synergy import PairSynergyObservation, PairSynergyProbe, measure_pair_probes
 from .validation import ValidationMetrics, enumerate_legal_teams, run_exhaustive_validation
+from .worker_account import WorkerAccountBundle, build_worker_account_bundle
 
 __all__ = [
     "AccountSnapshot",
     "AccountSyncAdapter",
     "Allocation",
+    "AllocationCandidateGenerationResult",
     "AllocationRefinementResult",
     "AnytimeSearchResult",
     "AnytimeStageMetrics",
@@ -162,6 +202,8 @@ __all__ = [
     "BurstStructureReport",
     "BurstStructureValidator",
     "CacheIdentity",
+    "CandidateDiscoveryBundle",
+    "CandidateDiscoveryContext",
     "CandidateGenerationResult",
     "CandidateMarginalPlan",
     "CandidateMarginalPlanEntry",
@@ -176,16 +218,19 @@ __all__ = [
     "ConstraintSet",
     "CoreSeed",
     "EnikkSeasonUsageSnapshot",
+    "EvaluatedReferencePlacement",
     "Evaluation",
     "EvaluationTimings",
     "EvaluatorStats",
     "ExactCompSeed",
     "ExternalCompositionCollection",
     "ExternalCompositionEvidence",
+    "ExternalHypothesisPlan",
     "ExternalNameMapping",
     "FieldProvenance",
     "FirstPositiveAvailability",
     "GeneratedCandidate",
+    "GeneratedProxyAllocation",
     "InvalidSameBudgetComparison",
     "LowUsagePolicy",
     "MalformedCompositionRow",
@@ -198,6 +243,7 @@ __all__ = [
     "MetaUsageDecision",
     "MetaUsageRosterResult",
     "MorisEvaluator",
+    "MultiViewCandidateDiscovery",
     "OneSwapNeighbor",
     "OverloadKnowledge",
     "OverloadPieceEvidence",
@@ -210,6 +256,9 @@ __all__ = [
     "ProxyView",
     "ProxyViewCandidate",
     "ProxyViewHit",
+    "ReferenceComposition",
+    "ReferenceDiscoveryResult",
+    "ReferenceSourceAdaptation",
     "RestorationStep",
     "SameBudgetComparison",
     "SearchBudget",
@@ -221,6 +270,9 @@ __all__ = [
     "SeedSelection",
     "SeedSourceAdaptation",
     "SkippedCompositionEvidence",
+    "SkippedDiscoveryView",
+    "SkippedOwnedComposition",
+    "SkippedReferenceEvidence",
     "SoloRaidPeriod",
     "SoloRaidSchedule",
     "SoloRaidUsageEvidence",
@@ -229,24 +281,37 @@ __all__ = [
     "TeamRequirement",
     "UsageClass",
     "ValidationMetrics",
+    "WorkerAccountBundle",
     "adapt_external_compositions",
+    "adapt_external_reference_compositions",
     "aggregate_character_window",
+    "all_permutation_placements",
+    "balanced_placement_order",
     "build_burst_role_map",
+    "build_enikk_resource_name_map",
+    "build_external_hypothesis_plan",
     "build_external_name_mapping",
     "build_meta_guided_partition",
     "build_planned_marginal_prefix_views",
+    "build_worker_account_bundle",
     "check_structural_feasibility",
     "classify_meta_epoch_usage",
     "classify_roster_meta_usage",
     "collect_enikk_sr_compositions",
+    "collect_enikk_team_dump_compositions",
     "completed_raids_after_first_positive",
     "derive_first_positive_availability",
     "derive_overload_piece_evidence",
     "derive_roster_first_positive_availability",
+    "discover_reference_placements",
     "enumerate_legal_teams",
     "evaluate_allocation_with_one_swap_refinement",
+    "generate_additive_allocation_beam_candidates",
     "generate_additive_beam_candidates",
+    "generate_candidate_discovery_bundle",
+    "generate_multi_view_candidate_discovery",
     "generate_one_swap_neighbors",
+    "identity_placement",
     "measure_marginals",
     "measure_marginals_with_candidates",
     "measure_pair_probes",
