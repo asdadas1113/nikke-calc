@@ -110,6 +110,25 @@ class ProxyViewCandidateTests(unittest.TestCase):
         self.assertEqual(views[0].values, {"C": -20.0, "D": 10.0})
         self.assertEqual(views[1].values, {"C": 30.0, "D": 10.0})
 
+    def test_unchanged_unmeasured_deeper_prefix_is_not_duplicated(self):
+        plan = CandidateMarginalPlan(
+            reference_teams=(("A", "B"),),
+            entries=(CandidateMarginalPlanEntry("C", ("A", "B"), (0, 1)),),
+        )
+        measurement = MarginalMeasurement(
+            values={},
+            evaluated_candidates=(
+                CandidateTeam(("A", "B"), 100, 100),
+                CandidateTeam(("C", "B"), 90, 90),
+                # No second-slot trial: the second prefix carries the first value.
+            ),
+        )
+
+        views = build_planned_marginal_prefix_views(plan, measurement)
+
+        self.assertEqual(tuple(view.name for view in views), ("marginal-prefix-1",))
+        self.assertEqual(views[0].values, {"C": -10.0})
+
     def test_prefix_view_depth_limit_does_not_require_deeper_measurement(self):
         plan = CandidateMarginalPlan(
             reference_teams=(("A", "B"),),
