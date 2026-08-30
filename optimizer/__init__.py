@@ -24,6 +24,11 @@ from .evaluator import (
     MorisEvaluator,
 )
 from .global_search import Allocation, select_global_allocation
+from .pipeline import (
+    AllocationRefinementResult,
+    PipelineStageMetrics,
+    evaluate_allocation_with_one_swap_refinement,
+)
 from .refinement import OneSwapNeighbor, generate_one_swap_neighbors
 from .synergy import PairSynergyObservation, PairSynergyProbe, measure_pair_probes
 from .validation import ValidationMetrics, enumerate_legal_teams, run_exhaustive_validation
@@ -32,6 +37,7 @@ __all__ = [
     "AccountSnapshot",
     "AccountSyncAdapter",
     "Allocation",
+    "AllocationRefinementResult",
     "AuditedAccountSnapshot",
     "BurstMetadata",
     "BurstStructureReport",
@@ -47,9 +53,11 @@ __all__ = [
     "OneSwapNeighbor",
     "PairSynergyObservation",
     "PairSynergyProbe",
+    "PipelineStageMetrics",
     "ProvenanceStatus",
     "ValidationMetrics",
     "enumerate_legal_teams",
+    "evaluate_allocation_with_one_swap_refinement",
     "generate_one_swap_neighbors",
     "measure_pair_probes",
     "normalize_account_bundle",
