@@ -8,6 +8,7 @@ from .account import (
     normalize_account_sync,
 )
 from .account_bundle import AuditedAccountSnapshot, normalize_account_bundle
+from .blablalink import normalize_blablalink_worker_payload, select_blablalink_area
 from .candidates import CandidateTeam
 from .constraints import (
     BurstMetadata,
@@ -62,7 +63,9 @@ __all__ = [
     "measure_pair_probes",
     "normalize_account_bundle",
     "normalize_account_sync",
+    "normalize_blablalink_worker_payload",
     "run_exhaustive_validation",
+    "select_blablalink_area",
     "select_global_allocation",
     "teams_are_disjoint",
 ]
