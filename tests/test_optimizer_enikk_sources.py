@@ -26,10 +26,25 @@ class EnikkSourceTests(unittest.TestCase):
         self.assertEqual(row.members, ("A", "B", "C", "D", "E"))
         self.assertEqual(row.order_knowledge, CompositionOrderKnowledge.UNKNOWN_ORDER)
         self.assertEqual(row.source, "enikk:S40:teams-row1")
-        # No parse-count / max / average field exists on optimizer evidence.
         self.assertFalse(hasattr(row, "uses"))
         self.assertFalse(hasattr(row, "average_damage"))
         self.assertFalse(hasattr(row, "max_damage"))
+
+    def test_leading_zero_resource_id_matches_canonical_integer_id(self):
+        result = collect_enikk_team_dump_compositions(
+            "192,583,234,101,074=867|8.31|5.84",
+            raid=40,
+            resource_name_map={
+                "192": "A",
+                "583": "B",
+                "234": "C",
+                "101": "D",
+                "74": "E",
+            },
+        )
+        self.assertEqual(result.malformed_rows, ())
+        self.assertTrue(result.evidence[0].mapping_complete)
+        self.assertEqual(result.evidence[0].members, ("A", "B", "C", "D", "E"))
 
     def test_unknown_resource_id_remains_incomplete_instead_of_name_guessing(self):
         result = collect_enikk_team_dump_compositions(
