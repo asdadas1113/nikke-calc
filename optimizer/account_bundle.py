@@ -323,22 +323,76 @@ def _audit_raw_sidecar(
 
 def _adjust_legacy_provenance(
     base: AccountSnapshot,
+    profile_payload: Mapping[str, Any],
+    raw_payload: Mapping[str, Any],
 ) -> tuple[FieldProvenance, ...]:
-    """Avoid calling legacy console values freshly observed when the profile cannot prove it."""
+    """Upgrade legacy provenance when the raw sidecar proves a fresh outpost read.
+
+    Plain ``profile_fetch.py`` raw sidecars historically omitted outpost rows, so
+    a profile with no console warning could not prove whether its console value
+    was freshly fetched or preserved. In-memory Worker payloads do contain the
+    outpost rows. When those rows deterministically reproduce the normalized
+    console/synchro value, the audit may safely call that field observed.
+    """
+
+    from scraper import profile_fetch
+
+    raw_outpost = raw_payload.get("outpost")
+    if not isinstance(raw_outpost, Mapping):
+        raw_outpost = {}
+    researches = raw_outpost.get("recycle_room_researches")
+    raw_console = None
+    if isinstance(researches, list) and researches:
+        warnings: list[str] = []
+        raw_console = profile_fetch._console(researches, warnings)
+        if warnings:
+            raw_console = None
+
+    account = profile_payload.get("_account")
+    if not isinstance(account, Mapping):
+        account = {}
+    profile_console = account.get("console")
+    raw_synchro = raw_outpost.get("synchro_level")
+    profile_synchro = account.get("synchro_level")
 
     out: list[FieldProvenance] = []
     for item in base.provenance:
         if item.path == "_account.console" and item.status is ProvenanceStatus.OBSERVED:
+            if raw_console is not None and raw_console == profile_console:
+                out.append(
+                    replace(
+                        item,
+                        status=ProvenanceStatus.OBSERVED,
+                        source="profile-sync:raw-outpost",
+                        note="raw sidecar recycle-room rows reproduce the normalized console",
+                    )
+                )
+            else:
+                out.append(
+                    replace(
+                        item,
+                        status=ProvenanceStatus.UNCERTAIN,
+                        source="profile-sync:profile-without-freshness-marker",
+                        note="profile format does not prove whether console was freshly observed or preserved",
+                    )
+                )
+            continue
+        if (
+            item.path == "_account.synchro_level"
+            and item.status is ProvenanceStatus.UNCERTAIN
+            and raw_synchro is not None
+            and raw_synchro == profile_synchro
+        ):
             out.append(
                 replace(
                     item,
-                    status=ProvenanceStatus.UNCERTAIN,
-                    source="profile-sync:profile-without-freshness-marker",
-                    note="profile format does not prove whether console was freshly observed or preserved",
+                    status=ProvenanceStatus.OBSERVED,
+                    source="profile-sync:raw-outpost",
+                    note="raw sidecar outpost row reproduces the normalized synchro level",
                 )
             )
-        else:
-            out.append(item)
+            continue
+        out.append(item)
     return tuple(out)
 
 
@@ -407,9 +461,9 @@ def normalize_account_bundle(
         level_mode=level_mode,
         unknown_policy=unknown_policy,
     )
-    provenance = _adjust_legacy_provenance(base) + _audit_raw_sidecar(
-        profile_payload, raw_payload
-    )
+    provenance = _adjust_legacy_provenance(
+        base, profile_payload, raw_payload
+    ) + _audit_raw_sidecar(profile_payload, raw_payload)
     return AuditedAccountSnapshot(
         base=base,
         provenance=provenance,
