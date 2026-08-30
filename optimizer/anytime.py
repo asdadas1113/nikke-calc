@@ -1,10 +1,11 @@
 """Budgeted orchestration over explicit candidate discovery inputs.
 
-This module deliberately does not invent a roster-wide candidate generator. The
-caller supplies reference teams and a cheap candidate-team universe/order; this
-layer spends a hard SearchBudget on candidate-specific marginals, protected seed
-candidates, selected proxy teams, exact candidate-pool allocation, and bounded
-one-swap refine.
+The caller may supply either a cheap candidate-team universe/order directly or a
+``candidate_builder`` that constructs one after marginal evidence is measured.
+This layer itself still does not prescribe a roster-wide generator or hidden
+search constants. It spends a hard SearchBudget on candidate-specific marginals,
+protected seed candidates, selected proxy teams, exact candidate-pool allocation,
+and bounded one-swap refine.
 
 A caller may feed ``prior_candidates`` from an earlier round back into a later
 round. With the same MorisEvaluator/cache identity, those evaluations are cache
@@ -37,6 +38,7 @@ from .seeds import CoreSeed, ExactCompSeed, SeedSelection, select_seed_candidate
 
 Team = tuple[str, ...]
 TeamValidator = Callable[[Team], bool]
+CandidateBuilder = Callable[[MarginalMeasurement], Iterable[Sequence[str]]]
 CandidateRow = tuple[Team, float, str]
 
 
@@ -78,9 +80,6 @@ def _merge_candidate(
     if previous is None:
         candidates[item.members] = item
         return
-    # The same ordered team under one evaluator/config must have one true score.
-    # Prefer a simulated row over proxy-only state, and otherwise keep the first
-    # source for deterministic provenance.
     if previous.simulated_score is None and item.simulated_score is not None:
         candidates[item.members] = item
 
@@ -92,8 +91,6 @@ def _top_proxy_teams(
     limit: int,
     legal: TeamValidator | None,
 ) -> tuple[tuple[Team, float], ...]:
-    """Keep top-K additive marginal teams without materializing the universe."""
-
     if limit <= 0:
         return ()
     values = marginal.values
@@ -111,8 +108,6 @@ def _top_proxy_teams(
         if any(name not in values for name in team):
             continue
         score = sum(values[name].mean_delta for name in team)
-        # Earlier input order wins exact proxy ties. ``-index`` makes that order
-        # compatible with a min-heap whose weakest row is evicted first.
         row = (float(score), -index, team)
         if len(heap) < limit:
             heapq.heappush(heap, row)
@@ -123,14 +118,6 @@ def _top_proxy_teams(
 
 
 def _interleave_candidate_channels(*channels: Sequence[CandidateRow]) -> tuple[CandidateRow, ...]:
-    """Rank-round-robin small selected channels before expensive evaluation.
-
-    Channel order is explicit at the call site. A candidate nominated by several
-    channels is evaluated once, using the provenance of its first nomination.
-    This helper operates only on already-bounded selected rows, never on the full
-    roster-wide candidate universe.
-    """
-
     seen: set[Team] = set()
     out: list[CandidateRow] = []
     max_rank = max((len(channel) for channel in channels), default=0)
@@ -178,6 +165,7 @@ def run_anytime_search_round(
     placement_resolver: PlacementResolver | None = None,
     marginal_max_simulate_calls: int | None = None,
     proxy_view_limit_per_view: int | None = None,
+    candidate_builder: CandidateBuilder | None = None,
     exact_seeds: Sequence[ExactCompSeed] = (),
     core_seeds: Sequence[CoreSeed] = (),
     seed_max_per_core: int = 1,
@@ -187,55 +175,20 @@ def run_anytime_search_round(
 ) -> AnytimeSearchResult:
     """Spend one explicit simulate-call budget without hiding search constants.
 
-    Stage order is:
+    Stage order is marginal measurement, optional simulation-free candidate
+    generation, seed/proxy candidate evaluation, exact allocation, optional
+    bounded one-swap refinement, then exact allocation again.
 
-    1. candidate-specific marginal plan/measurement;
-    2. seed-protected and proxy-selected full-team evaluation, interleaved fairly;
-    3. exact weighted set packing inside every evaluated candidate retained so far;
-    4. optional bounded one-swap refinement around the current allocation;
-    5. exact allocation again over the enlarged evaluated pool.
+    ``candidate_builder`` is optional. It receives the completed
+    ``MarginalMeasurement`` and replaces ``candidate_teams`` for ordinary proxy
+    discovery. It is outside the evaluator budget and must not call Moris; its
+    widths and limits remain caller policy. Static ``candidate_teams`` remains the
+    backward-compatible path.
 
-    Seeds are discovery protection only. ``ExactCompSeed`` nominates one ordered
-    team directly; ``CoreSeed`` filters an explicit candidate universe and never
-    invents the remaining slots. Seed candidates receive no score bonus and final
-    selection still depends only on actual Moris scores. The seed channel is
-    interleaved rank-by-rank with the proxy channel so a tight remaining budget
-    does not let either selected channel consume every evaluation first.
-
-    ``seed_roster`` and ``seed_candidate_teams`` are optional escape hatches for a
-    meta-guided controller. ``roster`` may contain only the active Primary pool
-    used for ordinary marginal search, while ``seed_roster`` may contain the full
-    owned roster and ``seed_candidate_teams`` may include a small set of explicit
-    Cold-bypass variants. This lets a Cold character participate in a specific
-    seed probe without promoting it into normal Primary search. When these inputs
-    are omitted, seed selection uses the ordinary roster/candidate universe.
-
-    If a CoreSeed must reuse the ordinary one-shot candidate stream, this function
-    materializes that stream once so proxy and seed selectors see the same teams.
-    A separate ``seed_candidate_teams`` stream avoids that materialization and is
-    preferred when a controller already has a small seed-specific universe.
-
-    By default proxy discovery preserves the original additive-marginal Top-K
-    behavior. When ``proxy_view_limit_per_view`` is supplied, distinct measured
-    marginal prefix interpretations are kept separate and their per-view Top-K
-    sets are rank-round-robin unioned before this stage. Cross-view proxy scores
-    never choose the final allocation: every admitted team must still have a
-    Moris score.
-
-    ``marginal_max_simulate_calls`` optionally places a child delta budget around
-    stage 1. The parent ``budget`` still caps the whole round, while the child cap
-    reserves parent budget for candidate evaluation/refinement. Cache hits remain
-    free through both layers.
-
-    ``candidate_limit``, marginal probe depth, optional stage cap, optional
-    per-view limit, seed inputs/core width, refinement inputs, and refinement cap
-    are all caller-owned. This keeps mode policy (fast/standard/precise) out of the
-    primitive until benchmarks justify actual values.
-
-    For monotonic continuation, pass the previous round's
-    ``evaluated_candidates`` back as ``prior_candidates`` and reuse the same
-    MorisEvaluator instance/cache identity. Cached prior rows cost zero new
-    simulations and remain eligible in the final exact allocation.
+    Seeds are discovery protection only. If CoreSeed reuses the ordinary universe
+    while a candidate builder is active, it filters that builder output. Seed
+    candidates receive no score bonus and final selection still depends only on
+    actual Moris scores.
     """
 
     if team_count <= 0:
@@ -259,10 +212,6 @@ def run_anytime_search_round(
     budgeted = BudgetedEvaluator(evaluator, budget)
     candidates: dict[Team, CandidateTeam] = {}
 
-    # Carry forward earlier work first. Under the documented continuation path
-    # these are cache hits. If a caller supplies stale/uncached prior rows, the
-    # hard budget still protects the evaluator and rows that cannot be reproduced
-    # are simply not admitted into this round.
     for item in prior_candidates:
         team = tuple(item.members)
         if legal is not None and not legal(team):
@@ -280,18 +229,6 @@ def run_anytime_search_round(
                 source=item.source,
             ),
         )
-
-    # Core seeds may use a dedicated, small candidate stream. If they reuse the
-    # ordinary stream, materialize it once so both selectors can consume it.
-    candidate_source: Iterable[Sequence[str]]
-    seed_candidate_source: Iterable[Sequence[str]]
-    if core_seeds and seed_candidate_teams is None:
-        shared = tuple(tuple(raw) for raw in candidate_teams)
-        candidate_source = shared
-        seed_candidate_source = shared
-    else:
-        candidate_source = candidate_teams
-        seed_candidate_source = seed_candidate_teams or ()
 
     marginal_before = budgeted.used_simulate_calls
     plan = plan_candidate_specific_marginals(
@@ -316,11 +253,22 @@ def run_anytime_search_round(
         _merge_candidate(candidates, item)
     marginal_stage = AnytimeStageMetrics(
         simulate_calls=budgeted.used_simulate_calls - marginal_before,
-        attempted_teams=(
-            len(plan.used_reference_teams) + plan.planned_probe_count
-        ),
+        attempted_teams=len(plan.used_reference_teams) + plan.planned_probe_count,
         evaluated_teams=len(marginal.evaluated_candidates),
     )
+
+    ordinary_source: Iterable[Sequence[str]] = (
+        candidate_builder(marginal) if candidate_builder is not None else candidate_teams
+    )
+    candidate_source: Iterable[Sequence[str]]
+    seed_candidate_source: Iterable[Sequence[str]]
+    if core_seeds and seed_candidate_teams is None:
+        shared = tuple(tuple(raw) for raw in ordinary_source)
+        candidate_source = shared
+        seed_candidate_source = shared
+    else:
+        candidate_source = ordinary_source
+        seed_candidate_source = seed_candidate_teams or ()
 
     proxy_rows: tuple[CandidateRow, ...]
     if proxy_view_limit_per_view is None:
