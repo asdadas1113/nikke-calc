@@ -1,6 +1,6 @@
 """Real-Moris E2E check for normalized account snapshots.
 
-This fixture contains no private account data.  It uses the public profile-sync
+This fixture contains no private account data. It uses the public profile-sync
 schema with synthetic build values to verify that one AccountSnapshot is applied
 consistently through direct simulation, evaluator calls, marginal measurement,
 one-swap refinement, and final re-evaluation.
@@ -59,6 +59,10 @@ def entry(*, invested: bool = True) -> dict:
             for key in EQUIP_KEYS
         },
         "collection_stage": "SR15" if invested else "없음",
+        # Optional in profile-sync output; explicit here so the synthetic fixture
+        # cannot accidentally inherit fixed-build stage 3 if a roster member has
+        # a favorite item in the current Moris data revision.
+        "favorite_stage": 3,
     }
 
 
