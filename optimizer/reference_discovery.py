@@ -8,12 +8,14 @@ with no strength heuristic, then lets actual Moris damage choose the reference.
 
 The placement prefix balances member×slot coverage. Search metadata only decides
 which placements are inspected; no external rank, damage, usage, or synergy value
-is added to Moris scores.
+is added to Moris scores. If the new-call budget cannot give every viable source
+at least one placement, discovery fails before simulation rather than favoring an
+earlier source by input order.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from itertools import permutations
 
@@ -128,10 +130,14 @@ def discover_reference_placements(
 ) -> ReferenceDiscoveryResult:
     """Evaluate placement channels fairly and keep each composition's best Moris row.
 
-    Compositions are rank-round-robin scheduled: every source's first legal
-    placement is considered before any source's second placement. Tight budgets
-    therefore cannot be monopolized by the first unordered composition merely
-    because it has many permutations.
+    Compositions are rank-round-robin scheduled: every viable source's first legal
+    placement is considered before any source's second placement. Before spending
+    calls, the function verifies that the budget can pay every *uncached* first
+    placement. If not, it raises rather than letting input order decide which
+    public composition receives the only look.
+
+    Empty channels caused by hard legality remain visible as unfulfilled sources.
+    Cached first placements cost no budget and count toward the fairness guarantee.
     """
 
     if max_per_composition < 0:
@@ -148,8 +154,20 @@ def discover_reference_placements(
         )
         for composition in compositions
     )
-    budgeted = BudgetedEvaluator(evaluator, budget)
     kwargs = dict(evaluate_kwargs or {})
+    first_placements = tuple(channel[0] for channel in channels if channel)
+    uncached_first = sum(
+        not evaluator.is_cached(team, **kwargs)
+        for team in first_placements
+    )
+    if budget.max_simulate_calls < uncached_first:
+        raise ValueError(
+            "reference discovery budget cannot give every viable composition one "
+            f"placement: needs {uncached_first} new calls, budget is "
+            f"{budget.max_simulate_calls}"
+        )
+
+    budgeted = BudgetedEvaluator(evaluator, budget)
     evaluated: list[EvaluatedReferencePlacement] = []
     best_by_source: dict[str, EvaluatedReferencePlacement] = {}
     max_rank = max((len(channel) for channel in channels), default=0)
