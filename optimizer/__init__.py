@@ -64,6 +64,12 @@ from .meta_eligibility import (
     post_epoch_completed_raids,
     to_solo_raid_usage_evidence,
 )
+from .meta_policy import (
+    MetaGuidedPartitionResult,
+    MetaUsageRosterResult,
+    build_meta_guided_partition,
+    classify_roster_meta_usage,
+)
 from .meta_usage import (
     CharacterUsageWindow,
     EnikkSeasonUsageSnapshot,
@@ -137,7 +143,9 @@ __all__ = [
     "MarginalValue",
     "MetaEpochEvidence",
     "MetaEpochKnowledge",
+    "MetaGuidedPartitionResult",
     "MetaUsageDecision",
+    "MetaUsageRosterResult",
     "MorisEvaluator",
     "OneSwapNeighbor",
     "OverloadKnowledge",
@@ -166,9 +174,11 @@ __all__ = [
     "aggregate_character_window",
     "build_burst_role_map",
     "build_external_name_mapping",
+    "build_meta_guided_partition",
     "build_planned_marginal_prefix_views",
     "check_structural_feasibility",
     "classify_meta_epoch_usage",
+    "classify_roster_meta_usage",
     "derive_overload_piece_evidence",
     "enumerate_legal_teams",
     "evaluate_allocation_with_one_swap_refinement",
