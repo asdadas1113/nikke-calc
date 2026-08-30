@@ -1,0 +1,19 @@
+name: Temporary optimizer pair benchmark
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Run failure-driven pair benchmark
+        run: PYTHONPATH=. python tests/benchmark_optimizer_pair_real.py
