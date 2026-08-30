@@ -551,3 +551,81 @@ Do not report full-roster recall without an oracle. Use tractable subsets cut fr
 3. create tractable real-build nested subsets for recall;
 4. only if a measured failure remains, expand context-specific pair/core probes;
 5. keep known/set-NIKKE research and Meta-Aware scoring deferred until this account-scale baseline is measured.
+
+---
+
+## 2026-08-31 — anytime/multi-view and meta-guided cold-pool evidence
+
+- repository: `asdadas1113/nikke-calc`
+- branch: `roster-optimizer-prototype`
+- permanent head before this devlog entry: `f1fa6e7109dcb1519889ddd31132de60175ec46b`
+- Moris upstream/master baseline remains: `fb2fd9157aa14499daf6b9f185beb685d4393f90`
+- private account/profile data committed or sent to public CI: none
+
+### Search-budget and proxy work since the prior entry
+
+1. Added an anonymous BlaBlaLink Worker-payload adapter and audited raw-outpost provenance so console/synchro freshness can be proved without retaining `openid` in optimizer snapshots. The private account payload remained local and out of GitHub.
+2. Marginal measurement now retains every actually evaluated reference/trial team as a reusable evaluated candidate instead of throwing those Moris results away.
+3. Candidate-specific marginal plans and `SearchBudget` / `BudgetedEvaluator` were added, followed by an anytime orchestration skeleton. Candidate probing is score-blind and budgeted; continuation preserves previously evaluated candidates/cache so best-known evaluated-pool allocations do not decrease merely because another round is run.
+4. A low-budget priority-order experiment showed a real tradeoff: breadth-oriented orderings improved partial proxy Top-5 recall on the public fixture while losing the true optimum that input/reference-undercovered order preserved. No priority ordering was promoted to the default.
+5. Adaptive second-probe experiments rejected a universal scalar overwrite. On the public fixture, replacing first-probe values with deeper/best-two values worsened recall (`60% -> 40%` and `80% -> 60%`), while a private out-of-repo actual-build fixture showed the opposite failure and required deeper evidence. Negative-first rescue and fixed blending likewise did not transfer. The private fixture data was not committed.
+6. Added multi-view proxy preservation and planned-prefix reconstruction. First-probe and deeper interpretations are kept as separate candidate views; their top-K union is Moris-evaluated before allocation. On the public fixture, K=10 union preserved the useful first-view quality (60% / 80%). The private out-of-repo fixture exposed the complementary case where the deeper view supplied candidates the first view missed.
+7. Added nested stage budgets. A marginal-stage child budget can now stop its own new simulations while the parent whole-search budget retains calls for candidate evaluation/refinement; cache hits remain free through both layers.
+8. Moris still lacks a boss-to-ally incoming-hit/death loop that would let the optimizer score survival/healer value directly. Healer-specific forced inference remains deferred; only generic team-constraint hooks are kept.
+
+### Meta-guided reversible Cold pool
+
+Implemented auditable primitives without adding meta bonuses to damage:
+
+- Cold eligibility requires `low Solo Raid usage AND proven OL0`.
+- OL present protects the character; OL missing/unknown/uncertain fails open to Primary.
+- current displayed level, current Synchro membership, and combat power are not pruning evidence.
+- Priority-review / force-included names can bypass Cold filtering.
+- Cold filtering is reversible search-budget allocation, never hard legality.
+- a structural DP checks whether the active roster can still form the required non-overlapping burst-role-complete teams, including multi-role burst-A behavior; Cold members can be restored incrementally until feasible.
+- Solo Raid usage only is in scope for the MVP; Union Raid evidence remains deferred.
+
+### Public Enikk data and backtest
+
+Added a threshold-free public Enikk usage layer and benchmark script. It counts a character at most once per ranked player, keeps missing/unsafe zeroes uncertain, and requires explicit historical eligibility. Resource-id mapping found two ambiguous external labels (`Rei`, `Sakura`); those labels are excluded rather than silently overwritten.
+
+Public S21-S40 data had 298–300 ranked players per season, giving an observed one-player floor of about 0.33%. Latest rolling lower-tail counts showed that six seasons forget old evidence much faster than ten seasons.
+
+A temporary public-only backtest then asked: if an established character's maximum usage over the previous 6/8/10 seasons was below a candidate boundary, how much was that same character used in the next Solo Raid season? This is usage-only risk; real Cold eligibility is stricter because proven OL0 is also required.
+
+Key results:
+
+- 6 seasons, historical peak <=0.35%: 250 candidate-season cases, **6** next-season >=5% breakouts, **6** >=10%, max next usage **85.0%**. Six seasons is rejected as the first candidate.
+- 8 seasons, historical peak <=1.00%: 190 cases, **0** next-season >=5% or >=10% breakouts; max next usage **1.0%**.
+- 8 seasons, historical peak <=2.00%: 209 cases, **2** next-season >=5% / >=10% / >=25% breakouts; max next usage **99.7%**. The 2% boundary is too risky in this sample for the first candidate.
+- 10 seasons, historical peak <=1.00%: 135 cases and no positive next-season usage in this interval. This is a more conservative but stickier comparison policy.
+
+Decision: carry `complete established 8-season window AND peak_usage <= 1%` forward as the **first benchmark candidate**, not as a locked production rule. Missing coverage, ambiguous mapping, release/eligibility uncertainty, or missing OL provenance fail open. The 1% figure is an empirical budget-allocation candidate for this Enikk interval, not an intrinsic character-strength threshold.
+
+### Verification
+
+Public-only temporary study run `33336029144` completed successfully, including the S21-S40 rolling study and lookback-to-next-season backtest.
+
+Normal regression CI run `33336029140` on the same implementation plus temporary benchmark files completed successfully:
+
+- calculator engine: 137 passed, 1 skipped.
+- optimizer: **133 passed**.
+- bridge: 31 passed, 1 skipped.
+- browser: 24 files / **385 passed**.
+- golden snapshot: **29/29 passed**.
+- doclint and damage cross-checks passed.
+
+Temporary workflow/backtest files are benchmark-only and must not remain on the permanent prototype branch.
+
+### Limitations / next task
+
+The public backtest does not know account OL state and does not prove final five-team damage quality. It also covers one public sampling interval and uses conservative first-positive evidence instead of pretending exact historical release dates are known. Therefore the provisional usage rule must still be validated under the actual Moris search objective.
+
+Next:
+
+1. wire `marginal_max_simulate_calls` and `proxy_view_limit_per_view` into `run_anytime_search_round()` with synthetic tests for stage reservation, view union, hard whole-budget enforcement, cache/continuation behavior, and backward-compatible defaults;
+2. add a classifier/pool integration path using the provisional 8-season / 1% policy, with 10-season / 1% retained as a conservative comparison and Pure Sim kept available;
+3. add bounded Cold exploration and Priority Review without score bonuses, then compare Meta-guided vs Pure Sim under the **same number of new Moris simulations** on local/private actual-account runs without committing account data;
+4. promote or relax the meta rule only if final five-team damage, call allocation, runtime, and recovered-deferred diagnostics justify it; otherwise fall back toward Pure Sim;
+5. after the Python/controller policy is stable, expose evaluation rounds as batches so the browser `CalculatorPool` can use multiple Pyodide workers in parallel;
+6. keep healer-specific logic deferred until the simulator can value incoming boss damage/survival.
