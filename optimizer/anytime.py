@@ -181,6 +181,8 @@ def run_anytime_search_round(
     exact_seeds: Sequence[ExactCompSeed] = (),
     core_seeds: Sequence[CoreSeed] = (),
     seed_max_per_core: int = 1,
+    seed_roster: Sequence[str] | None = None,
+    seed_candidate_teams: Iterable[Sequence[str]] | None = None,
     evaluate_kwargs: dict | None = None,
 ) -> AnytimeSearchResult:
     """Spend one explicit simulate-call budget without hiding search constants.
@@ -194,16 +196,24 @@ def run_anytime_search_round(
     5. exact allocation again over the enlarged evaluated pool.
 
     Seeds are discovery protection only. ``ExactCompSeed`` nominates one ordered
-    team directly; ``CoreSeed`` filters the caller-supplied candidate universe and
-    never invents the remaining slots. Seed candidates receive no score bonus and
-    final selection still depends only on actual Moris scores. The seed channel is
+    team directly; ``CoreSeed`` filters an explicit candidate universe and never
+    invents the remaining slots. Seed candidates receive no score bonus and final
+    selection still depends only on actual Moris scores. The seed channel is
     interleaved rank-by-rank with the proxy channel so a tight remaining budget
     does not let either selected channel consume every evaluation first.
 
-    Core-seed filtering needs to inspect the same candidate universe later used by
-    the proxy selector. When core seeds are present this function materializes that
-    caller-supplied universe once for deterministic reuse. Without core seeds the
-    original streaming proxy path is preserved.
+    ``seed_roster`` and ``seed_candidate_teams`` are optional escape hatches for a
+    meta-guided controller. ``roster`` may contain only the active Primary pool
+    used for ordinary marginal search, while ``seed_roster`` may contain the full
+    owned roster and ``seed_candidate_teams`` may include a small set of explicit
+    Cold-bypass variants. This lets a Cold character participate in a specific
+    seed probe without promoting it into normal Primary search. When these inputs
+    are omitted, seed selection uses the ordinary roster/candidate universe.
+
+    If a CoreSeed must reuse the ordinary one-shot candidate stream, this function
+    materializes that stream once so proxy and seed selectors see the same teams.
+    A separate ``seed_candidate_teams`` stream avoids that materialization and is
+    preferred when a controller already has a small seed-specific universe.
 
     By default proxy discovery preserves the original additive-marginal Top-K
     behavior. When ``proxy_view_limit_per_view`` is supplied, distinct measured
@@ -271,13 +281,17 @@ def run_anytime_search_round(
             ),
         )
 
-    # Core seeds need one reusable view of the caller's candidate universe.
-    # Exact seeds do not consume or materialize that stream.
+    # Core seeds may use a dedicated, small candidate stream. If they reuse the
+    # ordinary stream, materialize it once so both selectors can consume it.
     candidate_source: Iterable[Sequence[str]]
-    if core_seeds:
-        candidate_source = tuple(tuple(raw) for raw in candidate_teams)
+    seed_candidate_source: Iterable[Sequence[str]]
+    if core_seeds and seed_candidate_teams is None:
+        shared = tuple(tuple(raw) for raw in candidate_teams)
+        candidate_source = shared
+        seed_candidate_source = shared
     else:
         candidate_source = candidate_teams
+        seed_candidate_source = seed_candidate_teams or ()
 
     marginal_before = budgeted.used_simulate_calls
     plan = plan_candidate_specific_marginals(
@@ -336,10 +350,10 @@ def run_anytime_search_round(
         )
 
     seed_selection = select_seed_candidates(
-        candidate_source if core_seeds else (),
+        seed_candidate_source if core_seeds else (),
         exact_seeds=exact_seeds,
         core_seeds=core_seeds,
-        roster=roster,
+        roster=roster if seed_roster is None else seed_roster,
         legal=legal,
         max_per_core=seed_max_per_core,
     )
