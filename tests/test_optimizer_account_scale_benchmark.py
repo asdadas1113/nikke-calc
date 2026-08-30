@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import types
 import unittest
 
 
@@ -26,6 +27,30 @@ class AccountScaleBenchmarkParserTests(unittest.TestCase):
 
     def test_allocation_rows_handles_missing_allocation(self):
         self.assertEqual(module.allocation_rows(None), [])
+
+    def test_worker_json_cannot_be_combined_with_profile_bundle(self):
+        args = types.SimpleNamespace(
+            worker_json=pathlib.Path("worker.json"),
+            profile=pathlib.Path("profile.json"),
+            raw=None,
+            preferred_area=None,
+            level_mode="fixed",
+            unknown_policy="error",
+        )
+        with self.assertRaisesRegex(ValueError, "cannot be combined"):
+            module.account_snapshot(args)
+
+    def test_profile_input_requires_matching_raw_sidecar(self):
+        args = types.SimpleNamespace(
+            worker_json=None,
+            profile=pathlib.Path("profile.json"),
+            raw=None,
+            preferred_area=None,
+            level_mode="fixed",
+            unknown_policy="error",
+        )
+        with self.assertRaisesRegex(ValueError, "both --profile and --raw"):
+            module.account_snapshot(args)
 
 
 if __name__ == "__main__":
