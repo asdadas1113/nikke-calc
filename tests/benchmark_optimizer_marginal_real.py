@@ -11,6 +11,8 @@ fixed-order fixture; it must not be reported as exhaustive ordered NIKKE truth.
 from __future__ import annotations
 
 import argparse
+import json
+from pathlib import Path
 from time import perf_counter
 
 from optimizer.candidates import CandidateTeam, select_diverse
@@ -68,6 +70,7 @@ EVALUATE_KWARGS = {
 }
 CANDIDATE_LIMIT = 12
 TOP_N = 5
+TARGET_BURST_INTERVAL_S = 20.0
 
 
 def _new_evaluator() -> MorisEvaluator:
@@ -78,11 +81,86 @@ def _new_evaluator() -> MorisEvaluator:
     )
 
 
+def _load_burst_cooldowns() -> dict[str, float | None]:
+    """Read only the static cooldown diagnostic used by the benchmark RoleFit.
+
+    This does not decide legality and is intentionally benchmark-local until the
+    experiment shows whether the signal is useful enough to promote into optimizer
+    production code.
+    """
+    root = Path(__file__).resolve().parent.parent
+    with open(root / "data" / "parsed_nikke.json", encoding="utf-8") as handle:
+        parsed = json.load(handle)
+    return {
+        name: (float(row["burst_cooldown"]) if row.get("burst_cooldown") is not None else None)
+        for name, row in parsed.items()
+    }
+
+
+def _burst_cycle_deficit(
+    team: tuple[str, ...],
+    burst: BurstStructureValidator,
+    cooldowns: dict[str, float | None],
+) -> float | None:
+    """Cheap soft estimate of 20-second burst-stage supply.
+
+    For each static stage, a 20 s unit supplies one full use per target interval
+    and a 40 s unit supplies half. Two 40 s candidates therefore cover one stage
+    at the cheap proxy level. Stage-A candidates are present in each static bucket
+    exactly as the current Moris validator reports them; this deliberately remains
+    an approximation and is never used as a hard constraint.
+
+    Uncertain/dynamic/explicit-sequence cases return None so this cheap heuristic
+    cannot penalize a structure that static inspection does not understand.
+    """
+    report = burst.inspect(team)
+    if not report.fully_resolved:
+        return None
+
+    deficits: list[float] = []
+    for stage in ("1", "2", "3"):
+        supply = 0.0
+        for name in report.eligible_by_stage[stage]:
+            cooldown = cooldowns.get(name)
+            if cooldown is None or cooldown <= 0:
+                return None
+            supply += TARGET_BURST_INTERVAL_S / cooldown
+        deficits.append(max(0.0, 1.0 - supply))
+    return sum(deficits) / len(deficits)
+
+
+def _role_bucket_select(
+    proxy_rank: list[tuple[str, ...]],
+    deficits: dict[tuple[str, ...], float | None],
+    *,
+    limit: int,
+    fit_fraction: float,
+) -> list[tuple[str, ...]]:
+    """Reserve part of a shortlist for estimated 20 s-capable teams.
+
+    The remaining slots are filled from the unrestricted raw marginal ranking, so
+    slow/unusual teams are preserved instead of being hard-pruned.
+    """
+    fit = [team for team in proxy_rank if deficits[team] == 0.0]
+    reserve = min(limit, int(round(limit * fit_fraction)), len(fit))
+    selected = list(fit[:reserve])
+    seen = set(selected)
+    for team in proxy_rank:
+        if team in seen:
+            continue
+        selected.append(team)
+        seen.add(team)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
 def main(reference_variant: str) -> None:
     reference_teams = REFERENCE_VARIANTS[reference_variant]
     min_observations = 2 if reference_variant == "balanced-6" else 1
 
     burst = BurstStructureValidator.from_moris()
+    cooldowns = _load_burst_cooldowns()
     constraints = ConstraintSet(team_size=5, validators=(burst,))
 
     for reference in reference_teams:
@@ -149,6 +227,21 @@ def main(reference_variant: str) -> None:
     true_rank = sorted(legal_teams, key=lambda team: truth_scores[team], reverse=True)
     proxy_rank = sorted(legal_teams, key=proxy_score, reverse=True)
 
+    deficits = {
+        team: _burst_cycle_deficit(team, burst, cooldowns)
+        for team in legal_teams
+    }
+    # Diagnostic upper bound: how far can this structural feature move teams if it
+    # is allowed to dominate raw marginal ranking? This is not the production rule.
+    role_first_rank = sorted(
+        legal_teams,
+        key=lambda team: (
+            deficits[team] is None,
+            deficits[team] if deficits[team] is not None else 0.0,
+            -proxy_score(team),
+        ),
+    )
+
     proxy_candidates = [
         CandidateTeam(team, proxy_score(team), source="marginal-mean")
         for team in legal_teams
@@ -201,7 +294,32 @@ def main(reference_variant: str) -> None:
     for limit in (8, 12, 16, 20, 24):
         selected = set(proxy_rank[: min(limit, len(proxy_rank))])
         recall = len(top_keys & selected) / len(top_keys)
-        print(f"limit={limit}: top_{TOP_N}_recall={recall:.6f}")
+        print(f"raw limit={limit}: top_{TOP_N}_recall={recall:.6f}")
+        for fraction in (0.50, 0.75):
+            role_selected = set(
+                _role_bucket_select(
+                    proxy_rank,
+                    deficits,
+                    limit=min(limit, len(proxy_rank)),
+                    fit_fraction=fraction,
+                )
+            )
+            role_recall = len(top_keys & role_selected) / len(top_keys)
+            print(
+                f"role_bucket fraction={fraction:.2f} limit={limit}: "
+                f"top_{TOP_N}_recall={role_recall:.6f}"
+            )
+
+    print("--- true top 5 structural diagnostics ---")
+    for rank, team in enumerate(true_rank[:5], 1):
+        deficit = deficits[team]
+        deficit_text = "unknown" if deficit is None else f"{deficit:.6f}"
+        print(
+            f"true#{rank}: score={truth_scores[team]:.0f} "
+            f"proxy_rank={proxy_rank.index(team) + 1} "
+            f"role_first_rank={role_first_rank.index(team) + 1} "
+            f"burst_cycle_deficit={deficit_text} team={team}"
+        )
 
     print("--- marginal values (mean_delta / best_delta / observations) ---")
     for name in ROSTER:
@@ -211,18 +329,14 @@ def main(reference_variant: str) -> None:
             f"n={len(mv.observations)}"
         )
 
-    print("--- true top 5 ---")
-    for rank, team in enumerate(true_rank[:5], 1):
-        print(
-            f"true#{rank}: score={truth_scores[team]:.0f} "
-            f"proxy_rank={proxy_rank.index(team) + 1} team={team}"
-        )
-
     print("--- proxy top 12 ---")
     for rank, team in enumerate(proxy_rank[:CANDIDATE_LIMIT], 1):
+        deficit = deficits[team]
+        deficit_text = "unknown" if deficit is None else f"{deficit:.6f}"
         print(
             f"proxy#{rank}: proxy={proxy_score(team):.0f} "
-            f"true_rank={true_rank.index(team) + 1} true={truth_scores[team]:.0f} team={team}"
+            f"true_rank={true_rank.index(team) + 1} true={truth_scores[team]:.0f} "
+            f"burst_cycle_deficit={deficit_text} team={team}"
         )
 
 
