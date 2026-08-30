@@ -456,3 +456,98 @@ Next:
 3. do not claim full-roster recall where exhaustive truth is impossible; cut tractable subsets from the same real snapshot and use those subsets for true Top-N recall/optimum-survival measurements;
 4. expand context-specific pair/core probes only if a measured failure remains after refinement;
 5. keep Meta-Aware scoring deferred until the real-account production-scale path is validated.
+
+---
+
+## 2026-08-30 — audited profile-scale preparation
+
+- repository: `asdadas1113/nikke-calc`
+- branch: `roster-optimizer-prototype`
+- session start HEAD: `32dcbeb3e13c7135317a5e9524b10bf05378176b`
+- implementation/test head before docs: `ac4177420254f0d540972933b7c5079485f75976`
+- Moris upstream at start/end: `fb2fd9157aa14499daf6b9f185beb685d4393f90`
+- calculator/site/scraper source files changed: none
+- private profile/raw account data committed: none
+
+### Discovery before scale benchmark
+
+Inspection of `scraper/profile_fetch.py` found that the calculator-facing profile cannot by itself prove every sync field was safely converted. An equipped overload function type unknown to `FUNC_TO_EQUIP` can be omitted from `equip_skills` while only a console warning is printed; missing option dictionary rows, unknown collection/favorite ids, roster name-mapping loss, and preserved console freshness have similar provenance gaps.
+
+Starting a 50–80-character benchmark from the profile alone would therefore risk calling some converted zero/default values `observed`. Rather than hide that uncertainty or modify Moris calculator behavior, this session added a read-only raw-sidecar audit layer.
+
+### Implemented
+
+1. `optimizer/account_bundle.py`
+   - adds `AuditedAccountSnapshot` and `normalize_account_bundle()`;
+   - uses the normalized profile as the only build payload sent to Moris;
+   - uses matching `.raw.json` only for provenance/audit;
+   - reuses canonical `scraper.profile_fetch` overload mapping/table helpers rather than duplicating option semantics;
+   - marks raw/profile roster or identity disagreements, equipped option dictionary gaps, unmapped equipped OL types, and collection mapping mismatches as blocking `unknown` under strict policy;
+   - marks off-table known OL values and legacy console freshness as `uncertain`;
+   - records raw affinity 0 → calculator affinity 1 as an explicit default;
+   - includes simulation-affecting audit provenance in cache identity while ignoring non-simulation `_unsynced` bookkeeping.
+2. `tests/test_optimizer_account_bundle.py`
+   - covers clean audit, unmapped/missing OL data, off-table values, roster mismatch, collection mismatch, identity behavior, explicit fallback and affinity-floor provenance.
+3. `optimizer/pipeline.py`
+   - adds `evaluate_allocation_with_one_swap_refinement()` around existing primitives;
+   - reevaluates every supplied candidate through the current snapshot-bound evaluator, so stale scores from another account/engine cannot enter allocation;
+   - runs exact candidate-pool global allocation;
+   - uses the selected allocation teams as one-swap seeds;
+   - requires explicit incoming order/positions/max-new budget;
+   - evaluates neighbors through the same evaluator and reruns exact allocation;
+   - reports candidate/refinement call counts, cache hits and timing plus refine gain.
+4. `tests/test_optimizer_pipeline.py`
+   - verifies score rebuild, 190→210 synthetic reallocation gain, explicit refinement-budget contract, duplicate/hard-illegal rejection and insufficient-pool behavior.
+5. `tests/benchmark_optimizer_account_scale.py`
+   - local-only runner for gitignored `profile + raw + explicit plan`;
+   - dry-run audits provenance without simulation;
+   - simulation mode can measure marginal calls, candidate calls, one-swap calls, initial/refined five-team totals and fresh cache-disabled final reproduction;
+   - deliberately reports production-roster recall as unavailable without an exhaustive oracle.
+6. `tests/test_optimizer_account_scale_benchmark.py`
+   - smoke-tests ordered team parsing and rejects shorthand/duplicate inputs.
+
+No new roster-wide candidate-discovery score, RoleFit, pair scalar, famous-core rule, or Meta-Aware rule was introduced.
+
+### Verification
+
+Current implementation CI run: `33320142542`.
+
+First attempt:
+
+- calculator engine, optimizer and bridge steps passed;
+- browser had one failure in existing `ui.test.ts`: validation text was correct but a `simulateCalls` timing assertion observed 1 instead of 0;
+- this milestone changed no site/runtime/calculator source.
+
+The exact same job was rerun without a code change and succeeded:
+
+- calculator engine: 137 passed, 1 skipped, 28.858 s;
+- optimizer: **59 passed**, 0.121 s;
+- bridge: 31 passed, 1 skipped, 24.816 s;
+- browser: **24 files / 385 tests passed**, vitest 21.73 s;
+- golden snapshot: **29/29 passed**;
+- doclint and calculator damage cross-checks passed.
+
+The first browser failure is retained as a non-reproducing flaky CI event rather than rewritten as an optimizer regression.
+
+### Actual production-scale measurement
+
+Still **TBD**. No private account profile exists in the repository/Actions environment, so no 50–80-character result was fabricated from default/max values. The local runner is ready for a matching gitignored `profiles/<name>.json` + `.raw.json` and an explicit candidate/refinement plan.
+
+At production roster size, report:
+
+- roster/audit status;
+- marginal/candidate/refinement actual `simulate()` calls;
+- runtime/cache behavior;
+- initial five-team allocation total;
+- one-swap refinement and re-global-allocation gain/stability;
+- fresh final reproduction.
+
+Do not report full-roster recall without an oracle. Use tractable subsets cut from the same real snapshot for recall/optimum-survival validation.
+
+### Next task
+
+1. run `benchmark_optimizer_account_scale.py --dry-run` on the real gitignored profile/raw pair and resolve any blocking unknown provenance first;
+2. execute the explicit production-scale plan and record actual call budget/refine gain;
+3. create tractable real-build nested subsets for recall;
+4. only if a measured failure remains, expand context-specific pair/core probes;
+5. keep known/set-NIKKE research and Meta-Aware scoring deferred until this account-scale baseline is measured.
