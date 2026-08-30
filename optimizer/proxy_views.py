@@ -122,12 +122,19 @@ def select_proxy_view_candidates(
     limit_per_view: int,
     legal: TeamValidator | None = None,
 ) -> tuple[ProxyViewCandidate, ...]:
-    """Scan a unique ordered-team stream once and union each view's Top-K.
+    """Scan a unique ordered-team stream once and fairly union each view's Top-K.
 
     The candidate stream is intentionally consumed once, so callers may pass a
     large generator rather than materializing every legal combination or
     re-enumerating it per view. Each view scores a team only when all members
     have values in that view. Exact score ties keep earlier input order.
+
+    Selected rows are emitted rank-round-robin across views: every view's rank-1
+    candidate is admitted before any view's rank-2 candidate, then rank-2 rows
+    are considered before rank-3 rows, and so on. This prevents a tight downstream
+    Moris budget from being consumed by one earlier view merely because the union
+    was assembled view-by-view. Duplicate teams still carry every selecting-view
+    hit and are emitted only once.
 
     ``candidate_teams`` is expected to contain unique ordered teams. Enforcing
     global duplicate detection here would require memory proportional to the
@@ -169,11 +176,19 @@ def select_proxy_view_candidates(
             elif row[:2] > heap[0][:2]:
                 heapq.heapreplace(heap, row)
 
+    ranked_by_view = [
+        sorted(heap, key=lambda row: (row[0], row[1]), reverse=True)
+        for heap in heaps
+    ]
     union: dict[Team, list[ProxyViewHit]] = {}
     order: list[Team] = []
-    for view, heap in zip(views, heaps):
-        ranked = sorted(heap, key=lambda row: (row[0], row[1]), reverse=True)
-        for rank, (score, _negative_index, team) in enumerate(ranked, start=1):
+    max_rank = max((len(rows) for rows in ranked_by_view), default=0)
+    for rank_index in range(max_rank):
+        rank = rank_index + 1
+        for view, ranked in zip(views, ranked_by_view):
+            if rank_index >= len(ranked):
+                continue
+            score, _negative_index, team = ranked[rank_index]
             if team not in union:
                 union[team] = []
                 order.append(team)
