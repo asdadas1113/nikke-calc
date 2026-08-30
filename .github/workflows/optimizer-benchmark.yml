@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - roster-optimizer-prototype
+  pull_request:
 
 jobs:
   benchmark:
@@ -64,7 +65,6 @@ jobs:
           bench("build_config", lambda: char_spec.build_config(squad_for_config, CONFIG_IN))
 
           def run_sim(verbose):
-              # simulate mutability must not leak between the two measurements.
               squad = char_spec.build_squad(NAMES, {})
               config = char_spec.build_config(squad, CONFIG_IN)
               t0 = time.perf_counter()
