@@ -30,14 +30,23 @@ class SearchBudget:
 
 
 class BudgetedEvaluator:
-    """MorisEvaluator facade that enforces a delta simulate-call budget.
+    """Evaluator facade that enforces a delta simulate-call budget.
 
     The budget starts when this facade is created. Existing evaluator cache
     entries remain available at zero cost, which lets an anytime search resume
     from earlier work without re-paying for already-simulated teams.
+
+    A BudgetedEvaluator may wrap another BudgetedEvaluator. This gives a stage a
+    smaller local cap while the parent still enforces the whole-search cap. Both
+    layers count the same underlying cumulative ``simulate_calls`` and cached
+    requests remain free through every layer.
     """
 
-    def __init__(self, evaluator: MorisEvaluator, budget: SearchBudget) -> None:
+    def __init__(
+        self,
+        evaluator: MorisEvaluator | "BudgetedEvaluator",
+        budget: SearchBudget,
+    ) -> None:
         self._evaluator = evaluator
         self.budget = budget
         self._start_simulate_calls = evaluator.stats.simulate_calls
@@ -60,6 +69,27 @@ class BudgetedEvaluator:
     def exhausted(self) -> bool:
         return self.remaining_simulate_calls == 0
 
+    def is_cached(
+        self,
+        members: Sequence[str],
+        *,
+        characters: Mapping[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
+        enemy: Mapping[str, Any] | None = None,
+        seed: int = 42,
+        verbose: bool = False,
+    ) -> bool:
+        """Delegate cache identity/preflight without spending local budget."""
+
+        return self._evaluator.is_cached(
+            members,
+            characters=characters,
+            config=config,
+            enemy=enemy,
+            seed=seed,
+            verbose=verbose,
+        )
+
     def can_evaluate(
         self,
         members: Sequence[str],
@@ -70,11 +100,11 @@ class BudgetedEvaluator:
         seed: int = 42,
         verbose: bool = False,
     ) -> bool:
-        """Whether this request is cached or one new simulate call still fits."""
+        """Whether this layer permits the request or it is already cached."""
 
         if self.remaining_simulate_calls > 0:
             return True
-        return self._evaluator.is_cached(
+        return self.is_cached(
             members,
             characters=characters,
             config=config,
@@ -93,7 +123,7 @@ class BudgetedEvaluator:
         seed: int = 42,
         verbose: bool = False,
     ) -> Evaluation:
-        """Evaluate unless doing so would add a simulate call beyond the budget."""
+        """Evaluate unless doing so would add a simulate call beyond this layer."""
 
         if not self.can_evaluate(
             members,
