@@ -6,12 +6,14 @@ from optimizer.seed_sources import (
     CompositionOrderKnowledge,
     ExternalCompositionEvidence,
     adapt_external_compositions,
+    collect_enikk_sr_compositions,
     normalize_enikk_sr_team,
     normalize_labeled_composition,
 )
 
 
 MEMBERS = ("A", "B", "C", "D", "E")
+NAME_MAP = {"a": "A", "b": "B", "c": "C", "d": "D", "e": "E"}
 
 
 class ExternalSeedSourceTests(unittest.TestCase):
@@ -81,7 +83,7 @@ class ExternalSeedSourceTests(unittest.TestCase):
     def test_enikk_serialized_character_array_defaults_to_unknown_order(self):
         evidence = normalize_enikk_sr_team(
             {"characters": ["a", "b", "c", "d", "e"]},
-            {"a": "A", "b": "B", "c": "C", "d": "D", "e": "E"},
+            NAME_MAP,
             source="enikk:S39:rank1:team1",
         )
 
@@ -93,10 +95,59 @@ class ExternalSeedSourceTests(unittest.TestCase):
         self.assertEqual(result.exact_seeds, ())
         self.assertEqual(len(result.core_seeds), 1)
 
+    def test_enikk_collection_uses_rank_only_for_traceable_source_not_weight(self):
+        collected = collect_enikk_sr_compositions(
+            (
+                {
+                    "rank": 7,
+                    "damage": 999999999999,
+                    "cp": 123456,
+                    "teams": (
+                        {"characters": ["a", "b", "c", "d", "e"]},
+                    ),
+                },
+            ),
+            NAME_MAP,
+            raid=39,
+        )
+
+        self.assertEqual(len(collected.evidence), 1)
+        row = collected.evidence[0]
+        self.assertEqual(row.source, "enikk:S39:rank7:team1")
+        self.assertEqual(row.order_knowledge, CompositionOrderKnowledge.UNKNOWN_ORDER)
+        self.assertFalse(hasattr(row, "damage"))
+        self.assertFalse(hasattr(row, "rank"))
+        adapted = adapt_external_compositions(collected.evidence)
+        self.assertEqual(adapted.exact_seeds, ())
+        self.assertEqual(len(adapted.core_seeds), 1)
+
+    def test_enikk_collection_reports_malformed_and_unmapped_rows(self):
+        collected = collect_enikk_sr_compositions(
+            (
+                {"rank": 1, "teams": None},
+                {
+                    "rank": 2,
+                    "teams": (
+                        {"characters": ["a", "b", "missing", "d", "e"]},
+                        "not-a-team-row",
+                    ),
+                },
+            ),
+            NAME_MAP,
+            raid=39,
+        )
+
+        self.assertEqual(len(collected.evidence), 1)
+        self.assertFalse(collected.evidence[0].mapping_complete)
+        self.assertEqual(collected.evidence[0].unmapped_labels, ("missing",))
+        self.assertEqual(len(collected.malformed_rows), 2)
+        self.assertEqual(collected.malformed_rows[0].reason, "missing-team-sequence")
+        self.assertEqual(collected.malformed_rows[1].reason, "team-row-not-mapping")
+
     def test_explicit_source_contract_can_promote_enikk_row_to_exact(self):
         evidence = normalize_enikk_sr_team(
             {"characters": ["a", "b", "c", "d", "e"]},
-            {"a": "A", "b": "B", "c": "C", "d": "D", "e": "E"},
+            NAME_MAP,
             source="fixture:documented-order",
             order_knowledge=CompositionOrderKnowledge.PROVEN_ORDERED,
         )
