@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import importlib.util
+import pathlib
 import unittest
 
 from optimizer import MetaEpochKnowledge
-from tests.benchmark_optimizer_same_budget_account import (
-    _filter_teams,
-    parse_meta_evidence,
-    parse_seeds,
-)
+
+
+SCRIPT = pathlib.Path(__file__).with_name("benchmark_optimizer_same_budget_account.py")
+spec = importlib.util.spec_from_file_location("benchmark_optimizer_same_budget_account", SCRIPT)
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
 
 
 class SameBudgetAccountBenchmarkInputTests(unittest.TestCase):
@@ -51,7 +55,7 @@ class SameBudgetAccountBenchmarkInputTests(unittest.TestCase):
             ],
         }
 
-        parsed = parse_meta_evidence(payload)
+        parsed = module.parse_meta_evidence(payload)
 
         self.assertEqual(parsed["policy"].completed_seasons, 8)
         self.assertEqual(parsed["policy"].max_peak_usage, 0.01)
@@ -65,7 +69,7 @@ class SameBudgetAccountBenchmarkInputTests(unittest.TestCase):
         self.assertEqual(parsed["cold_exploration_limit"], 2)
 
     def test_seed_parser_keeps_pure_and_meta_policy_explicit(self):
-        exact, cores = parse_seeds(
+        exact, cores = module.parse_seeds(
             {
                 "exact": [
                     {"members": ["A", "B", "C", "D", "E"], "source": "ranker"}
@@ -89,11 +93,11 @@ class SameBudgetAccountBenchmarkInputTests(unittest.TestCase):
             ("Cold", "D"),
         )
         self.assertEqual(
-            _filter_teams(rows, {"A", "B", "C", "D"}),
+            module._filter_teams(rows, {"A", "B", "C", "D"}),
             (("A", "B"), ("C", "D")),
         )
 
-    def test_unknown_epoch_cannot_supply_valid_from(self):
+    def test_uncertain_epoch_ignores_supplied_valid_from(self):
         payload = {
             "completed_through": "2026-08-31",
             "policy": {"completed_seasons": 8, "max_peak_usage": 0.01},
@@ -109,7 +113,7 @@ class SameBudgetAccountBenchmarkInputTests(unittest.TestCase):
             },
             "snapshots": [],
         }
-        parsed = parse_meta_evidence(payload)
+        parsed = module.parse_meta_evidence(payload)
         self.assertEqual(parsed["epochs"]["A"].knowledge, MetaEpochKnowledge.UNCERTAIN)
         self.assertIsNone(parsed["epochs"]["A"].valid_from)
 
