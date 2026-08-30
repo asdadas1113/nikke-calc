@@ -82,6 +82,20 @@ class AccountSnapshotTests(unittest.TestCase):
         fixed = [p for p in snapshot.provenance if p.path == "policy.level"]
         self.assertEqual(fixed[0].status, ProvenanceStatus.DEFAULTED)
 
+    def test_profile_payload_is_detached_from_snapshot_identity_and_build(self):
+        snapshot = AccountSyncAdapter.normalize(payload())
+        snapshot_id = snapshot.snapshot_id
+        exposed = snapshot.profile_payload
+        exposed["chars"]["리타"]["skill_levels"]["3"] = 1
+        exposed["_account"]["console"]["common_level"] = 999
+
+        self.assertEqual(snapshot.snapshot_id, snapshot_id)
+        self.assertEqual(snapshot.profile_payload["chars"]["리타"]["skill_levels"]["3"], 7)
+        self.assertEqual(snapshot.profile_payload["_account"]["console"]["common_level"], 100)
+        profile = snapshot.to_growth_profile()
+        self.assertEqual(profile.layer("리타")["skill_levels"]["3"], 7)
+        self.assertEqual(profile.layer("리타")["console"]["common_level"], 100)
+
     def test_snapshot_identity_tracks_build_not_fetch_timestamp(self):
         first = payload()
         second = copy.deepcopy(first)
