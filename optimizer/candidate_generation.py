@@ -1,19 +1,25 @@
 """Simulation-free bounded candidate generation from measured marginal evidence.
 
-The optimizer cannot enumerate every 5-member roster combination through Moris.
-This module provides small, explicit beam primitives that use already-measured
-per-character marginal values only to decide *where to look*.
+The optimizer cannot enumerate every roster composition through Moris. This
+module provides explicit beam primitives that use already-measured per-character
+marginal values only to decide *where to look*.
+
+Membership search and ordered placement are deliberately separate. Moris may care
+about squad order, so a cheap allocation beam never pretends one arbitrary order
+is the membership's true score. It first searches unordered membership sets, then
+expands each selected membership through a caller-supplied placement iterator.
 
 No generated proxy value changes Moris damage or final allocation. Beam widths,
-output limits, required-member cores, allocation depth, and placement expansion
-are all caller-owned. The primitives make no claim that their output contains the
-global optimum.
+output limits, required cores, allocation depth, and placement enumeration are all
+caller-owned. The primitives make no claim that their output contains the global
+optimum.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import permutations
 
 Team = tuple[str, ...]
 TeamValidator = Callable[[Team], bool]
@@ -42,7 +48,7 @@ class CandidateGenerationResult:
 
 @dataclass(frozen=True)
 class GeneratedProxyAllocation:
-    """One cheap non-overlapping multi-team path, never a final answer."""
+    """One cheap non-overlapping membership path, never a final answer."""
 
     teams: tuple[Team, ...]
     proxy_total: float
@@ -50,9 +56,10 @@ class GeneratedProxyAllocation:
 
 @dataclass(frozen=True)
 class AllocationCandidateGenerationResult:
-    """Candidate union protected by bounded multi-team proxy search."""
+    """Candidate placements protected by bounded multi-team membership search."""
 
     candidates: tuple[GeneratedCandidate, ...]
+    candidate_channels: tuple[tuple[GeneratedCandidate, ...], ...]
     allocations: tuple[GeneratedProxyAllocation, ...]
     expanded_states: int
     rejected_illegal: int
@@ -62,8 +69,20 @@ class AllocationCandidateGenerationResult:
         return tuple(row.members for row in self.candidates)
 
 
-def _identity_placement(members: Team) -> tuple[Team, ...]:
+def identity_placement(members: Team) -> tuple[Team, ...]:
+    """One stable placement in the membership's canonical roster order."""
+
     return (members,)
+
+
+def all_permutation_placements(members: Team) -> Iterable[Team]:
+    """Enumerate every ordered placement with no strength assumption.
+
+    For a five-member squad this is at most 120 cheap tuples. Callers still decide
+    how many placement candidates receive expensive Moris evaluations.
+    """
+
+    return permutations(members)
 
 
 def _interleave_channels(
@@ -86,21 +105,37 @@ def _interleave_channels(
     return tuple(out)
 
 
-def _beam_channel(
+def _validate_inputs(
+    roster: Sequence[str],
+    score_by_character: Mapping[str, float],
+    *,
+    team_size: int,
+) -> tuple[str, ...]:
+    names = tuple(str(name) for name in roster)
+    if not names or len(set(names)) != len(names):
+        raise ValueError("roster must contain unique members")
+    if team_size <= 0:
+        raise ValueError("team_size must be positive")
+    if team_size > len(names):
+        raise ValueError("team_size cannot exceed roster size")
+    missing_scores = tuple(name for name in names if name not in score_by_character)
+    if missing_scores:
+        raise ValueError(f"missing character proxy scores: {missing_scores}")
+    return names
+
+
+def _membership_beam(
     roster: tuple[str, ...],
     score_by_character: Mapping[str, float],
     *,
     team_size: int,
     beam_width: int,
-    limit: int,
-    required_members: tuple[str, ...],
-    source: str,
-    legal: TeamValidator | None,
-    placement_expander: PlacementExpander,
-) -> tuple[tuple[GeneratedCandidate, ...], int, int]:
-    if len(required_members) > team_size:
-        return (), 0, 0
+    required_members: tuple[str, ...] = (),
+) -> tuple[tuple[tuple[Team, float], ...], int]:
+    """Return top additive membership states without choosing squad order."""
 
+    if len(required_members) > team_size:
+        return (), 0
     index = {name: i for i, name in enumerate(roster)}
     required_set = frozenset(required_members)
     required_canonical = tuple(sorted(required_set, key=index.__getitem__))
@@ -128,58 +163,86 @@ def _beam_channel(
         )
         states = [(members, score) for members, score in ranked[:beam_width]]
 
-    placement_channels: list[tuple[GeneratedCandidate, ...]] = []
-    rejected_illegal = 0
-    for membership, proxy_score in states:
-        if not required_set <= set(membership):
-            raise AssertionError("beam lost required members")
-        local: list[GeneratedCandidate] = []
-        local_seen: set[Team] = set()
-        for raw in placement_expander(membership):
-            team = tuple(str(name) for name in raw)
-            if len(team) != team_size or len(set(team)) != team_size or set(team) != set(membership):
-                raise ValueError("placement_expander must return permutations of the membership team")
-            if team in local_seen:
-                continue
-            local_seen.add(team)
-            if legal is not None and not legal(team):
-                rejected_illegal += 1
-                continue
-            local.append(
-                GeneratedCandidate(
-                    members=team,
-                    proxy_score=float(proxy_score),
-                    source=source,
-                    required_members=required_members,
-                )
+    return tuple(states), expanded
+
+
+def _placement_channel(
+    membership: Team,
+    proxy_score: float,
+    *,
+    source: str,
+    required_members: tuple[str, ...],
+    legal: TeamValidator | None,
+    placement_expander: PlacementExpander,
+) -> tuple[tuple[GeneratedCandidate, ...], int]:
+    """Expand one membership into legal ordered candidates in stable order."""
+
+    local: list[GeneratedCandidate] = []
+    seen: set[Team] = set()
+    rejected = 0
+    member_set = set(membership)
+    for raw in placement_expander(membership):
+        team = tuple(str(name) for name in raw)
+        if (
+            len(team) != len(membership)
+            or len(set(team)) != len(membership)
+            or set(team) != member_set
+        ):
+            raise ValueError("placement_expander must return permutations of the membership team")
+        if team in seen:
+            continue
+        seen.add(team)
+        if legal is not None and not legal(team):
+            rejected += 1
+            continue
+        local.append(
+            GeneratedCandidate(
+                members=team,
+                proxy_score=float(proxy_score),
+                source=source,
+                required_members=required_members,
             )
-        if local:
-            placement_channels.append(tuple(local))
-
-    # A membership with many ordered variants must not consume the whole output
-    # before the next membership gets one look. Placement variants therefore use
-    # the same rank-round-robin rule as other discovery channels.
-    emitted = _interleave_channels(placement_channels)
-    return emitted[:limit], expanded, rejected_illegal
+        )
+    return tuple(local), rejected
 
 
-def _validate_inputs(
-    roster: Sequence[str],
+def _beam_channel(
+    roster: tuple[str, ...],
     score_by_character: Mapping[str, float],
     *,
     team_size: int,
-) -> tuple[str, ...]:
-    names = tuple(str(name) for name in roster)
-    if not names or len(set(names)) != len(names):
-        raise ValueError("roster must contain unique members")
-    if team_size <= 0:
-        raise ValueError("team_size must be positive")
-    if team_size > len(names):
-        raise ValueError("team_size cannot exceed roster size")
-    missing_scores = tuple(name for name in names if name not in score_by_character)
-    if missing_scores:
-        raise ValueError(f"missing character proxy scores: {missing_scores}")
-    return names
+    beam_width: int,
+    limit: int,
+    required_members: tuple[str, ...],
+    source: str,
+    legal: TeamValidator | None,
+    placement_expander: PlacementExpander,
+) -> tuple[tuple[GeneratedCandidate, ...], int, int]:
+    memberships, expanded = _membership_beam(
+        roster,
+        score_by_character,
+        team_size=team_size,
+        beam_width=beam_width,
+        required_members=required_members,
+    )
+    channels: list[tuple[GeneratedCandidate, ...]] = []
+    rejected = 0
+    required_set = set(required_members)
+    for membership, proxy_score in memberships:
+        if not required_set <= set(membership):
+            raise AssertionError("beam lost required members")
+        channel, bad = _placement_channel(
+            membership,
+            proxy_score,
+            source=source,
+            required_members=required_members,
+            legal=legal,
+            placement_expander=placement_expander,
+        )
+        rejected += bad
+        if channel:
+            channels.append(channel)
+    return _interleave_channels(channels)[:limit], expanded, rejected
 
 
 def generate_additive_beam_candidates(
@@ -198,8 +261,9 @@ def generate_additive_beam_candidates(
 
     One global additive beam is available when ``global_limit > 0``. Optional
     ``required_cores`` run independent beams with those members fixed, then all
-    channels are rank-round-robin unioned. This is discovery only; proxy scores
-    are diagnostics and do not alter final Moris selection.
+    channels are rank-round-robin unioned. Placement variants are also
+    rank-round-robin across membership teams so one membership cannot consume the
+    whole output merely because it has many permutations.
     """
 
     names = _validate_inputs(roster, score_by_character, team_size=team_size)
@@ -208,7 +272,7 @@ def generate_additive_beam_candidates(
     if global_limit < 0 or per_core_limit < 0:
         raise ValueError("candidate limits must be non-negative")
 
-    placement = placement_expander or _identity_placement
+    placement = placement_expander or identity_placement
     index = {name: i for i, name in enumerate(names)}
     normalized_cores: list[tuple[str, ...]] = []
     for raw in required_cores:
@@ -283,18 +347,22 @@ def generate_additive_allocation_beam_candidates(
     legal: TeamValidator | None = None,
     placement_expander: PlacementExpander | None = None,
 ) -> AllocationCandidateGenerationResult:
-    """Protect candidate teams from bounded non-overlap proxy allocations.
+    """Protect ordered candidates from bounded non-overlap membership allocations.
 
     Single-team Top-K can over-concentrate on the same high-proxy characters and
     leave the exact five-team allocator with too little disjoint supply. This
-    primitive instead builds partial *allocations*. Each state chooses one legal
-    team from the remaining roster, removes those members, and keeps only a
-    caller-bounded number of highest additive-total states before the next team.
+    primitive instead builds partial *membership allocations*. Each state chooses
+    one membership team from the remaining roster and removes those characters.
 
-    The objective remains only the transparent sum of supplied character proxy
-    values. There is no diversity bonus, meta bonus, or final-score modification.
-    Returned allocations are search-coverage hypotheses; every final candidate
-    still requires Moris evaluation later.
+    Ordered squad variants do not consume allocation-beam width. A membership is
+    viable when the supplied placement iterator yields at least one hard-legal
+    order. Once top membership allocations are selected, every viable ordered
+    placement for their memberships is exposed in separate channels. Callers can
+    therefore evaluate first placements across many memberships before spending a
+    second call on another order of the same membership.
+
+    The proxy objective is only the transparent sum of supplied character values.
+    There is no diversity bonus, meta bonus, or final-score modification.
     """
 
     names = _validate_inputs(roster, score_by_character, team_size=team_size)
@@ -307,16 +375,34 @@ def generate_additive_allocation_beam_candidates(
     if allocation_limit < 0:
         raise ValueError("allocation_limit must be non-negative")
     if allocation_limit == 0:
-        return AllocationCandidateGenerationResult((), (), 0, 0)
+        return AllocationCandidateGenerationResult((), (), (), 0, 0)
 
-    placement = placement_expander or _identity_placement
-    # (teams, used members, additive total). Team order is construction order only;
-    # final Solo Raid allocation itself is an unordered set of squads.
+    placement = placement_expander or identity_placement
+    index = {name: i for i, name in enumerate(names)}
+    placement_cache: dict[Team, tuple[GeneratedCandidate, ...]] = {}
+    rejected_cache: dict[Team, int] = {}
+
+    def placements_for(membership: Team, proxy_score: float) -> tuple[GeneratedCandidate, ...]:
+        if membership not in placement_cache:
+            channel, bad = _placement_channel(
+                membership,
+                proxy_score,
+                source="additive-allocation-beam",
+                required_members=(),
+                legal=legal,
+                placement_expander=placement,
+            )
+            placement_cache[membership] = channel
+            rejected_cache[membership] = bad
+        return placement_cache[membership]
+
+    # (membership teams, used members, additive total). Membership team tuples are
+    # always canonical in original roster order; construction order is not part of
+    # allocation identity.
     states: list[tuple[tuple[Team, ...], frozenset[str], float]] = [
         ((), frozenset(), 0.0)
     ]
     expanded = 0
-    rejected = 0
 
     for depth in range(team_count):
         remaining_team_slots = team_count - depth
@@ -327,32 +413,34 @@ def generate_additive_allocation_beam_candidates(
             remaining = tuple(name for name in names if name not in used)
             if len(remaining) < team_size * remaining_team_slots:
                 continue
-            options, work, bad = _beam_channel(
+            memberships, work = _membership_beam(
                 remaining,
                 score_by_character,
                 team_size=team_size,
                 beam_width=team_beam_width,
-                limit=team_options_per_state,
-                required_members=(),
-                source="additive-allocation-beam",
-                legal=legal,
-                placement_expander=placement,
             )
             expanded += work
-            rejected += bad
-            for option in options:
-                members = frozenset(option.members)
+
+            viable = 0
+            for raw_membership, proxy_score in memberships:
+                # Re-canonicalize against the full roster so the same membership
+                # has one cache/signature identity across residual states.
+                membership = tuple(sorted(raw_membership, key=index.__getitem__))
+                if not placements_for(membership, proxy_score):
+                    continue
+                viable += 1
+                members = frozenset(membership)
                 if members & used:
-                    raise AssertionError("allocation beam emitted overlapping team")
-                new_teams = teams + (option.members,)
+                    raise AssertionError("allocation beam emitted overlapping membership")
+                new_teams = teams + (membership,)
                 new_used = used | members
-                new_total = total + option.proxy_score
-                # Selecting the same squads in a different construction order is
-                # the same allocation. Ordered identity inside each squad remains.
+                new_total = total + float(proxy_score)
                 signature = tuple(sorted(new_teams))
                 previous = next_by_partition.get(signature)
                 if previous is None or new_total > previous[2]:
                     next_by_partition[signature] = (new_teams, new_used, new_total)
+                if viable >= team_options_per_state:
+                    break
 
         ranked = sorted(
             next_by_partition.values(),
@@ -370,22 +458,24 @@ def generate_additive_allocation_beam_candidates(
         for teams, _used, total in complete
     )
 
-    channels: list[tuple[GeneratedCandidate, ...]] = []
-    for index, allocation in enumerate(allocations):
-        channels.append(
-            tuple(
-                GeneratedCandidate(
-                    members=team,
-                    proxy_score=sum(float(score_by_character[name]) for name in team),
-                    source=f"additive-allocation-beam:{index}",
-                    required_members=(),
-                )
-                for team in allocation.teams
-            )
-        )
+    selected_memberships: list[Team] = []
+    seen_memberships: set[Team] = set()
+    for allocation in allocations:
+        for membership in allocation.teams:
+            if membership in seen_memberships:
+                continue
+            seen_memberships.add(membership)
+            selected_memberships.append(membership)
 
+    candidate_channels = tuple(
+        placement_cache[membership]
+        for membership in selected_memberships
+        if placement_cache.get(membership)
+    )
+    rejected = sum(rejected_cache.values())
     return AllocationCandidateGenerationResult(
-        candidates=_interleave_channels(channels),
+        candidates=_interleave_channels(candidate_channels),
+        candidate_channels=candidate_channels,
         allocations=allocations,
         expanded_states=expanded,
         rejected_illegal=rejected,
