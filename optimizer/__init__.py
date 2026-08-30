@@ -25,6 +25,7 @@ from .evaluator import (
     MorisEvaluator,
 )
 from .global_search import Allocation, select_global_allocation
+from .marginal import MarginalMeasurement, measure_marginals_with_candidates
 from .pipeline import (
     AllocationRefinementResult,
     PipelineStageMetrics,
@@ -50,6 +51,7 @@ __all__ = [
     "EvaluationTimings",
     "EvaluatorStats",
     "FieldProvenance",
+    "MarginalMeasurement",
     "MorisEvaluator",
     "OneSwapNeighbor",
     "PairSynergyObservation",
@@ -60,6 +62,7 @@ __all__ = [
     "enumerate_legal_teams",
     "evaluate_allocation_with_one_swap_refinement",
     "generate_one_swap_neighbors",
+    "measure_marginals_with_candidates",
     "measure_pair_probes",
     "normalize_account_bundle",
     "normalize_account_sync",
