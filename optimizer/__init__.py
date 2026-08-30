@@ -114,6 +114,13 @@ from .proxy_views import (
     select_proxy_view_candidates,
 )
 from .refinement import OneSwapNeighbor, generate_one_swap_neighbors
+from .same_budget import (
+    InvalidSameBudgetComparison,
+    SameBudgetComparison,
+    SearchRunMetrics,
+    SearchStageCalls,
+    run_same_budget_comparison,
+)
 from .seed_sources import (
     CompositionOrderKnowledge,
     ExternalCompositionCollection,
@@ -172,6 +179,7 @@ __all__ = [
     "ExternalNameMapping",
     "FieldProvenance",
     "FirstPositiveAvailability",
+    "InvalidSameBudgetComparison",
     "LowUsagePolicy",
     "MalformedCompositionRow",
     "MarginalMeasurement",
@@ -196,8 +204,11 @@ __all__ = [
     "ProxyViewCandidate",
     "ProxyViewHit",
     "RestorationStep",
+    "SameBudgetComparison",
     "SearchBudget",
     "SearchBudgetExhausted",
+    "SearchRunMetrics",
+    "SearchStageCalls",
     "SeasonUsageObservation",
     "SeedCandidate",
     "SeedSelection",
@@ -247,6 +258,7 @@ __all__ = [
     "restore_cold_until_feasible",
     "run_anytime_search_round",
     "run_exhaustive_validation",
+    "run_same_budget_comparison",
     "select_blablalink_area",
     "select_global_allocation",
     "select_proxy_view_candidates",
