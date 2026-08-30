@@ -9,6 +9,7 @@ from .account import (
 )
 from .account_bundle import AuditedAccountSnapshot, normalize_account_bundle
 from .blablalink import normalize_blablalink_worker_payload, select_blablalink_area
+from .budget import BudgetedEvaluator, SearchBudget, SearchBudgetExhausted
 from .candidates import CandidateTeam
 from .constraints import (
     BurstMetadata,
@@ -42,6 +43,7 @@ __all__ = [
     "Allocation",
     "AllocationRefinementResult",
     "AuditedAccountSnapshot",
+    "BudgetedEvaluator",
     "BurstMetadata",
     "BurstStructureReport",
     "BurstStructureValidator",
@@ -59,6 +61,8 @@ __all__ = [
     "PairSynergyProbe",
     "PipelineStageMetrics",
     "ProvenanceStatus",
+    "SearchBudget",
+    "SearchBudgetExhausted",
     "TeamRequirement",
     "ValidationMetrics",
     "enumerate_legal_teams",
