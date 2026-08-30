@@ -91,7 +91,7 @@ class SearchBudgetTests(unittest.TestCase):
         whole_search = BudgetedEvaluator(evaluator, SearchBudget(0))
         stage = BudgetedEvaluator(whole_search, SearchBudget(5))
 
-        self.assertTrue(stage.can_evaluate(("A",)))
+        self.assertFalse(stage.can_evaluate(("A",)))
         with self.assertRaises(SearchBudgetExhausted):
             stage.evaluate(("A",))
         self.assertEqual(evaluator.stats.simulate_calls, 0)
