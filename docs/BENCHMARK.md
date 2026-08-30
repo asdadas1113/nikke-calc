@@ -217,3 +217,68 @@ For `balanced-6`, recall at limit 12 rose from **60% to 80%** at alpha `0.50` an
 Reject a global scalar `Syn(A,B)` as the default proxy representation. The same pair can change sign dramatically with the surrounding three members and replacement baseline. Preserve pair measurements as **context-specific observations**.
 
 The selective probe primitive remains useful because every paired probe team is already an actually simulated candidate. Future pair/core work should therefore use probes to expand/rescue a small set of suspicious compositions and feed their real Moris scores back into the evaluated candidate pool, rather than broadcasting one pair bonus across unrelated teams.
+
+## Bounded one-swap refinement 2026-08-30
+
+Implementation:
+
+- `optimizer/refinement.py`: `OneSwapNeighbor` and `generate_one_swap_neighbors()`.
+- implementation commit: `a4b0797c21263b314984026b3492cd8df34c8837`.
+- public export commit: `40b304edf2a365283d770cb308c1143be0ba3920`.
+- refinement unit tests: `aa27663d3a3003bc88989a1cdb33ad018b658809`.
+- real benchmark fixture: `aa52b2cc9e2139dcc58352eb97afc4b60296b09c`.
+- GitHub Actions benchmark run: `33316454385`.
+- full CI run on the benchmark head: `33316454356`, success.
+- temporary draft PR #6 was closed without merge and the temporary workflow commit was removed from prototype history.
+
+The production primitive preserves the replaced slot by default and treats the final ordered tuple as identity. The benchmark passes an explicit canonical roster-order resolver only because the saved exhaustive fixture measured one canonical placement per unordered membership set. Hard constraints are applied before emitting neighbors; already evaluated ordered teams are skipped; seed order, position scope, incoming roster order, and `max_new` can be constrained by the caller.
+
+Common benchmark setup:
+
+- replay the exact 12 already-simulated candidates from the prior real-Moris fixture;
+- choose refinement seeds by their **actual Moris score**, not proxy score;
+- generate only legal, unseen one-member neighbors;
+- initial Top-5 recall: 60% (3/5);
+- same engine/build/boss fixture as the prior exhaustive measurement.
+
+### `minimal-3`
+
+The three highest actually simulated seeds were true ranks #1, #2, and #4. The full three-seed neighborhood contained 18 legal unseen teams and cost 18 new Moris simulations / **55.945311 s**.
+
+| refined seed count | new legal unseen neighbors | union Top-5 recall |
+| ---: | ---: | ---: |
+| 1 | 5 | 60% |
+| 2 | 11 | 60% |
+| 3 | 18 | **100%** |
+
+At seed count 3 the refinement recovered both previously missed true Top-5 teams:
+
+- `리타 / 크라운 / 나가 / 앨리스 / 레드 후드` = `1,559,674,086`.
+- `리타 / 볼륨 / 크라운 / 앨리스 / 레드 후드` = `1,435,571,126`.
+
+Both scores reproduced the saved exhaustive values exactly. The evaluated union was 30 teams and its actual-score Top-5 matched the fixture true Top-5 exactly.
+
+If combined with the earlier measured `minimal-3` pipeline, the observed call count is 46 marginal + 12 initial-candidate + 18 refinement = **76 simulations**. That is larger than the 54-call exhaustive search in this intentionally tiny fixture; this benchmark demonstrates recovery quality, **not production-scale call efficiency**.
+
+### `balanced-6`
+
+The three highest actually simulated seeds were true ranks #1, #3, and #4. The full three-seed neighborhood again contained 18 legal unseen teams and cost 18 new Moris simulations / **58.649881 s**.
+
+| refined seed count | new legal unseen neighbors | union Top-5 recall |
+| ---: | ---: | ---: |
+| 1 | 8 | 80% |
+| 2 | 16 | **100%** |
+| 3 | 18 | **100%** |
+
+Seed 1 recovered true #2; seed 2 additionally recovered true #5. Their measured scores were exactly the saved exhaustive values:
+
+- `볼륨 / 크라운 / 홍련 / 앨리스 / 모더니아` = `1,656,756,068`.
+- `리타 / 볼륨 / 크라운 / 앨리스 / 레드 후드` = `1,435,571,126`.
+
+A policy that stopped after the second seed would require 16 new unique team evaluations, making the corresponding call count 89 marginal + 12 initial-candidate + 16 refinement = **117 simulations**. Wall time for that 16-call stop point was not separately measured. The benchmark itself evaluated all 18 three-seed neighbors.
+
+### Decision
+
+Bounded one-member local refinement is **justified as an optimizer primitive** by this saved failure case: unlike extra reference coverage, RoleFit reranking, or global pair weights, it recovered all true Top-5 teams in both reference variants without changing the proxy model.
+
+Do not hard-code `seed_count=3` from this fixture. One variant required three seeds while the other required two. Production policy still needs a call-budget rule, bottleneck/near-miss seed selection, and eventually a five-team global-allocation test. The next quality milestone should test refinement around teams relevant to the current five-team allocation rather than continuing to optimize this single-team fixture indefinitely.
