@@ -67,3 +67,54 @@ No new optimizer failure was observed in this milestone. The synthetic fixture c
 1. connect cheap NIKKE-specific legal-team checks without duplicating simulator logic.
 2. establish a first marginal-value experiment on a deliberately small roster/reference-team set.
 3. run exhaustive comparison on that small space and only then decide whether pair synergy or stronger diversity buckets are necessary.
+
+---
+
+## 2026-08-30 — conservative Moris burst hard constraints
+
+- repository: `asdadas1113/nikke-calc`
+- branch: `roster-optimizer-prototype`
+- session start HEAD: `60113cb4d985e902138bb94e8fbeffad705a9fec`
+- Moris upstream at start/end: `Moris-kr/nikke-calc` `master` @ `fb2fd9157aa14499daf6b9f185beb685d4393f90`
+- implementation commit: `09521b89a1eb48fb14a09f6b5184f735c83eb0dd`
+- CI wiring commit: `7f4d3a1225a99d7fb6a8a3b85c14336702ff3ced`
+- calculator/site source files changed: none
+
+### Canonical behavior confirmed
+
+`calculator.timeline.BurstController` permanently blocks only when the current burst stage has no candidates. If candidates exist but all are on cooldown, Moris waits for the earliest cooldown instead of treating the squad as illegal. Stage `A` participates in stages 1, 2, and 3. In auto mode `no_burst_char` / `no_burst_chars` are removed from burst candidates; explicit `burst_sequence` changes those semantics.
+
+### Implemented
+
+1. Added `BurstMetadata`, `BurstStructureReport`, and `BurstStructureValidator` in `optimizer/constraints.py`.
+2. `BurstStructureValidator.from_moris()` reads Moris canonical parsed metadata through `context.spec.burst_stage()` plus `data/parsed_nikke.json` cooldowns.
+3. Static stage coverage mirrors Moris `1` / `2` / `3` / `A` behavior and character-level `burst_stage` overrides.
+4. Cooldown is exposed only as diagnostic `min_cooldown_by_stage`; no cooldown threshold hard-prunes a squad.
+5. Runtime `burst_stage_override:*` effects are detected from `parsed_skills.json`. A statically missing stage that a runtime override may reach is marked uncertain and survives pruning.
+6. Explicit `burst_sequence` is conservatively deferred to Moris rather than partially reimplementing its cycle semantics.
+7. Added an optimizer unit-test step to `.github/workflows/ci.yml` so prototype tests are exercised on future PR validation.
+
+### Verification
+
+GitHub Actions CI run `33311227170` on CPython 3.13.15 / Ubuntu 24.04 completed successfully:
+
+- optimizer: 18 tests passed in 0.026 s.
+- calculator engine: 137 tests passed, 1 skipped.
+- bridge: 31 tests passed, 1 skipped.
+- browser: 385 tests passed.
+- golden damage snapshot: 29/29 passed.
+- doclint and calculator damage cross-checks passed.
+
+The optimizer integration test loads real Moris metadata and verifies `네온` / `아니스` / `라피` as a valid B1/B2/B3 structure with 20 s / 20 s / 40 s minimum cooldown diagnostics. No new Moris combat `simulate()` benchmark was run in this milestone.
+
+Temporary draft PR #2 was used only to trigger CI and was closed without merge.
+
+### Failure cases / limitations
+
+No regression or hard-constraint failure was observed. Because false-negative pruning is more damaging than leaving an impossible team for the simulator, dynamic burst-stage cases and explicit burst sequences intentionally remain conservative. This milestone does not attempt to infer whether a 40-second burst structure is weak; that belongs to proxy/simulator scoring, not legality.
+
+### Next work
+
+1. run the first small real-Moris marginal-value experiment with an explicit fixed build snapshot and boss config.
+2. compare marginal/proxy candidate survival against exhaustive truth in that deliberately small search space.
+3. only add pair synergy or stronger diversity buckets if that experiment produces a concrete recall failure.
