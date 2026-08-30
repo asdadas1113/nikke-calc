@@ -6,6 +6,7 @@ from optimizer.constraints import (
     BurstMetadata,
     BurstStructureValidator,
     ConstraintSet,
+    TeamRequirement,
 )
 
 
@@ -88,6 +89,32 @@ class BurstStructureValidatorTest(unittest.TestCase):
 
         self.assertTrue(constraints.validate_team(("B1", "B2", "B3")))
         self.assertFalse(constraints.validate_team(("B1", "B3", "ALT3")))
+
+    def test_named_requirement_is_domain_agnostic_and_constraint_set_is_callable(self):
+        requirement = TeamRequirement(
+            "future-policy",
+            lambda team: "A" in team or {"B", "C"}.issubset(team),
+        )
+        constraints = ConstraintSet(team_size=3, requirements=(requirement,))
+
+        self.assertTrue(constraints(("A", "X", "Y")))
+        self.assertTrue(constraints(("B", "C", "X")))
+        self.assertFalse(constraints(("X", "Y", "Z")))
+        self.assertEqual(
+            constraints.failed_requirements(("X", "Y", "Z")),
+            ("future-policy",),
+        )
+
+    def test_named_requirement_labels_must_be_unique(self):
+        first = TeamRequirement("same", lambda team: True)
+        second = TeamRequirement("same", lambda team: True)
+
+        with self.assertRaises(ValueError):
+            ConstraintSet(requirements=(first, second))
+
+    def test_named_requirement_label_must_be_non_empty(self):
+        with self.assertRaises(ValueError):
+            TeamRequirement("   ", lambda team: True)
 
     def test_from_moris_reads_canonical_stage_and_cooldown_metadata(self):
         validator = BurstStructureValidator.from_moris()
