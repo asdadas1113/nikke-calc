@@ -15,7 +15,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping
@@ -77,18 +77,31 @@ class FieldProvenance:
 
 @dataclass(frozen=True)
 class AccountSnapshot:
-    """Normalized private account build state used by every optimizer stage."""
+    """Normalized private account build state used by every optimizer stage.
+
+    The canonical profile payload is stored as immutable JSON rather than a
+    nested mutable dict. ``profile_payload`` returns a fresh decoded copy, so a
+    caller cannot mutate the build after ``snapshot_id`` has been established.
+    """
 
     name: str
     level_mode: str
     unknown_policy: str
-    profile_payload: Mapping[str, Any]
+    _profile_json: str = field(repr=False)
     provenance: tuple[FieldProvenance, ...]
     snapshot_id: str
 
+    def _decode_profile(self) -> dict[str, Any]:
+        return json.loads(self._profile_json)
+
+    @property
+    def profile_payload(self) -> Mapping[str, Any]:
+        """Return a detached copy of the normalized calculator-facing profile."""
+        return self._decode_profile()
+
     @property
     def roster(self) -> tuple[str, ...]:
-        chars = self.profile_payload.get("chars") or {}
+        chars = self._decode_profile().get("chars") or {}
         return tuple(chars.keys())
 
     @property
@@ -119,7 +132,7 @@ class AccountSnapshot:
         from context.spec import GrowthProfile
 
         return GrowthProfile(
-            copy.deepcopy(dict(self.profile_payload)),
+            self._decode_profile(),
             allow_unowned=allow_unowned,
             level_mode=self.level_mode,
         )
@@ -315,6 +328,12 @@ class AccountSyncAdapter:
             "roster": len(chars),
         }
         normalized = {"_meta": meta, "_account": account, "chars": chars}
+        profile_json = json.dumps(
+            normalized,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         identity_payload = {
             "schema": 1,
             "level_mode": level_mode,
@@ -333,7 +352,7 @@ class AccountSyncAdapter:
             name=name,
             level_mode=level_mode,
             unknown_policy=unknown_policy,
-            profile_payload=normalized,
+            _profile_json=profile_json,
             provenance=tuple(provenance),
             snapshot_id=snapshot_id,
         )
