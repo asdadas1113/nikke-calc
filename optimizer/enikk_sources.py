@@ -70,7 +70,11 @@ def collect_enikk_team_dump_compositions(
     if not isinstance(text, str):
         raise TypeError("text must be a string")
 
-    name_map = dict(resource_name_map or build_enikk_resource_name_map())
+    name_map = dict(
+        build_enikk_resource_name_map()
+        if resource_name_map is None
+        else resource_name_map
+    )
     evidence = []
     malformed: list[MalformedCompositionRow] = []
 
