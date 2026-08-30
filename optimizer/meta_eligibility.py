@@ -1,27 +1,27 @@
 """Meta-epoch-aware validity gate for external Solo Raid usage history.
 
 This module does not decide whether a release, favorite item, balance change, or
-bug fix is "large enough" to reset history.  A caller supplies the latest
-*confirmed history-resetting event* as ``MetaEpochEvidence``.  The optimizer only
+bug fix is "large enough" to reset history. A caller supplies the latest
+*confirmed history-resetting event* as ``MetaEpochEvidence``. The optimizer only
 uses that evidence to decide which completed Solo Raid seasons are old enough to
 be valid low-usage evidence.
 
 A character must have been fully eligible from the start of a raid for that raid
-to count after the epoch.  Unknown/uncertain epoch provenance, incomplete raid
+to count after the epoch. Unknown/uncertain epoch provenance, incomplete raid
 schedule provenance, too few completed post-epoch raids, or incomplete usage
-snapshots all fail open to ``UsageClass.INSUFFICIENT``.  This module never alters
+snapshots all fail open to ``UsageClass.INSUFFICIENT``. This module never alters
 Moris scores or hard legality.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 from enum import Enum
 from math import isfinite
 
-from .cold_pool import UsageClass
+from .cold_pool import SoloRaidUsageEvidence, UsageClass
 from .meta_usage import (
     CharacterUsageWindow,
     EnikkSeasonUsageSnapshot,
@@ -41,7 +41,7 @@ class MetaEpochKnowledge(str, Enum):
 class MetaEpochEvidence:
     """Latest confirmed point from which prior usage history becomes stale.
 
-    ``valid_from`` is required only for KNOWN evidence.  The event may be initial
+    ``valid_from`` is required only for KNOWN evidence. The event may be initial
     release or any later clearly material change supplied by an external policy.
     The optimizer intentionally does not infer materiality from patch text.
     """
@@ -90,7 +90,8 @@ class SoloRaidSchedule:
         raids = [period.raid for period in self.periods]
         if len(raids) != len(set(raids)):
             raise ValueError("raid schedule must not contain duplicate raid numbers")
-        if tuple(sorted(self.periods, key=lambda row: (row.start_on, row.raid))) != self.periods:
+        chronological = tuple(sorted(self.periods, key=lambda row: (row.start_on, row.raid)))
+        if chronological != self.periods:
             raise ValueError("raid schedule periods must be chronological")
 
 
@@ -117,6 +118,24 @@ class MetaUsageDecision:
     window: CharacterUsageWindow | None
     epoch: MetaEpochEvidence
     schedule_source: str
+    policy: LowUsagePolicy
+
+    @property
+    def boundary_distance(self) -> float | None:
+        """Distance below the LOW boundary, only for complete LOW decisions.
+
+        Smaller means closer to the boundary and is therefore suitable for the
+        existing Cold-restoration tie-break. It remains ordering metadata only;
+        it never changes damage or the LOW verdict itself.
+        """
+
+        if (
+            self.classification is not UsageClass.LOW
+            or self.window is None
+            or self.window.peak_usage is None
+        ):
+            return None
+        return max(0.0, self.policy.max_peak_usage - self.window.peak_usage)
 
 
 def post_epoch_completed_raids(
@@ -163,28 +182,36 @@ def classify_meta_epoch_usage(
     if epoch.character != name:
         raise ValueError("meta epoch character does not match classification target")
 
-    if epoch.knowledge is not MetaEpochKnowledge.KNOWN:
+    def decision(
+        classification: UsageClass,
+        reason: str,
+        *,
+        eligible: tuple[int, ...] = (),
+        inspected: tuple[int, ...] = (),
+        window: CharacterUsageWindow | None = None,
+    ) -> MetaUsageDecision:
         return MetaUsageDecision(
             character=name,
-            classification=UsageClass.INSUFFICIENT,
-            reason=f"meta-epoch-{epoch.knowledge.value}-fail-open",
-            eligible_post_epoch_raids=(),
-            inspected_raids=(),
-            window=None,
+            classification=classification,
+            reason=reason,
+            eligible_post_epoch_raids=eligible,
+            inspected_raids=inspected,
+            window=window,
             epoch=epoch,
             schedule_source=schedule.source,
+            policy=policy,
+        )
+
+    if epoch.knowledge is not MetaEpochKnowledge.KNOWN:
+        return decision(
+            UsageClass.INSUFFICIENT,
+            f"meta-epoch-{epoch.knowledge.value}-fail-open",
         )
 
     if not schedule.complete:
-        return MetaUsageDecision(
-            character=name,
-            classification=UsageClass.INSUFFICIENT,
-            reason="raid-schedule-incomplete-fail-open",
-            eligible_post_epoch_raids=(),
-            inspected_raids=(),
-            window=None,
-            epoch=epoch,
-            schedule_source=schedule.source,
+        return decision(
+            UsageClass.INSUFFICIENT,
+            "raid-schedule-incomplete-fail-open",
         )
 
     eligible = post_epoch_completed_raids(
@@ -193,15 +220,10 @@ def classify_meta_epoch_usage(
         completed_through=completed_through,
     )
     if len(eligible) < policy.completed_seasons:
-        return MetaUsageDecision(
-            character=name,
-            classification=UsageClass.INSUFFICIENT,
-            reason="insufficient-completed-post-epoch-raids",
-            eligible_post_epoch_raids=eligible,
-            inspected_raids=(),
-            window=None,
-            epoch=epoch,
-            schedule_source=schedule.source,
+        return decision(
+            UsageClass.INSUFFICIENT,
+            "insufficient-completed-post-epoch-raids",
+            eligible=eligible,
         )
 
     inspected = eligible[-policy.completed_seasons :]
@@ -211,15 +233,12 @@ def classify_meta_epoch_usage(
         eligible_raids=inspected,
     )
     if not window.complete_for_requested_window or window.peak_usage is None:
-        return MetaUsageDecision(
-            character=name,
-            classification=UsageClass.INSUFFICIENT,
-            reason="usage-window-incomplete-fail-open",
-            eligible_post_epoch_raids=eligible,
-            inspected_raids=inspected,
+        return decision(
+            UsageClass.INSUFFICIENT,
+            "usage-window-incomplete-fail-open",
+            eligible=eligible,
+            inspected=inspected,
             window=window,
-            epoch=epoch,
-            schedule_source=schedule.source,
         )
 
     if window.peak_usage <= policy.max_peak_usage:
@@ -229,13 +248,32 @@ def classify_meta_epoch_usage(
         classification = UsageClass.USED
         reason = "post-epoch-window-has-meaningful-usage"
 
-    return MetaUsageDecision(
-        character=name,
-        classification=classification,
-        reason=reason,
-        eligible_post_epoch_raids=eligible,
-        inspected_raids=inspected,
+    return decision(
+        classification,
+        reason,
+        eligible=eligible,
+        inspected=inspected,
         window=window,
-        epoch=epoch,
-        schedule_source=schedule.source,
+    )
+
+
+def to_solo_raid_usage_evidence(
+    decision: MetaUsageDecision,
+    *,
+    recent_evidence: bool = False,
+    boss_specific_evidence: bool = False,
+) -> SoloRaidUsageEvidence:
+    """Adapt an audited meta-epoch decision into the existing Cold-pool input.
+
+    The classification is copied exactly. No score or extra protection is added.
+    Boundary distance is available only for complete LOW decisions and serves the
+    Cold-restoration ordering already implemented in ``cold_pool.py``.
+    """
+
+    return SoloRaidUsageEvidence(
+        character=decision.character,
+        classification=decision.classification,
+        boundary_distance=decision.boundary_distance,
+        recent_evidence=recent_evidence,
+        boss_specific_evidence=boss_specific_evidence,
     )
