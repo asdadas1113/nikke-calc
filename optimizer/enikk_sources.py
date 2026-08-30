@@ -38,7 +38,10 @@ def build_enikk_resource_name_map() -> dict[str, str]:
     for name, row in raw.items():
         if not isinstance(row, Mapping) or row.get("id") is None:
             continue
-        key = str(row["id"])
+        try:
+            key = str(int(row["id"]))
+        except (TypeError, ValueError):
+            continue
         canonical = str(name)
         previous = out.get(key)
         if previous is None:
@@ -59,6 +62,10 @@ def collect_enikk_team_dump_compositions(
 ) -> ExternalCompositionCollection:
     """Parse the existing ``ids=uses|max|avg`` Teams-tab dump into evidence.
 
+    Resource ids are normalized through ``int`` exactly like the legacy Enikk
+    report tool, so a thumbnail id serialized as ``074`` joins repository id
+    ``74`` rather than becoming a false unknown.
+
     No minimum-use cutoff is applied here. If a caller wants to compare a bounded
     public subset, that policy must be explicit outside this parser. Keeping the
     parser threshold-free prevents external popularity from becoming a hidden
@@ -70,11 +77,19 @@ def collect_enikk_team_dump_compositions(
     if not isinstance(text, str):
         raise TypeError("text must be a string")
 
-    name_map = dict(
+    source_map = (
         build_enikk_resource_name_map()
         if resource_name_map is None
         else resource_name_map
     )
+    name_map: dict[str, str] = {}
+    for raw_id, name in source_map.items():
+        try:
+            normalized_id = str(int(raw_id))
+        except (TypeError, ValueError):
+            continue
+        name_map[normalized_id] = str(name)
+
     evidence = []
     malformed: list[MalformedCompositionRow] = []
 
@@ -82,9 +97,10 @@ def collect_enikk_team_dump_compositions(
         source = f"enikk:S{raid}:teams-row{row_index}"
         try:
             ids_part, metrics_part = token.split("=", 1)
-            ids = ids_part.split(",")
-            if not ids or any(not value.strip() for value in ids):
+            raw_ids = ids_part.split(",")
+            if not raw_ids or any(not value.strip() for value in raw_ids):
                 raise ValueError("missing-resource-id")
+            ids = tuple(str(int(value.strip())) for value in raw_ids)
             # Validate the legacy dump contract but deliberately discard all three
             # metrics. They are external observations, not optimizer weights.
             metric_parts = metrics_part.split("|")
@@ -94,7 +110,7 @@ def collect_enikk_team_dump_compositions(
             float(metric_parts[1])
             float(metric_parts[2])
             normalized = normalize_labeled_composition(
-                tuple(value.strip() for value in ids),
+                ids,
                 name_map,
                 source=source,
                 order_knowledge=order_knowledge,
