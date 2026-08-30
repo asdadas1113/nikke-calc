@@ -1,0 +1,101 @@
+from __future__ import annotations
+
+import unittest
+from types import SimpleNamespace
+
+from optimizer import CacheIdentity, MorisEvaluator, SearchBudget
+from optimizer.reference_discovery import (
+    ReferenceComposition,
+    balanced_placement_order,
+    discover_reference_placements,
+)
+
+
+def make_evaluator(scores):
+    table = {tuple(team): float(score) for team, score in scores.items()}
+
+    def build_squad(names, characters):
+        return tuple(names)
+
+    def build_config(squad, config):
+        return dict(config)
+
+    def simulate(squad, **kwargs):
+        team = tuple(squad)
+        if team not in table:
+            raise AssertionError(f"unexpected synthetic simulation: {team}")
+        return SimpleNamespace(squad_total=table[team])
+
+    return MorisEvaluator(
+        build_squad,
+        build_config,
+        simulate,
+        cache_identity=CacheIdentity("engine", "account"),
+    )
+
+
+class ReferenceDiscoveryTests(unittest.TestCase):
+    def test_first_n_balanced_placements_cover_every_member_slot_once(self):
+        members = ("A", "B", "C", "D", "E")
+        order = balanced_placement_order(members)
+        self.assertEqual(len(order), 120)
+
+        counts = {(name, slot): 0 for name in members for slot in range(len(members))}
+        for team in order[: len(members)]:
+            for slot, name in enumerate(team):
+                counts[(name, slot)] += 1
+        self.assertEqual(set(counts.values()), {1})
+
+    def test_unknown_order_uses_actual_moris_to_choose_reference(self):
+        evaluator = make_evaluator({("A", "B"): 10, ("B", "A"): 100})
+        result = discover_reference_placements(
+            evaluator,
+            (ReferenceComposition(("A", "B"), source="external", order_known=False),),
+            budget=SearchBudget(2),
+            max_per_composition=2,
+        )
+
+        self.assertEqual(result.selected_references, (("B", "A"),))
+        self.assertEqual(result.simulate_calls, 2)
+        self.assertEqual([row.score for row in result.evaluated], [10.0, 100.0])
+
+    def test_tight_budget_round_robins_sources_before_second_placement(self):
+        evaluator = make_evaluator(
+            {
+                ("A", "B"): 10,
+                ("B", "A"): 100,
+                ("C", "D"): 50,
+                ("D", "C"): 60,
+            }
+        )
+        result = discover_reference_placements(
+            evaluator,
+            (
+                ReferenceComposition(("A", "B"), source="one"),
+                ReferenceComposition(("C", "D"), source="two"),
+            ),
+            budget=SearchBudget(2),
+            max_per_composition=2,
+        )
+
+        self.assertEqual(
+            [row.members for row in result.evaluated],
+            [("A", "B"), ("C", "D")],
+        )
+        self.assertEqual(result.selected_references, (("A", "B"), ("C", "D")))
+        self.assertEqual(result.unfulfilled_sources, ())
+
+    def test_known_order_never_invents_permutations(self):
+        evaluator = make_evaluator({("A", "B"): 10})
+        result = discover_reference_placements(
+            evaluator,
+            (ReferenceComposition(("A", "B"), source="ordered", order_known=True),),
+            budget=SearchBudget(5),
+            max_per_composition=5,
+        )
+        self.assertEqual([row.members for row in result.evaluated], [("A", "B")])
+        self.assertEqual(result.simulate_calls, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
