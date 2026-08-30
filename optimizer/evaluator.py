@@ -11,7 +11,10 @@ import copy
 import json
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Any, Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
+
+if TYPE_CHECKING:
+    from .account import AccountSnapshot
 
 BuildSquad = Callable[[Sequence[str], Mapping[str, Any]], Any]
 BuildConfig = Callable[[Any, Mapping[str, Any]], Any]
@@ -108,6 +111,43 @@ class MorisEvaluator:
         identity = CacheIdentity(engine_commit, account_snapshot) if use_cache else None
         return cls(
             char_spec.build_squad,
+            char_spec.build_config,
+            simulate,
+            cache_identity=identity,
+            use_cache=use_cache,
+        )
+
+    @classmethod
+    def from_moris_snapshot(
+        cls,
+        *,
+        engine_commit: str,
+        snapshot: "AccountSnapshot",
+        use_cache: bool = True,
+        allow_unowned: bool = False,
+    ) -> "MorisEvaluator":
+        """Bind every evaluation to one normalized account-build snapshot.
+
+        The snapshot is converted through Moris' existing ``GrowthProfile`` and
+        passed to ``context.spec.build_squad``.  Marginal measurement, candidate
+        evaluation, refinement, and final scoring therefore cannot accidentally
+        use different build layers as long as they share this evaluator instance.
+        """
+        from calculator.timeline import simulate
+        from context import spec as char_spec
+
+        profile = snapshot.to_growth_profile(allow_unowned=allow_unowned)
+
+        def build_squad(names: Sequence[str], characters: Mapping[str, Any]):
+            return char_spec.build_squad(
+                list(names),
+                dict(characters),
+                profile=profile,
+            )
+
+        identity = CacheIdentity(engine_commit, snapshot.snapshot_id) if use_cache else None
+        return cls(
+            build_squad,
             char_spec.build_config,
             simulate,
             cache_identity=identity,
