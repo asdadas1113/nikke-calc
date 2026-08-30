@@ -7,6 +7,7 @@ from optimizer.cold_pool import UsageClass
 from optimizer.meta_availability import (
     AvailabilityKnowledge,
     FirstPositiveAvailability,
+    completed_raids_after_first_positive,
     derive_first_positive_availability,
     derive_roster_first_positive_availability,
 )
@@ -66,6 +67,33 @@ class FirstPositiveAvailabilityTests(unittest.TestCase):
         self.assertEqual(result.first_positive_raid, 39)
         self.assertEqual(result.valid_from, date(2026, 6, 8))
         self.assertIn("S39", result.reason)
+
+    def test_completed_window_starts_with_next_raid_not_first_positive_raid(self):
+        result = derive_first_positive_availability(
+            "N",
+            (snapshot(39, appearances=3), snapshot(40)),
+            schedule(),
+        )
+        eligible = completed_raids_after_first_positive(
+            result,
+            schedule(),
+            completed_through=date(2026, 7, 7),
+        )
+        self.assertEqual(eligible, (40,))
+
+        unknown = derive_first_positive_availability(
+            "N",
+            (snapshot(39),),
+            schedule(),
+        )
+        self.assertEqual(
+            completed_raids_after_first_positive(
+                unknown,
+                schedule(),
+                completed_through=date(2026, 7, 7),
+            ),
+            (),
+        )
 
     def test_positive_usage_remains_evidence_with_incomplete_player_rows(self):
         result = derive_first_positive_availability(
