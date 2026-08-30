@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import unittest
 
+from optimizer import account as account_module
 from optimizer.account import AccountSyncAdapter, ProvenanceStatus
 
 
@@ -34,6 +35,7 @@ def char_entry(*, skill3: int = 7) -> dict:
         "equip_skills": {key: ([] if key in ("max_ammo_pct", "charge_speed_pct") else 0.0)
                          for key in EQUIP_KEYS},
         "collection_stage": "SR10",
+        "favorite_stage": 3,
     }
 
 
@@ -102,6 +104,15 @@ class AccountSnapshotTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "refusing Moris fixed-build fallback"):
             snapshot.to_growth_profile()
 
+    def test_empty_equipment_part_is_unknown(self):
+        data = payload()
+        data["chars"]["리타"]["equipment"]["머리"] = {}
+        snapshot = AccountSyncAdapter.normalize(data)
+        self.assertIn(
+            "chars.리타.equipment.머리",
+            {item.path for item in snapshot.blocking_unknowns},
+        )
+
     def test_explicit_moris_default_policy_preserves_unknown_provenance(self):
         data = payload()
         del data["chars"]["리타"]["equipment"]["머리"]
@@ -130,6 +141,26 @@ class AccountSnapshotTests(unittest.TestCase):
         snapshot = AccountSyncAdapter.normalize(data, level_mode="sync")
         self.assertIn(
             "_account.synchro_level",
+            {item.path for item in snapshot.blocking_unknowns},
+        )
+
+    def test_legacy_level_or_cube_cannot_bypass_sync_policy(self):
+        for key, value in (("level", 999), ("cube", {"name": "X", "level": 999})):
+            data = payload()
+            data["chars"]["리타"][key] = value
+            with self.subTest(key=key), self.assertRaisesRegex(
+                ValueError, "outside canonical profile-sync growth data"
+            ):
+                AccountSyncAdapter.normalize(data)
+
+    def test_missing_favorite_stage_is_unknown_for_canonical_favorite_character(self):
+        favorite = next(iter(account_module._favorite_characters()))
+        data = payload()
+        data["chars"] = {favorite: char_entry()}
+        del data["chars"][favorite]["favorite_stage"]
+        snapshot = AccountSyncAdapter.normalize(data)
+        self.assertIn(
+            f"chars.{favorite}.favorite_stage",
             {item.path for item in snapshot.blocking_unknowns},
         )
 
