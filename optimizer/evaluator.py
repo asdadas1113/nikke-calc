@@ -1,6 +1,6 @@
 """Thin adapter around Moris' build_squad -> build_config -> simulate path.
 
-The optimizer must not know calculator internals.  This module is the only place
+The optimizer must not know calculator internals. This module is the only place
 that depends on Moris evaluator call signatures, and the callables are injectable
 so search code can be tested without running the expensive simulator.
 """
@@ -16,6 +16,20 @@ from typing import Any, Callable, Mapping, Sequence
 BuildSquad = Callable[[Sequence[str], Mapping[str, Any]], Any]
 BuildConfig = Callable[[Any, Mapping[str, Any]], Any]
 Simulate = Callable[..., Any]
+
+
+@dataclass(frozen=True)
+class CacheIdentity:
+    """External identities that must partition evaluator cache entries."""
+
+    engine_commit: str
+    account_snapshot: str
+
+    def __post_init__(self) -> None:
+        if not self.engine_commit.strip():
+            raise ValueError("engine_commit must not be empty")
+        if not self.account_snapshot.strip():
+            raise ValueError("account_snapshot must not be empty")
 
 
 @dataclass(frozen=True)
@@ -51,9 +65,13 @@ class EvaluatorStats:
 class MorisEvaluator:
     """Evaluate an ordered squad using Moris while counting expensive calls.
 
-    `rng_mode="expected"` and `verbose=False` are optimizer defaults.  Squad order
-    is deliberately part of the cache key because Moris can use order for burst
-    priority/operation.
+    ``rng_mode="expected"`` and ``verbose=False`` are optimizer defaults. Squad
+    order is deliberately part of the cache key because Moris can use order for
+    burst priority/operation.
+
+    Cached evaluators require an explicit engine commit and account/build snapshot
+    identity. This prevents persistent or reused evaluator instances from silently
+    mixing results across engine/profile revisions.
     """
 
     def __init__(
@@ -62,22 +80,39 @@ class MorisEvaluator:
         build_config: BuildConfig,
         simulate: Simulate,
         *,
+        cache_identity: CacheIdentity | None = None,
         use_cache: bool = True,
     ) -> None:
+        if use_cache and cache_identity is None:
+            raise ValueError("cache_identity is required when evaluator cache is enabled")
         self._build_squad = build_squad
         self._build_config = build_config
         self._simulate = simulate
         self._use_cache = use_cache
+        self._cache_identity = cache_identity
         self._cache: dict[str, Evaluation] = {}
         self.stats = EvaluatorStats()
 
     @classmethod
-    def from_moris(cls, *, use_cache: bool = True) -> "MorisEvaluator":
+    def from_moris(
+        cls,
+        *,
+        engine_commit: str,
+        account_snapshot: str,
+        use_cache: bool = True,
+    ) -> "MorisEvaluator":
         """Bind to the same engine entry points used by site/pybridge/bridge.py."""
         from calculator.timeline import simulate
         from context import spec as char_spec
 
-        return cls(char_spec.build_squad, char_spec.build_config, simulate, use_cache=use_cache)
+        identity = CacheIdentity(engine_commit, account_snapshot) if use_cache else None
+        return cls(
+            char_spec.build_squad,
+            char_spec.build_config,
+            simulate,
+            cache_identity=identity,
+            use_cache=use_cache,
+        )
 
     def clear_cache(self) -> None:
         self._cache.clear()
@@ -103,7 +138,13 @@ class MorisEvaluator:
         enemy_input = copy.deepcopy(dict(enemy or {}))
 
         key = self._cache_key(
-            ordered, char_input, config_input, enemy_input, seed=seed, verbose=verbose
+            ordered,
+            char_input,
+            config_input,
+            enemy_input,
+            seed=seed,
+            verbose=verbose,
+            cache_identity=self._cache_identity,
         )
         self.stats.requests += 1
         cached = self._cache.get(key) if self._use_cache else None
@@ -152,8 +193,11 @@ class MorisEvaluator:
         *,
         seed: int,
         verbose: bool,
+        cache_identity: CacheIdentity | None,
     ) -> str:
         payload = {
+            "engine_commit": cache_identity.engine_commit if cache_identity else None,
+            "account_snapshot": cache_identity.account_snapshot if cache_identity else None,
             "members": members,
             "characters": characters,
             "config": config,
