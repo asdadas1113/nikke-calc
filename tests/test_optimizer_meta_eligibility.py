@@ -16,6 +16,9 @@ from optimizer.meta_eligibility import (
 from optimizer.meta_usage import EnikkSeasonUsageSnapshot
 
 
+POLICY = LowUsagePolicy(completed_seasons=8, max_peak_usage=0.01)
+
+
 def schedule(*, complete: bool = True, through: int = 10) -> SoloRaidSchedule:
     periods = tuple(
         SoloRaidPeriod(
@@ -65,7 +68,7 @@ class MetaEpochEligibilityTests(unittest.TestCase):
             epoch=epoch,
             schedule=schedule(),
             completed_through=date(2026, 10, 7),
-            policy=LowUsagePolicy(completed_seasons=8, max_peak_usage=0.01),
+            policy=POLICY,
         )
 
         self.assertEqual(result.classification, UsageClass.LOW)
@@ -95,6 +98,7 @@ class MetaEpochEligibilityTests(unittest.TestCase):
             epoch=epoch,
             schedule=schedule(),
             completed_through=date(2026, 10, 7),
+            policy=POLICY,
         )
         self.assertEqual(result.classification, UsageClass.INSUFFICIENT)
         self.assertEqual(result.reason, "insufficient-completed-post-epoch-raids")
@@ -116,6 +120,7 @@ class MetaEpochEligibilityTests(unittest.TestCase):
             epoch=epoch,
             schedule=schedule(),
             completed_through=date(2026, 10, 7),
+            policy=POLICY,
         )
 
         self.assertEqual(result.classification, UsageClass.INSUFFICIENT)
@@ -131,6 +136,7 @@ class MetaEpochEligibilityTests(unittest.TestCase):
                     epoch=epoch,
                     schedule=schedule(),
                     completed_through=date(2026, 10, 7),
+                    policy=POLICY,
                 )
                 self.assertEqual(result.classification, UsageClass.INSUFFICIENT)
                 self.assertIn("fail-open", result.reason)
@@ -150,6 +156,7 @@ class MetaEpochEligibilityTests(unittest.TestCase):
             epoch=epoch,
             schedule=schedule(complete=False),
             completed_through=date(2026, 10, 7),
+            policy=POLICY,
         )
         self.assertEqual(schedule_result.classification, UsageClass.INSUFFICIENT)
         self.assertEqual(schedule_result.reason, "raid-schedule-incomplete-fail-open")
@@ -164,6 +171,7 @@ class MetaEpochEligibilityTests(unittest.TestCase):
             epoch=epoch,
             schedule=schedule(),
             completed_through=date(2026, 10, 7),
+            policy=POLICY,
         )
         self.assertEqual(usage_result.classification, UsageClass.INSUFFICIENT)
         self.assertEqual(usage_result.reason, "usage-window-incomplete-fail-open")
@@ -186,6 +194,7 @@ class MetaEpochEligibilityTests(unittest.TestCase):
             epoch=epoch,
             schedule=schedule(),
             completed_through=date(2026, 10, 7),
+            policy=POLICY,
         )
 
         self.assertEqual(result.classification, UsageClass.USED)
