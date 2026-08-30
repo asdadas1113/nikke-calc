@@ -85,6 +85,37 @@ class ReferenceDiscoveryTests(unittest.TestCase):
         self.assertEqual(result.selected_references, (("A", "B"), ("C", "D")))
         self.assertEqual(result.unfulfilled_sources, ())
 
+    def test_budget_too_small_for_one_look_per_source_fails_before_simulation(self):
+        evaluator = make_evaluator({("A", "B"): 10, ("C", "D"): 50})
+        with self.assertRaisesRegex(ValueError, "cannot give every viable composition one placement"):
+            discover_reference_placements(
+                evaluator,
+                (
+                    ReferenceComposition(("A", "B"), source="one", order_known=True),
+                    ReferenceComposition(("C", "D"), source="two", order_known=True),
+                ),
+                budget=SearchBudget(1),
+                max_per_composition=1,
+            )
+        self.assertEqual(evaluator.stats.simulate_calls, 0)
+
+    def test_cached_first_placement_does_not_consume_fairness_budget(self):
+        evaluator = make_evaluator({("A", "B"): 10, ("C", "D"): 50})
+        evaluator.evaluate(("A", "B"))
+        before = evaluator.stats.simulate_calls
+        result = discover_reference_placements(
+            evaluator,
+            (
+                ReferenceComposition(("A", "B"), source="one", order_known=True),
+                ReferenceComposition(("C", "D"), source="two", order_known=True),
+            ),
+            budget=SearchBudget(1),
+            max_per_composition=1,
+        )
+        self.assertEqual(result.unfulfilled_sources, ())
+        self.assertEqual(result.simulate_calls, 1)
+        self.assertEqual(evaluator.stats.simulate_calls - before, 1)
+
     def test_known_order_never_invents_permutations(self):
         evaluator = make_evaluator({("A", "B"): 10})
         result = discover_reference_placements(
