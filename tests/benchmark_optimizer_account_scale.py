@@ -1,8 +1,12 @@
-"""Run the existing optimizer core against a local profile-sync bundle.
+"""Run the existing optimizer core against a local account-sync input.
 
 No search heuristic lives here. The local plan explicitly supplies marginal
 references, initial candidate teams, and the incoming order/budget for one-swap
 refinement. Real account/profile files remain outside git.
+
+Input may be either the canonical local ``profile + raw`` pair or one JSON
+response copied from the site's BlaBlaLink Worker. Worker account identifiers are
+not copied into the normalized snapshot.
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ from optimizer import (
     MorisEvaluator,
     evaluate_allocation_with_one_swap_refinement,
     normalize_account_bundle,
+    normalize_blablalink_worker_payload,
 )
 from optimizer.marginal import measure_marginals
 
@@ -78,10 +83,36 @@ def allocation_rows(allocation) -> list[dict]:
     return [{"members": list(row.members), "score": row.score} for row in allocation.teams]
 
 
+def account_snapshot(args):
+    if args.worker_json is not None:
+        if args.profile is not None or args.raw is not None:
+            raise ValueError("--worker-json cannot be combined with --profile/--raw")
+        worker = load(args.worker_json)
+        return normalize_blablalink_worker_payload(
+            worker,
+            preferred_area=args.preferred_area,
+            level_mode=args.level_mode,
+            unknown_policy=args.unknown_policy,
+        )
+
+    if args.profile is None or args.raw is None:
+        raise ValueError("supply either --worker-json or both --profile and --raw")
+    profile = load(args.profile)
+    raw = load(args.raw)
+    return normalize_account_bundle(
+        profile,
+        raw,
+        level_mode=args.level_mode,
+        unknown_policy=args.unknown_policy,
+    )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--profile", type=Path, required=True)
-    ap.add_argument("--raw", type=Path, required=True)
+    ap.add_argument("--profile", type=Path)
+    ap.add_argument("--raw", type=Path)
+    ap.add_argument("--worker-json", type=Path)
+    ap.add_argument("--preferred-area", type=int)
     ap.add_argument("--plan", type=Path, required=True)
     ap.add_argument("--engine-commit", required=True)
     ap.add_argument("--level-mode", choices=("fixed", "sync"), default="fixed")
@@ -89,12 +120,8 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    profile = load(args.profile)
-    raw = load(args.raw)
+    snapshot = account_snapshot(args)
     plan = load(args.plan)
-    snapshot = normalize_account_bundle(
-        profile, raw, level_mode=args.level_mode, unknown_policy=args.unknown_policy
-    )
     owned = set(snapshot.roster)
 
     config = dict(plan.get("config") or {})
