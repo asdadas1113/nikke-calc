@@ -143,6 +143,44 @@ The failure is consistent with two distinct proxy limitations that should be tes
 1. additive marginal values can over-rank teams whose individual members look valuable but whose cheap burst-role structure is inefficient;
 2. additive marginals cannot represent pair/core interaction by construction.
 
-The next experiment will first add only a **cheap, soft burst/RoleFit signal** and re-rank this same measured fixture. It must not turn 40-second B1/B2 structures into hard-invalid teams. Pair/core synergy measurement will be added only if a concrete recall failure remains after the cheap structural signal is tested.
-
 No full 5-team real-roster exhaustive optimum, ordered-placement exhaustive optimum, or production-scale candidate budget has been measured yet; those remain `TBD`.
+
+## Soft burst/RoleFit diagnostic 2026-08-30
+
+Benchmark commit: `ddc1f155492087f433031b44e7555ee382193858`. GitHub Actions run: `33314412300`. The temporary workflow and draft PR #4 were used only to execute the benchmark and were removed/closed without merge.
+
+The benchmark-local RoleFit estimates whether static B1/B2/B3 candidates provide enough cooldown supply for a nominal 20-second cycle. A 20 s unit contributes `1.0`, a 40 s unit `0.5`; two 40 s candidates can therefore satisfy the cheap supply estimate. Dynamic/uncertain/explicit-sequence structures receive no penalty. This feature is **soft only** and never changes legality.
+
+### `minimal-3`
+
+Fresh-run timing was 46 marginal calls / 145.455202 s, 54 exhaustive calls / 175.744169 s, and 12 selected-candidate calls / 47.403541 s. The candidate-selection result reproduced the prior 60% Top-5 recall and 100% fixture optimum survival.
+
+| candidate limit | raw marginal | RoleFit bucket 50% | RoleFit bucket 75% |
+| ---: | ---: | ---: | ---: |
+| 8 | 60% | 60% | 60% |
+| 12 | 60% | 60% | 60% |
+| 16 | 80% | 80% | 80% |
+| 20 | 80% | 80% | 80% |
+| 24 | 100% | 100% | 100% |
+
+True Top-5 raw proxy ranks `1 / 8 / 22 / 6 / 13` became RoleFit-first diagnostic ranks `1 / 7 / 19 / 5 / 12`. All true Top-5 teams had zero burst-cycle deficit. The severe true-#3 miss improved only from rank 22 to 19.
+
+### `balanced-6`
+
+Fresh-run timing was 89 marginal calls / 233.153286 s, 54 exhaustive calls / 141.546862 s, and 12 selected-candidate calls / 33.559833 s. The candidate-selection result again reproduced 60% Top-5 recall and 100% fixture optimum survival.
+
+| candidate limit | raw marginal | RoleFit bucket 50% | RoleFit bucket 75% |
+| ---: | ---: | ---: | ---: |
+| 8 | 40% | 40% | 60% |
+| 12 | 60% | 60% | 60% |
+| 16 | 60% | 60% | 60% |
+| 20 | 100% | 100% | 100% |
+| 24 | 100% | 100% | 100% |
+
+True Top-5 raw ranks `9 / 18 / 7 / 2 / 19` became RoleFit-first diagnostic ranks `6 / 14 / 5 / 1 / 15`. All true Top-5 teams again had zero deficit.
+
+The signal correctly identified several obvious false-positive teams as slow-cycle structures: raw proxy ranks 1, 3, 8, and 10 had deficit `0.166667` while their true ranks were 32, 29, 28, and 27 respectively. However this demotion did not improve recall at the relevant 12/16-candidate budgets.
+
+### Decision
+
+Do **not** promote this RoleFit into production optimizer scoring yet. It is useful as a diagnostic of structural false positives, but the observed recall failure remains after those teams are demoted. The next experiment should target context-sensitive pair/core interaction implicated by the saved failure case, without measuring all character pairs.
