@@ -125,7 +125,7 @@ No regression or hard-constraint failure was observed. Because false-negative pr
 
 - repository: `asdadas1113/nikke-calc`
 - branch: `roster-optimizer-prototype`
-- session start HEAD: `8d511d2f0835d6cf7fbadc994a427af434c2bd05`
+- session start HEAD: `8d511d2f0835e902138bb94e8fbeffad705a9fec`
 - cleaned benchmark fixture commit: `719a4475c9ac162ca24cd55e3199189593de1e43`
 - Moris upstream at start/end: `fb2fd9157aa14499daf6b9f185beb685d4393f90`
 - calculator/site source files changed: none
@@ -350,3 +350,109 @@ Known/set-NIKKE and famous-core rescue rules are deliberately deferred until the
 3. design refinement seed selection around the current five-team allocation and bottleneck/near-miss teams under an explicit simulation-call budget;
 4. create a tractable multi-team regression fixture that can measure whether re-global-allocation after refinement improves total non-overlapping damage;
 5. only after that, research and add known/set-NIKKE or famous-core rescue candidates as a separate, explicitly sourced candidate channel.
+
+---
+
+## 2026-08-30 — normalized account snapshot and build-propagation E2E
+
+- repository: `asdadas1113/nikke-calc`
+- branch: `roster-optimizer-prototype`
+- session start HEAD: `6c6959ee6a98bb662170fb840c65221af9a9c30a`
+- permanent implementation/test head before docs: `ae6bfde39a3091e58dd58ab853aadd7542f26b35`
+- Moris upstream at start/end: `fb2fd9157aa14499daf6b9f185beb685d4393f90`
+- final E2E run: `33318423444`
+- final standard CI run before docs: `33318423434`
+- calculator/site source files changed: none
+- private account/profile data committed: none
+
+### Canonical account-sync path confirmed
+
+The optimizer must not parse raw blablalink account responses independently. `scraper/profile_fetch.py` remains the raw account-sync source of truth and emits the calculator-facing `profiles/<name>.json` format. Existing `context.spec.GrowthProfile` is the correct Moris layer for applying that profile before `build_squad()`.
+
+Important source behavior confirmed:
+
+- profile-sync emits actual breakthrough/core/affinity, skill levels, equipment, overload options, collection/favorite stage, and account console where available;
+- absent equipment is represented explicitly rather than left to fixed-build equipment;
+- Solo Raid character level is intentionally not an account character field; the default optimizer policy retains fixed level 400;
+- cube sync is only an equipped-cube lower bound, so cube choice is not treated as fully observed account build state;
+- current profile format may preserve prior console/synchro information when current outpost data is incomplete, so provenance cannot always be called freshly observed.
+
+### Implemented
+
+1. Added `optimizer/account.py` with:
+   - `AccountSnapshot`
+   - `AccountSyncAdapter`
+   - `FieldProvenance`
+   - `ProvenanceStatus`
+   - `normalize_account_sync()`
+2. Normalization statuses are `observed`, `preserved`, `defaulted`, `unknown`, and `uncertain`.
+3. Default `unknown_policy="error"` blocks simulation-affecting missing fields instead of silently inheriting Moris fixed-build values. `unknown_policy="moris-default"` is an explicit opt-in fallback and retains unknown provenance.
+4. Strict checks cover skill subfields, four equipment parts, overload fields, account console, sync-mode synchro level, and favorite-stage presence for canonical favorite-item characters.
+5. Legacy per-character `level` and `cube` fields are rejected so old/noncanonical data cannot bypass the normalized policy.
+6. Sensitive `_meta.openid` is not retained in the normalized snapshot.
+7. Snapshot fingerprint ignores fetch timestamp but changes when build data changes. It is used automatically as `MorisEvaluator` account cache identity.
+8. Snapshot build payload is stored as immutable canonical JSON. Public `profile_payload` returns a detached decoded copy, preventing post-fingerprint mutation from altering subsequent Moris builds.
+9. Added `MorisEvaluator.from_moris_snapshot()`; it converts exactly one snapshot through `GrowthProfile` and binds that profile to every evaluator `build_squad()` call.
+10. Added `tests/benchmark_optimizer_account_e2e_real.py`. It contains only synthetic profile-sync-shaped build data, not a private account fixture.
+
+### Actual measured E2E result
+
+Fixture:
+
+- roster: `리타 / 크라운 / 홍련 / 앨리스 / 모더니아 / 나가`.
+- tested team: `리타 / 크라운 / 홍련 / 앨리스 / 모더니아`.
+- one-swap neighbor: `리타 / 크라운 / 홍련 / 앨리스 / 나가`.
+- 30 s, enemy DEF 31,784, expected RNG, seed 42.
+- snapshots differ only by Alice build: invested vs skills 1/1/1, affinity 1, no equipment, no collection item.
+
+Invested snapshot:
+
+- id: `acct-e46722a42f5968efcabe668b`.
+- direct Moris = snapshot evaluator candidate = fresh final evaluator: `141,194,861`.
+- Naga marginal mean: `-6,506,586`.
+- one-swap neighbor: `113,129,883`.
+- optimizer evaluator calls: 5; fresh final evaluator calls: 1.
+
+Weak-Alice snapshot:
+
+- id: `acct-06857f9b028afb6b18a5da44`.
+- direct Moris = snapshot evaluator candidate = fresh final evaluator: `135,391,386`.
+- Naga marginal mean: `-703,111`.
+- one-swap neighbor: `107,326,408`.
+- optimizer evaluator calls: 5; fresh final evaluator calls: 1.
+
+Weakening Alice changed candidate/full-team and refinement-neighbor damage by exactly `5,803,475`, and changed the marginal result by the corresponding amount. The immutable-snapshot rerun reproduced every score and snapshot ID exactly.
+
+This verifies account-build propagation through:
+
+`normalized sync payload -> GrowthProfile -> direct Moris / candidate evaluator -> marginal -> 1-swap refinement -> allocation -> fresh final simulation`.
+
+### Verification
+
+Final benchmark run `33318423444`:
+
+- optimizer unit tests: **40/40**, 0.038 s in the benchmark job.
+- normalized AccountSnapshot real-Moris E2E: success with the exact values above.
+
+Standard CI run `33318423434`:
+
+- calculator engine: 137 tests passed, 1 skipped, 31.854 s.
+- optimizer: 40 tests passed in 0.032 s.
+- bridge: 31 tests passed, 1 skipped, 27.348 s.
+- browser: 24 files / 385 tests passed, vitest duration 29.07 s.
+- golden snapshot: 29/29 passed.
+- doclint and calculator damage cross-checks passed.
+
+Temporary draft PRs #8 and #9 were closed without merge. Their temporary account-benchmark workflow commits were removed from the prototype branch history.
+
+### Limitation / next task
+
+A 50–80-character **actual private account** benchmark has not been measured yet. `profiles/` is intentionally gitignored and no private profile was available in GitHub Actions, so this session did not replace it with guessed or maximum build values.
+
+Next:
+
+1. run the optimizer from a gitignored real profile through `AccountSyncAdapter` and record snapshot provenance/unknowns before any search;
+2. on the full 50–80 roster measure simulate-call budget, runtime, one-swap refinement gain, five-team allocation gain/stability, and seed sensitivity;
+3. do not claim full-roster recall where exhaustive truth is impossible; cut tractable subsets from the same real snapshot and use those subsets for true Top-N recall/optimum-survival measurements;
+4. expand context-specific pair/core probes only if a measured failure remains after refinement;
+5. keep Meta-Aware scoring deferred until the real-account production-scale path is validated.
