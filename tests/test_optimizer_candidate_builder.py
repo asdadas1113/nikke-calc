@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from optimizer import CacheIdentity, MorisEvaluator, SearchBudget, run_anytime_search_round
+from optimizer import CacheIdentity, CoreSeed, MorisEvaluator, SearchBudget, run_anytime_search_round
 
 
 def make_evaluator(scores):
@@ -38,7 +38,7 @@ class CandidateBuilderAnytimeTests(unittest.TestCase):
         scores = {
             ("A", "B"): 100,
             ("C", "B"): 120,
-            ("A", "C"): 110,
+            ("A", "D"): 115,
             ("C", "D"): 250,
         }
         evaluator = make_evaluator(scores)
@@ -51,17 +51,17 @@ class CandidateBuilderAnytimeTests(unittest.TestCase):
         result = run_anytime_search_round(
             evaluator,
             budget=SearchBudget(4),
-            roster=("C",),
+            roster=("C", "D"),
             reference_teams=(("A", "B"),),
             candidate_teams=(),
             candidate_builder=builder,
-            positions_per_candidate=2,
+            positions_per_candidate=1,
             candidate_limit=1,
             team_count=1,
             legal=legal_pair,
         )
 
-        self.assertEqual(seen["values"], {"C"})
+        self.assertEqual(seen["values"], {"C", "D"})
         self.assertEqual(result.proxy_selected, (("C", "D"),))
         self.assertEqual(result.total_score, 250.0)
         self.assertEqual(evaluator.stats.simulate_calls, 4)
@@ -70,21 +70,19 @@ class CandidateBuilderAnytimeTests(unittest.TestCase):
         scores = {
             ("A", "B"): 100,
             ("C", "B"): 120,
-            ("A", "C"): 110,
+            ("A", "D"): 115,
             ("C", "D"): 250,
         }
         evaluator = make_evaluator(scores)
 
-        from optimizer import CoreSeed
-
         result = run_anytime_search_round(
             evaluator,
             budget=SearchBudget(4),
-            roster=("C",),
+            roster=("C", "D"),
             reference_teams=(("A", "B"),),
             candidate_teams=(),
             candidate_builder=lambda marginal: (("C", "D"),),
-            positions_per_candidate=2,
+            positions_per_candidate=1,
             candidate_limit=0,
             team_count=1,
             legal=legal_pair,
