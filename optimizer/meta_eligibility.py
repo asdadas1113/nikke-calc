@@ -168,7 +168,7 @@ def classify_meta_epoch_usage(
     epoch: MetaEpochEvidence,
     schedule: SoloRaidSchedule,
     completed_through: date,
-    policy: LowUsagePolicy = LowUsagePolicy(),
+    policy: LowUsagePolicy,
 ) -> MetaUsageDecision:
     """Classify usage only when a complete post-epoch evidence window exists.
 
