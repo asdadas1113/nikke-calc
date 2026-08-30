@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from math import isfinite
 from typing import Callable
 
+from .marginal import CandidateMarginalPlan, MarginalMeasurement
+
 Team = tuple[str, ...]
 TeamValidator = Callable[[Team], bool]
 
@@ -53,6 +55,60 @@ class ProxyViewCandidate:
     @property
     def source_views(self) -> tuple[str, ...]:
         return tuple(hit.view for hit in self.hits)
+
+
+def build_planned_marginal_prefix_views(
+    plan: CandidateMarginalPlan,
+    measurement: MarginalMeasurement,
+    *,
+    max_depth: int | None = None,
+) -> tuple[ProxyView, ...]:
+    """Recover best-so-far marginal views without another simulator call.
+
+    Planned marginal execution is depth-major: a candidate's first replacement
+    slot is the earliest interpretation, later slots add alternative contexts.
+    Instead of overwriting the first interpretation, this function returns one
+    additive view for each measured prefix.  For prefix ``d`` a character keeps
+    the best available delta among its first ``d`` planned slots.  If a later
+    slot was not measured because SearchBudget ended, its earlier value simply
+    carries forward.
+
+    Scores are reconstructed only from ``measurement.evaluated_candidates`` and
+    the immutable plan, so creating views costs no additional Moris evaluations.
+    Missing baselines/trials remain missing rather than receiving an invented
+    zero/default value.
+    """
+
+    if max_depth is not None and max_depth <= 0:
+        raise ValueError("max_depth must be positive when provided")
+
+    score_by_team = {
+        item.members: float(item.simulated_score)
+        for item in measurement.evaluated_candidates
+        if item.simulated_score is not None
+    }
+    planned_depth = max((len(entry.positions) for entry in plan.entries), default=0)
+    depth_limit = planned_depth if max_depth is None else min(planned_depth, max_depth)
+
+    views: list[ProxyView] = []
+    for depth in range(1, depth_limit + 1):
+        values: dict[str, float] = {}
+        for entry in plan.entries:
+            baseline = score_by_team.get(entry.reference)
+            if baseline is None:
+                continue
+            deltas: list[float] = []
+            for index in entry.positions[:depth]:
+                trial = list(entry.reference)
+                trial[index] = entry.candidate
+                score = score_by_team.get(tuple(trial))
+                if score is not None:
+                    deltas.append(score - baseline)
+            if deltas:
+                values[entry.candidate] = max(deltas)
+        if values:
+            views.append(ProxyView(name=f"marginal-prefix-{depth}", values=values))
+    return tuple(views)
 
 
 def select_proxy_view_candidates(
