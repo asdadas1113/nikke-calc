@@ -263,3 +263,90 @@ The probe primitive is retained because its paired team is itself an actually si
 2. keep placement order explicit when generating swaps; membership-level and ordered-placement reachability must not be conflated;
 3. add context-specific pair probes only after local refinement or meta/skill evidence identifies a concrete gap;
 4. once a candidate-generation/refinement loop is stable, move back to 5-team global-allocation quality rather than optimizing single-team proxy rank indefinitely.
+
+---
+
+## 2026-08-30 — bounded one-swap refinement recovery
+
+- repository: `asdadas1113/nikke-calc`
+- branch: `roster-optimizer-prototype`
+- session start HEAD: `90c7f02dbea951b15bc698ac9aa57f4cc695cba8`
+- Moris upstream at start/end: `fb2fd9157aa14499daf6b9f185beb685d4393f90`
+- refinement implementation: `a4b0797c21263b314984026b3492cd8df34c8837`
+- export: `40b304edf2a365283d770cb308c1143be0ba3920`
+- unit tests: `aa27663d3a3003bc88989a1cdb33ad018b658809`
+- real benchmark fixture: `aa52b2cc9e2139dcc58352eb97afc4b60296b09c`
+- benchmark run: `33316454385`
+- validation CI run: `33316454356`
+- calculator/site source files changed: none
+
+### Implemented
+
+Added `optimizer/refinement.py` with `OneSwapNeighbor` and `generate_one_swap_neighbors()`.
+
+The primitive:
+
+- preserves the replaced slot/order by default;
+- treats the final ordered tuple as identity, so same members in different placements are not collapsed;
+- accepts an explicit placement resolver only when the caller deliberately wants another placement convention;
+- applies hard legality before emitting a neighbor;
+- skips previously evaluated ordered teams;
+- deduplicates generated ordered teams;
+- lets the caller restrict seed order, positions, incoming roster order, and `max_new` instead of hiding a broad brute-force policy inside the primitive.
+
+The real benchmark uses the saved fixture's canonical placement resolver only so its results remain directly comparable to the earlier fixed-placement exhaustive truth. This does not change the production default.
+
+### Actual measured results
+
+Both prior 12-candidate pools started at true Top-5 recall 60%.
+
+`minimal-3`:
+
+- seed 1: 5 new legal unseen neighbors, recall 60%.
+- seed 2: 11 neighbors, recall 60%.
+- seed 3: 18 neighbors, recall **100%**.
+- full benchmark new Moris calls: 18.
+- refinement runtime: 55.945311 s.
+- recovered true #3 and #5, with exact score reproduction: `1,559,674,086` and `1,435,571,126`.
+- prior pipeline + refinement measured call count: 46 marginal + 12 initial candidate + 18 refinement = 76.
+
+`balanced-6`:
+
+- seed 1: 8 new legal unseen neighbors, recall 80%.
+- seed 2: 16 neighbors, recall **100%**.
+- seed 3: 18 neighbors, recall 100%.
+- full benchmark new Moris calls: 18.
+- refinement runtime: 58.649881 s.
+- recovered true #2 and #5, with exact score reproduction: `1,656,756,068` and `1,435,571,126`.
+- a stop-after-seed-2 policy would require 16 new unique evaluations, giving 89 marginal + 12 initial candidate + 16 refinement = 117 calls; separate 16-call wall time was not measured.
+
+The complete actual-score Top-5 after refinement matched the saved fixture true Top-5 exactly in both variants.
+
+### Verification
+
+CI run `33316454356` on the implementation/benchmark head completed successfully:
+
+- calculator engine: 137 tests passed, 1 skipped, 39.061 s.
+- optimizer: **29 tests passed in 0.025 s**.
+- bridge: 31 tests passed, 1 skipped, 32.948 s.
+- browser: 24 files / 385 tests passed.
+- golden snapshot: 29/29 passed.
+- doclint and damage cross-checks passed.
+
+Temporary draft PR #6 was closed without merge. Its benchmark-only workflow commit was removed from the prototype branch history after the measured run.
+
+### Decision / limitations
+
+The saved failure justifies keeping bounded one-person refinement as a real optimizer primitive. It recovered the misses that extra marginal references, RoleFit reranking, and transferable pair weights did not reliably recover.
+
+Do **not** infer a universal `seed_count=3`: `minimal-3` required three seeds, while `balanced-6` reached full recall with two. Also do not claim call efficiency from this tiny fixture: exhaustive truth costs only 54 calls here, while the experimental marginal pipelines plus refinement cost more. Production value depends on the combinatorial growth of real rosters, where exhaustive search is not feasible.
+
+Known/set-NIKKE and famous-core rescue rules are deliberately deferred until their actual usage patterns are researched; they were not added in this session.
+
+### Next task
+
+1. stop optimizing the single-team fixture as the main target;
+2. connect evaluated candidates + one-swap refinement back to the existing exact five-team global allocator;
+3. design refinement seed selection around the current five-team allocation and bottleneck/near-miss teams under an explicit simulation-call budget;
+4. create a tractable multi-team regression fixture that can measure whether re-global-allocation after refinement improves total non-overlapping damage;
+5. only after that, research and add known/set-NIKKE or famous-core rescue candidates as a separate, explicitly sourced candidate channel.
