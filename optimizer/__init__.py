@@ -81,6 +81,13 @@ from .proxy_views import (
     select_proxy_view_candidates,
 )
 from .refinement import OneSwapNeighbor, generate_one_swap_neighbors
+from .seeds import (
+    CoreSeed,
+    ExactCompSeed,
+    SeedCandidate,
+    SeedSelection,
+    select_seed_candidates,
+)
 from .synergy import PairSynergyObservation, PairSynergyProbe, measure_pair_probes
 from .validation import ValidationMetrics, enumerate_legal_teams, run_exhaustive_validation
 
@@ -105,10 +112,12 @@ __all__ = [
     "ColdPoolPartition",
     "ColdRestorationResult",
     "ConstraintSet",
+    "CoreSeed",
     "EnikkSeasonUsageSnapshot",
     "Evaluation",
     "EvaluationTimings",
     "EvaluatorStats",
+    "ExactCompSeed",
     "ExternalNameMapping",
     "FieldProvenance",
     "MarginalMeasurement",
@@ -129,6 +138,8 @@ __all__ = [
     "SearchBudget",
     "SearchBudgetExhausted",
     "SeasonUsageObservation",
+    "SeedCandidate",
+    "SeedSelection",
     "SoloRaidUsageEvidence",
     "StructuralDemand",
     "StructuralFeasibility",
@@ -160,6 +171,7 @@ __all__ = [
     "select_blablalink_area",
     "select_global_allocation",
     "select_proxy_view_candidates",
+    "select_seed_candidates",
     "summarize_enikk_rankings",
     "teams_are_disjoint",
 ]
