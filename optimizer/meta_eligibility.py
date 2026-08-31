@@ -146,10 +146,12 @@ def post_epoch_completed_raids(
 ) -> tuple[int, ...]:
     """Return completed raids whose full participation window starts after epoch.
 
-    A change on the raid's start date counts as eligible. A change one day after
-    start does not: that raid contains pre-change time and is conservatively
-    excluded. Active/future raids whose end date is after ``completed_through``
-    are also excluded.
+    This model intentionally stores dates rather than timestamps. Therefore an
+    epoch on the same calendar day as a raid start is *not* enough to prove that
+    the character/current version was available before the raid opened. Same-day
+    cases are conservatively excluded and can only be recovered later by a
+    timestamp-aware evidence model. Active/future raids whose end date is after
+    ``completed_through`` are also excluded.
     """
 
     if epoch.knowledge is not MetaEpochKnowledge.KNOWN or epoch.valid_from is None:
@@ -157,7 +159,7 @@ def post_epoch_completed_raids(
     return tuple(
         period.raid
         for period in schedule.periods
-        if period.end_on <= completed_through and epoch.valid_from <= period.start_on
+        if period.end_on <= completed_through and epoch.valid_from < period.start_on
     )
 
 
