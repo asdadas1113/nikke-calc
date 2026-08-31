@@ -1,364 +1,318 @@
 # Roster Optimizer / Fast Engine — Current Project State
 
-> **Canonical status document.**
->
-> This file records the current architecture decisions, validated findings, known limitations, and next steps for the roster optimizer project. Older optimizer documents remain useful as experiment history, but when they conflict with this file, **this file describes the current direction**.
+> **Canonical project handoff.** Read this file first when continuing optimizer/Fast Engine work. Older optimizer documents are experiment history; when they conflict with this file, this file is the current direction.
 >
 > Last consolidated: **2026-09-01**.
 
-## 1. Project goal
+## 1. Goal
 
-Given an account roster/build, discover five non-overlapping Solo Raid teams with high total damage without attempting to brute-force every possible five-person squad through the full Moris simulator.
+Given a NIKKE account roster/build, discover five strong non-overlapping Solo Raid teams without brute-forcing every five-person squad through the full Moris simulator.
 
-The project has two separate problems:
+The project separates two jobs:
 
-1. **Candidate discovery:** find promising squads from a large owned roster.
-2. **Authoritative evaluation/allocation:** score promising squads accurately, then choose the best five non-overlapping teams from the evaluated pool.
+1. **Candidate discovery/ranking:** examine enough squads that strong combinations are unlikely to be missed.
+2. **Authoritative scoring/allocation:** Moris scores the shortlisted squads, then exact no-overlap set packing chooses the best five teams inside the Moris-scored pool.
 
-The second problem is already well defined: Moris remains the authoritative combat evaluator, and exact weighted set packing/global allocation is used over the evaluated candidate pool. The current development focus is reducing the cost and variance of the first problem.
+The current bottleneck is candidate discovery throughput, not the final allocation solver.
 
-## 2. Current architecture decision
-
-### Moris is the authority, not the search engine
-
-Moris remains the reference engine for detailed combat semantics and final damage validation.
-
-- Do **not** replace Moris as the final damage authority.
-- Do **not** require Moris upstream to accept optimizer-specific engine changes.
-- Do **not** make project success depend on deep Moris runtime modifications.
-- Moris data/formulas may be reused where practical.
-- Unsupported or uncertain Fast Engine behavior must fail over to Moris rather than silently approximating.
-
-Moris is intentionally a detailed simulator. Its normal UI can expose the full 180-second timeline, hit history, buffs, ammo/reload flow, and damage breakdown. The optimizer should not require that full UI-oriented runtime path for every broad-search candidate.
-
-### Build a separate Fast Engine for broad screening
-
-The current preferred architecture is:
+## 2. Current architecture
 
 ```text
 account roster/build
         ↓
-cheap structural/meta candidate generation
+structural candidate generation
         ↓
-Fast Engine — broad static-target screening
+Fast Engine — broad 180 s theoretical ranking
         ↓
-wide shortlist + diversity/restoration candidates
+wide shortlist + diversity/protected candidates
         ↓
-Moris — authoritative re-evaluation
+Moris — authoritative scoring / boss-specific validation
         ↓
-exact global five-team allocation over Moris-scored pool
+exact global five-team allocation
+        ↓
+optional Moris refinement/replacement
 ```
 
-The Fast Engine is **not** intended to become a second user-facing Moris calculator. Its job is to score/rank many candidate squads cheaply enough that Moris calls can be concentrated on promising or uncertain teams.
+### Moris
 
-## 3. Fast Engine combat model
+Moris remains the final damage authority.
 
-### Static 180-second dummy target
+- Keep the detailed Moris calculator intact for final evaluation.
+- Do not make optimizer completion depend on upstream acceptance of deep Moris performance changes.
+- Moris data/formulas may be reused by Fast where useful.
+- Fast scores do not directly decide the final five teams.
 
-The Fast Engine should model character/team interactions over a 180-second fight while deliberately removing boss-pattern time-axis complexity.
+### Fast Engine
 
-Initial static enemy inputs:
+Fast is **not a second detailed calculator**. It is an optimizer-only theoretical comparison engine whose primary question is:
+
+> Under a common 180-second static-target model, which squads are likely to be stronger than which others?
+
+Absolute numerical parity with Moris is not the goal.
+
+## 3. Fast Engine contract
+
+The following rules are deliberate design constraints.
+
+### 3.1 Keep the 180-second time basis
+
+Fast must preserve enough internal time structure to distinguish important team interactions:
+
+- burst/full-burst cycles and buff overlap
+- named states, stacks, counters, gauges
+- ammo/reload/charge/weapon cadence where ranking depends on them
+- character-owned HP/shield interactions
+- damage/additional-damage timing
+
+Do **not** collapse the engine to a simple `DPS × 180` formula if that destroys team-synergy ordering.
+
+### 3.2 Approximation is allowed
+
+Fast is explicitly allowed to trade fine-grained simulation detail for throughput.
+
+Possible techniques include:
+
+- event aggregation
+- event-driven scheduling rather than frame-by-frame work
+- compiled effect/timeline plans
+- score-only production state
+- cached/condensed state
+- expected-value treatment of probabilistic effects
+- averaged external enemy properties
+- other approximations that materially improve throughput
+
+The acceptance criterion is ranking usefulness, not byte-for-byte Moris behavior.
+
+### 3.3 Ranking recall matters more than absolute damage error
+
+Validation priority:
+
+1. Moris Top-N recall within Fast Top-K
+2. catastrophic miss/tail failure rate
+3. systematic bias by weapon/mechanic/team archetype
+4. wall-clock throughput
+5. absolute Fast-vs-Moris damage error
+
+False negatives are especially expensive: a weak squad ranked too high can be removed by Moris, but a strong squad discarded by Fast cannot be recovered.
+
+### 3.4 Moris parsed data is the source language
+
+Prefer:
+
+```text
+Moris parsed skills/data
+        ↓
+Fast compiler
+        ↓
+Fast IR
+        ↓
+Fast runtime
+```
+
+Support should be implemented mainly as reusable trigger/condition/target/effect/state primitives, not 200 hand-written character ports.
+
+Unknown mechanics must be explicit. If an approximation has not been justified for ranking, route the squad to Moris or protect it from pruning; never silently treat an unknown effect as zero.
+
+## 4. Static enemy model
+
+Fast uses a **patternless 180-second target**.
+
+Static inputs to support:
 
 - enemy DEF
 - enemy element/code
-- core availability as a scalar expected exposure
-
-Initially excluded from Fast Engine boss modeling:
-
-- immune/invulnerable windows
-- element-restriction windows
-- boss attacks and incoming-damage timeline
-- stun/cover/destruction/movement patterns
-- timed part-break scripts
-- boss AI or pattern sequencing
-
-These remain Moris/final-validation concerns.
+- expected core exposure
 
 ### Element
 
-Element is a normal static enemy property and should be applied directly using the same advantage semantics/data used by Moris where possible.
+Element is a normal static property and should use Moris/game semantics where practical.
 
 ### Core
 
-Core timing is intentionally collapsed from a timeline into an expected scalar.
-
-Recommended representation:
+Exact core-open timing is intentionally discarded. Use an expected exposure scalar:
 
 ```text
 effective_core_rate = core_uptime × core_hit_rate_when_open
 ```
 
-The first implementation may expose only `core_uptime` and assume `core_hit_rate_when_open = 1.0`; the internal representation should still allow the two values to be separated later.
+The initial external interface may expose only `core_uptime` and assume `core_hit_rate_when_open = 1.0`.
 
-The scalar must affect more than the displayed core damage bonus. Where the character DSL contains core-hit-driven effects, expected core-hit counts/triggers should receive the same weighted core exposure rather than pretending every hit is either always core or never core.
+The effective rate should affect not only core bonus damage but also expected core-hit-driven triggers/counts where relevant.
 
-This is an intentional search proxy for the static target. Exact boss timing remains a Moris responsibility.
+### Initially excluded boss behavior
 
-### RNG
+- invulnerable/immune timing windows
+- element-restriction timing windows
+- boss attacks/incoming-damage scripts
+- stun/cover destruction/movement
+- timed part-break scripts
+- boss AI/pattern sequencing
 
-Fast screening should use deterministic expected-value behavior. Random-seed variance is not useful for broad candidate ranking.
+Those belong to Moris final/boss-specific validation.
 
-## 4. Moris data as the source language
+## 5. Why Fast is now the main development axis
 
-The Fast Engine should not require hand-writing a separate implementation for every character.
+A representative 180-second Moris `simulate(verbose=False)` benchmark on GitHub Actions was about **2.675 s per squad**. On large 150–190 character rosters, a ~240-call budget is so small that marginal/reference probing can consume most of the budget before enough complete squads are tested.
 
-Preferred design:
+That creates two risks:
 
-```text
-Moris parsed character/skill data
-            ↓
-       Fast compiler
-            ↓
-      Fast intermediate representation (IR)
-            ↓
-       Fast runtime
-```
+1. even the Pure baseline may be underexplored;
+2. Meta/Cold/reference heuristics can be tuned to the artificial scarcity of a 240-call environment rather than to the real squad-selection problem.
 
-Support is tracked primarily by reusable mechanics/opcodes — trigger, target, condition, stat/effect, state machine — rather than by character name.
+A controlled Crown/Mast research engine was also profiled locally. A representative run was roughly 1.6 s, and a simple buff-timeline lookup/cache experiment reduced that controlled case to roughly 0.75–0.82 s. This does not predict production Fast speed, but it supports the feasibility of a separate score-oriented runtime.
 
-A new character should become Fast-compatible automatically when its parsed Moris effects use already-supported primitives. Truly novel mechanics may require one new generic handler or, for rare character-specific mechanics, Moris fallback.
+Therefore the optimizer policy is temporarily treated as a **frozen baseline** while Fast increases the available evaluation volume.
 
-Unknown mechanics must never be silently treated as zero or as a guessed approximation.
+## 6. Algorithm reset audit after Fast
 
-## 5. Phase 1 feasibility findings
+Once Fast can evaluate substantially more squads, do not assume the current search heuristics remain desirable.
 
-A local feasibility prototype was built against the analyzed Moris parsed-skill snapshot. **This prototype is not yet committed to this repository.** Its purpose was to decide whether a generic Moris-DSL Fast Engine is viable before investing in a runtime.
+Re-evaluate them under the higher-compute environment:
 
-Exploratory findings:
+1. build a much stronger Pure baseline;
+2. rerun existing Meta/Cold policies without retuning first;
+3. perform ablations: remove Meta, Cold, marginal/reference heuristics, investment tie-breaks, refinement, etc.;
+4. delete or simplify heuristics whose apparent benefit disappears when evaluation scarcity is reduced;
+5. retain only mechanisms that still protect score/recall or tail behavior.
 
-- analyzed snapshot: **202 parsed-skill character keys / 1,799 effects**;
-- this 202-key inventory is not the same metric as the currently selectable UI roster count (README currently reports 199 supported/selectable characters);
-- all observed trigger forms could be grouped into a small set of generic trigger families;
-- no separate custom timing family was required by the inventory pass;
-- observed conditions were structurally representable as parameterized generic families;
-- name-based custom events were generated through common event semantics rather than requiring one hard-coded dispatcher per event name;
-- the only effect classified as a true initial character-specific D/fallback case in that pass was `feather_refresh` on Ein (2 effects).
+The goal is to avoid preserving algorithms that were only compensating for an unrealistically tiny Moris call budget.
 
-Recent public Solo Raid weighting was also checked as a feasibility signal. In the analyzed S33–S40 dataset, Ein appeared in about **2.44%** of teams, so a Moris fallback for that initial special case would not by itself destroy the hybrid architecture.
+## 7. Phase 1 feasibility result
 
-These figures are **structural feasibility measurements, not implementation-complete coverage**. A character is not Fast-exact until every required generic subsystem is actually implemented and parity-tested.
+The committed Phase 1 prototype lives at:
 
-## 6. Fast Runtime must start with real generic subsystems
+`fast_engine/prototype_phase1/`
 
-The feasibility pass also showed that implementing only easy ATK/damage buffs first would not produce useful full-team coverage. Recent raid teams commonly depend on C-level stateful mechanics.
+It is a compiler/inventory/router prototype, **not a damage runtime**.
 
-The minimum useful Fast Runtime therefore needs the following common core early:
+Analyzed Moris snapshot:
 
-1. event/burst timeline
-2. named state, stack, counter, and gauge handling
-3. arithmetic buff/debuff operations and target resolution
-4. HP/shield state needed by character-owned mechanics
-5. damage/additional-damage processing
-6. weapon/ammo/charge/reload runtime as required by the parsed effects
-7. Moris fallback when any required primitive is unsupported
+- 202 parsed-skill character keys
+- 1,799 effects
+- 170 distinct stat strings
+- about 110 target expressions
 
-Boss-caused HP loss is outside the initial static-target model. Character-generated HP/shield changes that affect character mechanics remain part of the runtime.
+Structural readiness inventory:
 
-## 7. Fast vs Moris scoring policy
+- N: 159 effects — Moris itself NOP/unimplemented for score parity
+- A: 515 — existing/simple core primitive
+- B: 304 — straightforward generic primitive
+- C: 819 — reusable stateful subsystem
+- D: 2 — current special/fallback surface
 
-### During broad search
+The two D effects were Ain `feather_refresh` effects.
 
-Fast scores are allowed to rank and screen candidates.
+All observed trigger/condition forms could be grouped into generic families in this pass. Named custom events also followed common event semantics rather than requiring one dispatcher per event name.
 
-### Before final allocation
+Recent public S33–S40 weighting found Ain in about 2.44% of teams, so an initial Moris fallback for that special mechanism does not by itself invalidate the hybrid design.
 
-Shortlisted candidates must be re-evaluated by Moris. The final candidate pool should use Moris scores for the exact five-team allocation.
+**Important:** structural expressibility is not runtime support. A/B-only support covers essentially no realistic recent top team; stateful C subsystems are nearly universal.
 
-This avoids a systematic Fast/Moris scoring bias directly deciding the final answer.
+The portable committed routing tests currently cover five safety cases and passed before import.
 
-### Candidate recall is more important than absolute Fast damage error
+## 8. Phase 2 runtime priority
 
-The key Fast Engine quality metric is not only `|Fast damage - Moris damage|`.
+Build a real vertical slice that can execute one five-person team from Moris-derived data to a 180-second Fast squad score.
 
-The more important question is:
+Recommended order:
 
-> Of the squads Moris would rank highly, how many survive the Fast shortlist?
+1. chronological event/burst scheduler
+2. named state / stack / counter / gauge store and event broadcasting
+3. target resolver + arithmetic buff/debuff operations
+4. weapon cadence / ammo / reload / charge runtime needed for ranking
+5. character-owned HP/shield state
+6. damage/additional-damage path, reusing Moris formulas/data where useful
+7. static enemy DEF/element/core model
+8. capability/fallback routing
+9. debug trace for mismatch diagnosis; score-only production path
 
-Therefore validation should emphasize:
+The first nominal performance gate is **<= 1.0 s per 180-second five-person squad**, with 0.5–0.7 s as an initial practical target. Faster approximations are acceptable if Top-K recall remains strong.
 
-- Moris Top-N recall within Fast Top-K
-- final five-team damage after Moris re-evaluation
-- per-account/tail failures, not only average performance
-- composition diversity lost by screening
-- unsupported/fallback frequency
-- Fast calls, Moris calls, and wall time
+## 9. Research-engine reference snapshot
 
-The shortlist should be conservative and diversity-preserving. Fast Top-K alone is not sufficient if it removes structurally different teams that Moris would promote under a real boss.
+The user-provided Crown/Mast controlled research engine is preserved separately at:
 
-## 8. Relationship to Meta / Cold search policy
+`fast_engine/research/crown_mast_reference/`
 
-Meta, Cold pools, Priority Review, structural restoration, and investment evidence remain **search-priority tools only**.
+It is a sanitized architecture reference, not the production Fast runtime. Anonymous account material, the separate research-document bundle, caches, and unrelated generated artifacts were excluded before import. The README in that directory contains reconstruction and SHA-256 verification instructions.
 
-They do not change Moris damage.
+Do not judge or refactor the research engine as though it were intended to be a general-purpose NIKKE simulator; it was built for a controlled Crown/Mast research task.
 
-Earlier transfer work showed two important facts:
+## 10. Git / branch state
 
-1. context/reference instability can create large false Pure-vs-Meta differences;
-2. an overly narrow Cold exploration quota can miss useful low-usage fillers or niche characters.
+Main calculator baseline:
 
-As Fast Engine coverage improves, the project should rely less on aggressive meta pruning because broad cheap squad evaluation becomes more affordable. Meta remains useful for prioritization, fallback, and diversity restoration, but should not be treated as a damage oracle.
+`master`
 
-## 9. Existing optimizer status on GitHub
+Optimizer experiments must **not** be implicitly merged into `master`.
 
-Active experimental branch at the start of this consolidation:
+Previous optimizer line:
 
 `optimizer-debug-localized-ambiguity-20260831`
 
-Pre-documentation HEAD:
+Current Fast development line:
 
-`33236352cdaf0a46d8b8b5a4009d4df1bce5d612`
+`fast-engine-phase2-20260901`
 
-That branch already contains, among other optimizer work:
+This Fast branch was forked from optimizer documentation HEAD:
 
-- bounded Meta input/parser work;
-- production auto Worker/Enikk runner support;
-- transfer/benchmark harnesses;
-- batch-evaluation boundaries;
-- score-blind marginal reference coverage fixes;
-- exact evaluated-pool global five-team allocation.
+`da67a1cf40cb281c66abcd85414a56ece00c5985`
 
-`master` must remain untouched by optimizer experiment work unless a separately reviewed change is explicitly intended for the main calculator.
+The current Fast branch contains the Phase 1 prototype and sanitized research-engine reference alongside the existing optimizer work inherited from that parent.
 
-### Local work not represented by that HEAD
+### Still local / not represented by the inherited optimizer code
 
-At the time of this document, additional correctness work had been validated locally but was not yet represented by the above GitHub HEAD:
+Additional optimizer correctness changes previously validated locally were not part of the inherited Git HEAD:
 
-- stable marginal assignment context between Pure and Meta;
-- shared Pure/Meta reference-team context with candidate-admission separation;
-- local optimizer suite reached 372 passing tests after those changes.
+- stable marginal assignment context between Pure and Meta
+- shared Pure/Meta reference-team context with candidate-admission separation
+- local optimizer suite reached 372 passing tests after those changes
 
-Do not assume those local changes exist in a fresh checkout until they are explicitly committed/pushed.
+Do not assume those fixes exist in a fresh checkout unless they are separately committed.
 
-## 10. Why the direction changed toward Fast Engine
+## 11. Existing optimizer principles that remain valid
 
-The original optimizer plan attempted to save expensive Moris calls mainly through search heuristics and Meta/Cold prioritization.
+- Moris is the final score authority.
+- exact weighted set packing/global allocation is used over the evaluated Moris candidate pool.
+- Meta/Cold/investment evidence affects search attention only, never damage.
+- Cold filtering is reversible rather than hard legality.
+- tail failures and paired-account outcomes matter more than headline averages.
+- anonymous account/profile samples remain local and must not be committed.
 
-Measured baseline Moris cost is substantial: an existing benchmark on GitHub Actions measured a representative 180-second `simulate(verbose=False)` call at about **2.675 s**. Object construction was negligible compared with simulation.
+## 12. Next validation after minimum runtime
 
-Large rosters make a fixed ~240-call budget especially restrictive because marginal/reference probing can consume a large fraction of the budget before many complete squad candidates are evaluated. This raises the possibility that even the Pure 240-call baseline is not fully converged on large accounts.
+Before Fast is allowed to prune production candidates, compare equivalent static conditions against Moris and diagnose discrepancies with debug traces.
 
-A separate controlled Crown/Mast research engine was then inspected as a possible high-speed prototype. Exploratory local profiling found:
+Then measure on public/anonymous test cohorts:
 
-- original controlled 180-second run: roughly **1.6 s**;
-- a simple buff-timeline lookup/cache prototype reduced that controlled case to roughly **0.75–0.82 s** without changing the measured result beyond floating-point noise;
-- the engine architecture already separates event/buff/damage concepts more naturally for a score-oriented runtime than the full Moris UI simulator.
+- Moris Top-N recall at increasing Fast shortlist widths
+- final five-team Moris score after Fast shortlist + Moris re-score
+- archetype-specific bias
+- fallback/unsupported frequency
+- candidate diversity
+- large-roster tail failures
+- Fast calls, Moris calls, wall time, and peak memory
 
-These measurements do not prove the eventual generic Fast Engine will run at 0.8 s, but they show enough headroom to justify the separate-runtime approach.
+Do not select a production shortlist width from intuition.
 
-## 11. Moris engine optimization status
+## 13. Handoff invariants
 
-Deep Moris optimization is **not the current dependency** for the optimizer plan.
+1. Never merge optimizer/Fast experiments into `master` implicitly.
+2. Moris remains final damage authority.
+3. Fast is a 180-second theoretical ranking engine, not a detailed boss simulator.
+4. Fast numerical parity with Moris is not required; ranking recall is the primary quality target.
+5. Aggressive optimization/approximation is allowed when recall remains acceptable.
+6. Keep internal character/team timing where it materially affects synergy ordering.
+7. Enemy DEF/element are static Fast inputs; core uses expected exposure.
+8. Boss pattern time scripts stay out of the initial Fast model.
+9. Unknown/unjustified mechanics must not silently become zero.
+10. After Fast increases compute, re-audit and ablate the existing optimizer heuristics for scarcity-era overfitting.
+11. Distinguish committed Git state from local experimental artifacts.
+12. Never commit anonymous account/profile data.
 
-Safe internal Moris optimizations that preserve every observable timeline result may still be valuable upstream, but whether the original maintainer accepts such changes is outside this project's control.
+## 14. Historical research docs
 
-Therefore:
-
-- leave the detailed Moris engine as the authoritative path;
-- do not make optimizer completion depend on upstream acceptance;
-- keep any future Moris performance proposal independently justified and fully behavior-preserving;
-- put aggressive score-only/event-driven design work in the separate Fast Engine instead.
-
-## 12. Roadmap from here
-
-### Phase 1 — feasibility inventory
-
-**Status: completed locally as a prototype.**
-
-- inventory Moris effect/trigger/target/condition forms;
-- define Fast IR categories;
-- identify generic vs special fallback mechanics;
-- verify that per-character hand implementation is not required for the majority of the roster.
-
-### Phase 2 — minimum generic Fast Runtime
-
-**Next implementation phase.**
-
-Build a separate runtime around the Moris-derived IR:
-
-1. deterministic 180-second static-target event/burst scheduler;
-2. state/stack/counter/gauge subsystem;
-3. target resolver and arithmetic buff subsystem;
-4. character-owned HP/shield subsystem;
-5. weapon/ammo/charge/reload behavior needed by supported effects;
-6. damage/additional-damage execution, reusing Moris formulas/data where practical;
-7. static enemy profile: DEF, element, core expected exposure;
-8. exact capability router: Fast only when every required primitive is supported, otherwise Moris.
-
-### Phase 3 — parity and correctness harness
-
-Before using Fast ranking for real pruning:
-
-- synthetic primitive-by-primitive parity tests;
-- real five-person squad comparisons under equivalent static conditions;
-- compare squad/character damage, shot counts, burst timing, state transitions, and major buff windows in debug mode;
-- core-off and full-core endpoint tests plus explicit tests for weighted expected-core behavior;
-- never promote an unsupported or unexplained mismatch to Exact.
-
-Fast is allowed to intentionally differ from a pattern-aware Moris run because boss patterns are excluded by design. Parity comparisons must use equivalent static conditions.
-
-### Phase 4 — ranking/recall validation
-
-Use public Enikk data and anonymous transfer accounts to measure:
-
-- Moris Top-N recall at increasing Fast shortlist widths;
-- final five-team damage after all shortlist candidates are Moris-rescored;
-- large-roster and low-investment/high-investment tail behavior;
-- special/fallback frequency;
-- candidate diversity;
-- runtime and Moris calls saved.
-
-Do not choose a production shortlist width before these measurements.
-
-### Phase 5 — hybrid optimizer integration
-
-Target pipeline:
-
-```text
-structural candidate generation
-        ↓
-Fast bulk scoring
-        ↓
-Fast top band
-+ diversity band
-+ Priority/Meta/Cold restoration
-+ unsupported/pattern-sensitive Moris candidates
-        ↓
-Moris authoritative scoring
-        ↓
-exact five-team allocation
-        ↓
-optional Moris refinement/replacement rounds
-```
-
-### Phase 6 — performance engineering
-
-Only after correctness/recall are acceptable:
-
-- compiled buff-state intervals;
-- score-only object path inside Fast Engine;
-- event scheduling improvements;
-- batch evaluation;
-- browser/worker parallelism;
-- cache/reuse across structurally related squad evaluations where identity is proven safe.
-
-## 13. Project invariants / handoff rules
-
-A new work session should preserve these rules:
-
-1. **Never merge optimizer experiments into `master` implicitly.**
-2. **Moris remains final damage authority.**
-3. **Fast Engine is a high-recall static-target screening engine, not a full boss simulator.**
-4. **Enemy DEF and element are static Fast inputs.**
-5. **Core is represented initially by expected exposure (`uptime × hit rate when open`), not by a boss timing script.**
-6. **Unknown Fast mechanics fail over to Moris; never silently approximate them as zero.**
-7. **Meta/Cold/investment signals affect search attention only, never damage.**
-8. **Final five-team allocation uses Moris-scored candidates and exact no-overlap set packing.**
-9. **Evaluate tail failures and candidate recall, not only mean score.**
-10. **Distinguish committed GitHub state from local experimental artifacts.**
-
-## 14. Historical documents
-
-The following files remain useful research records but may contain decisions that predate this architecture:
+Useful experiment history includes:
 
 - `docs/roster-optimizer-prototype.md`
 - `docs/optimizer-performance-deferred.md`
@@ -368,4 +322,4 @@ The following files remain useful research records but may contain decisions tha
 - `docs/BENCHMARK.md`
 - `docs/DEVLOG.md`
 
-Use them for experiment detail and provenance. Use **this file** for the current project direction.
+Use those for provenance and individual experiments. Use **this file** for current direction.
