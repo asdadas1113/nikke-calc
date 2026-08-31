@@ -73,6 +73,20 @@ class BurstStructureValidator:
         }
         self._no_burst_names = frozenset(no_burst_names)
         self._explicit_sequence = explicit_sequence
+        # Candidate allocation beams repeatedly ask the same structural question
+        # against a small set of full/residual rosters. Cache only static burst
+        # provider metadata for those roster tuples; no damage/search score lives
+        # here. Values are: roster_set, name->possible-stage-mask, mask counts,
+        # and names whose metadata is unknown (which remain fail-open).
+        self._completion_roster_cache: dict[
+            tuple[str, ...],
+            tuple[
+                frozenset[str],
+                dict[str, int | None],
+                tuple[int, ...],
+                frozenset[str],
+            ],
+        ] = {}
 
     @classmethod
     def from_moris(
@@ -222,6 +236,45 @@ class BurstStructureValidator:
             mask |= _BURST_STAGE_BITS.get(stage, 0)
         return mask
 
+    def _completion_roster_profile(
+        self,
+        roster: tuple[str, ...],
+    ) -> tuple[
+        frozenset[str],
+        dict[str, int | None],
+        tuple[int, ...],
+        frozenset[str],
+    ]:
+        cached = self._completion_roster_cache.get(roster)
+        if cached is not None:
+            return cached
+
+        roster_set = frozenset(roster)
+        if len(roster_set) != len(roster):
+            raise ValueError("available_roster must contain unique members")
+
+        masks: dict[str, int | None] = {}
+        counts = [0] * (_ALL_BURST_STAGE_BITS + 1)
+        unknown: set[str] = set()
+        for name in roster:
+            possible = self._possible_stages_for(name)
+            if possible is None:
+                masks[name] = None
+                unknown.add(name)
+                continue
+            mask = self._stage_mask(possible)
+            masks[name] = mask
+            counts[mask] += 1
+
+        value = (
+            roster_set,
+            masks,
+            tuple(counts),
+            frozenset(unknown),
+        )
+        self._completion_roster_cache[roster] = value
+        return value
+
     def can_complete(
         self,
         members: Sequence[str],
@@ -238,33 +291,38 @@ class BurstStructureValidator:
         True does not claim the completed team will be strong or even ultimately
         legal under other constraints.
 
-        Only three burst stages exist, so completion is solved as an 8-state
-        minimum-provider DP rather than enumerating provider combinations. This is
-        exactly the same hard coverage question while keeping wide roster beams
-        cheap even when many characters can provide the same stage.
+        Only three burst stages exist. A cached roster profile reduces the
+        repeated question to the selected members plus an 8-state minimum-provider
+        DP; it does not rescan a 100+ character roster for every beam partial.
         """
 
         partial = tuple(str(name) for name in members)
         roster = tuple(str(name) for name in available_roster)
         if team_size <= 0:
             raise ValueError("team_size must be positive")
-        if len(partial) != len(set(partial)) or len(partial) > team_size:
+
+        selected = set(partial)
+        if len(partial) != len(selected) or len(partial) > team_size:
             return False
-        if len(roster) != len(set(roster)):
-            raise ValueError("available_roster must contain unique members")
-        if not set(partial) <= set(roster):
+
+        roster_set, masks, base_counts, unknown_names = self._completion_roster_profile(
+            roster
+        )
+        if not selected.issubset(roster_set):
             raise ValueError("partial members must belong to available_roster")
         if len(roster) < team_size:
             return False
         if self._explicit_sequence:
             return True
 
+        counts = list(base_counts)
         covered_mask = 0
         for name in partial:
-            possible = self._possible_stages_for(name)
-            if possible is None:
+            mask = masks[name]
+            if mask is None:
                 return True
-            covered_mask |= self._stage_mask(possible)
+            covered_mask |= mask
+            counts[mask] -= 1
 
         missing_mask = _ALL_BURST_STAGE_BITS & ~covered_mask
         if missing_mask == 0:
@@ -274,28 +332,29 @@ class BurstStructureValidator:
         if remaining_slots <= 0:
             return False
 
-        selected = set(partial)
-        provider_masks: list[int] = []
-        for name in roster:
-            if name in selected:
-                continue
-            possible = self._possible_stages_for(name)
-            if possible is None:
-                return True
-            mask = self._stage_mask(possible) & missing_mask
-            if mask:
-                provider_masks.append(mask)
+        # Any unselected unknown character might supply a missing stage, so this
+        # hard-only validator must fail open while there is a slot for it.
+        if unknown_names - selected:
+            return True
 
-        # dp[mask] = fewest distinct remaining characters needed to supply mask.
+        # More than one remaining character with the same stage mask can never
+        # improve coverage of the three required stages, so mask presence is
+        # sufficient. dp[mask] is the fewest distinct characters needed to supply
+        # that subset of the currently missing stages.
         unreachable = team_size + 1
         dp = [unreachable] * (_ALL_BURST_STAGE_BITS + 1)
         dp[0] = 0
-        for provider_mask in provider_masks:
+        for provider_mask in range(1, _ALL_BURST_STAGE_BITS + 1):
+            if counts[provider_mask] <= 0:
+                continue
+            relevant_mask = provider_mask & missing_mask
+            if relevant_mask == 0:
+                continue
             previous = tuple(dp)
             for supplied_mask, count in enumerate(previous):
                 if count >= unreachable:
                     continue
-                combined = supplied_mask | provider_mask
+                combined = supplied_mask | relevant_mask
                 candidate_count = count + 1
                 if candidate_count < dp[combined]:
                     dp[combined] = candidate_count
