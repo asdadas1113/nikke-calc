@@ -32,10 +32,12 @@ def schedule() -> SoloRaidSchedule:
 
 
 def epoch(name: str) -> MetaEpochEvidence:
+    # These tests exercise search-roster restoration/exploration. Keep the epoch
+    # strictly before S3 so the intended eight-season LOW window is unambiguous.
     return MetaEpochEvidence(
         name,
         MetaEpochKnowledge.KNOWN,
-        date(2026, 3, 1),
+        date(2026, 2, 28),
         "fixture",
     )
 
