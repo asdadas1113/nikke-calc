@@ -116,6 +116,12 @@ def run_automatic_anytime_search_round(
     required-core discovery channels. A core crossing outside that roster is not
     assigned fake marginal values; it remains available only through the explicit
     seed-only candidate path supplied by ``seed_candidate_teams``.
+
+    Generated core/allocation subchannels are internally rank-round-robin merged
+    into one protected *category* before entering ``run_anytime_search_round``.
+    This prevents a large number of protected subchannels from receiving N turns
+    for every one ordinary proxy turn. No source gets a score bonus; only exposure
+    under a tight Moris-call budget is made category-fair.
     """
 
     names = tuple(str(name) for name in roster)
@@ -150,6 +156,10 @@ def run_automatic_anytime_search_round(
             )
         return holder["value"]
 
+    def protected_category(context: CandidateDiscoveryContext):
+        teams = get_discovery(context).protected_teams
+        return (teams,) if teams else ()
+
     search = run_anytime_search_round(
         evaluator,
         budget=budget,
@@ -157,7 +167,7 @@ def run_automatic_anytime_search_round(
         reference_teams=reference_teams,
         candidate_teams=(),
         candidate_builder=lambda context: get_discovery(context).ordinary_teams,
-        protected_candidate_channel_builder=lambda context: get_discovery(context).protected_channels,
+        protected_candidate_channel_builder=protected_category,
         positions_per_candidate=positions_per_candidate,
         candidate_limit=candidate_limit,
         team_count=team_count,
