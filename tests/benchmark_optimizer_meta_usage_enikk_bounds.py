@@ -5,10 +5,12 @@ explicitly the shape verified by the separate public completeness probe:
 6 server ladders x ranks 1..50, with exactly five five-character teams per
 returned player row.
 
-Missing/malformed/mapping-uncertain player slots are not zero-filled.  For every
-mapped character the script reports conservative lower/upper usage bounds and
-summarizes how many eight-season windows are safely <=1%, definitely >1%, or
-straddle the boundary.
+Missing/malformed/truly-unmapped player slots are not zero-filled.  Known
+ambiguous external labels are localized to their possible canonical characters
+rather than spreading uncertainty across the whole roster.  For every
+source-known canonical character the script reports conservative lower/upper
+usage bounds and summarizes how many eight-season windows are safely <=1%,
+definitely >1%, or straddle the boundary.
 """
 
 from __future__ import annotations
@@ -108,6 +110,7 @@ def main() -> None:
             fetch_rankings(raid),
             external_map.mapping,
             contract=CONTRACT,
+            ambiguous_name_map=external_map.ambiguous_labels,
         )
         snapshots.append(snapshot)
         print(json.dumps({
@@ -117,12 +120,17 @@ def main() -> None:
             "missing_rows": snapshot.missing_player_slots,
             "malformed_rows": snapshot.malformed_player_slots,
             "mapping_uncertain_rows": snapshot.mapping_uncertain_player_slots,
-            "uncertain_rows_for_bounds": snapshot.uncertain_player_slots,
-            "unknown_external_names": len(snapshot.unknown_external_names),
+            "ambiguous_candidate_rows": sum(snapshot.ambiguous_player_slots.values()),
+            "max_character_uncertain_rows": snapshot.uncertain_player_slots,
+            "unknown_or_ambiguous_external_names": len(snapshot.unknown_external_names),
         }, sort_keys=True))
 
+    source_known_names = set(external_map.mapping.values())
+    for candidates in external_map.ambiguous_labels.values():
+        source_known_names.update(candidates)
+
     rows = []
-    for name in sorted(set(external_map.mapping.values())):
+    for name in sorted(source_known_names):
         window = aggregate_bounded_character_window(
             name,
             snapshots,
@@ -146,13 +154,17 @@ def main() -> None:
     for _name, _lower, _upper, verdict, _window in rows:
         counts[verdict] = counts.get(verdict, 0) + 1
     print(json.dumps({
-        "mapped_characters": len(set(external_map.mapping.values())),
+        "source_known_characters": len(source_known_names),
         "complete_bound_windows": len(rows),
         "boundary": BOUNDARY,
         "verdict_counts": dict(sorted(counts.items())),
         "ambiguous_external_labels": len(external_map.ambiguous_labels),
+        "ambiguous_label_candidates": {
+            label: list(candidates)
+            for label, candidates in sorted(external_map.ambiguous_labels.items())
+        },
         "resource_unmapped_rows": external_map.unmapped_source_rows,
-    }, sort_keys=True))
+    }, sort_keys=True, ensure_ascii=False))
 
     safe = sorted(
         (row for row in rows if row[3] == "safe<=1%"),
