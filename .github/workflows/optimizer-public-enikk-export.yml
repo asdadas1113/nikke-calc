@@ -1,0 +1,65 @@
+name: Optimizer public Enikk export
+
+on:
+  push:
+    branches:
+      - optimizer-debug-localized-ambiguity-20260831
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Fetch public Enikk evidence
+        run: |
+          python - <<'PY'
+          import json
+          import urllib.request
+          from pathlib import Path
+
+          endpoint = 'https://enikk.app/api/graphql'
+
+          def query(q, variables=None):
+              body = json.dumps({'query': q, 'variables': variables or {}}).encode()
+              req = urllib.request.Request(
+                  endpoint,
+                  data=body,
+                  headers={
+                      'Content-Type': 'application/json',
+                      'User-Agent': 'nikke-calc-optimizer-public-benchmark/1.0',
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  payload = json.load(response)
+              if payload.get('errors'):
+                  raise RuntimeError(payload['errors'])
+              return payload['data']
+
+          summaries = query('{ soloRaidSummaries { raid_number wave_name weakness } }')
+          characters = query('{ characters { resource_id name_localkey } }')
+          rankings = {}
+          ranking_query = '''query($raid: Float!) {
+            SRRankings(raid: $raid) { rank playerid server damage cp teams }
+          }'''
+          for raid in range(33, 41):
+              rankings[str(raid)] = query(ranking_query, {'raid': raid})['SRRankings']
+
+          out = {
+              'fetched_for': 'public-bounded-transfer-benchmark',
+              'summaries': summaries['soloRaidSummaries'],
+              'characters': characters['characters'],
+              'rankings': rankings,
+          }
+          Path('/tmp/enikk-public').mkdir(parents=True, exist_ok=True)
+          Path('/tmp/enikk-public/enikk-public-s33-s40.json').write_text(
+              json.dumps(out, ensure_ascii=False, indent=2), encoding='utf-8'
+          )
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: optimizer-public-enikk-s33-s40
+          path: /tmp/enikk-public/enikk-public-s33-s40.json
+          retention-days: 1
