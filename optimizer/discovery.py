@@ -27,6 +27,24 @@ from .candidate_generation import (
 from .proxy_views import ProxyView
 
 
+def _interleave_team_channels(channels: Sequence[Sequence[Team]]) -> tuple[Team, ...]:
+    """Rank-round-robin ordered-team channels while deduplicating identities."""
+
+    seen: set[Team] = set()
+    out: list[Team] = []
+    max_rank = max((len(channel) for channel in channels), default=0)
+    for rank in range(max_rank):
+        for channel in channels:
+            if rank >= len(channel):
+                continue
+            team = channel[rank]
+            if team in seen:
+                continue
+            seen.add(team)
+            out.append(team)
+    return tuple(out)
+
+
 @dataclass(frozen=True)
 class CandidateDiscoveryBundle:
     ordinary: CandidateGenerationResult
@@ -63,6 +81,12 @@ class CandidateDiscoveryBundle:
     def protected_channels(self) -> tuple[tuple[Team, ...], ...]:
         return self.core_channels + self.allocation_channels
 
+    @property
+    def protected_teams(self) -> tuple[Team, ...]:
+        """Fair stream inside this bundle's protected category."""
+
+        return _interleave_team_channels(self.protected_channels)
+
 
 @dataclass(frozen=True)
 class SkippedDiscoveryView:
@@ -72,7 +96,7 @@ class SkippedDiscoveryView:
 
 @dataclass(frozen=True)
 class MultiViewCandidateDiscovery:
-    """Independent discovery bundles plus a fair identity-level union."""
+    """Independent discovery bundles plus fair identity-level unions."""
 
     bundles: tuple[tuple[str, CandidateDiscoveryBundle], ...]
     skipped_views: tuple[SkippedDiscoveryView, ...]
@@ -86,19 +110,7 @@ class MultiViewCandidateDiscovery:
         """Rank-round-robin ordinary candidates across independent views."""
 
         channels = [bundle.ordinary_teams for _name, bundle in self.bundles]
-        seen: set[Team] = set()
-        out: list[Team] = []
-        max_rank = max((len(channel) for channel in channels), default=0)
-        for rank in range(max_rank):
-            for channel in channels:
-                if rank >= len(channel):
-                    continue
-                team = channel[rank]
-                if team in seen:
-                    continue
-                seen.add(team)
-                out.append(team)
-        return tuple(out)
+        return _interleave_team_channels(channels)
 
     @property
     def protected_channels(self) -> tuple[tuple[Team, ...], ...]:
@@ -109,6 +121,19 @@ class MultiViewCandidateDiscovery:
             for _name, bundle in self.bundles
             for channel in bundle.protected_channels
         )
+
+    @property
+    def protected_teams(self) -> tuple[Team, ...]:
+        """Collapse protected subchannels only after fair internal interleaving.
+
+        ``run_anytime_search_round`` schedules top-level candidate channels with
+        equal turns. Passing every protected subchannel separately would give the
+        protected category N turns for every one seed/proxy turn when N is large.
+        Automatic search therefore passes this single internally-fair stream as
+        one top-level protected category.
+        """
+
+        return _interleave_team_channels(self.protected_channels)
 
 
 def generate_candidate_discovery_bundle(
