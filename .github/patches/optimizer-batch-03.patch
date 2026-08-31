@@ -1,0 +1,160 @@
+         scores = {("A", "B"): 100, ("C", "D"): 90}
+         evaluator = make_evaluator(scores)
+--- a/tests/benchmark_optimizer_same_budget_auto_worker.py
++++ b/tests/benchmark_optimizer_same_budget_auto_worker.py
+@@ -133,6 +133,7 @@
+     ap.add_argument("--preferred-area", type=int)
+     ap.add_argument("--level-mode", choices=("fixed", "sync"), default="fixed")
+     ap.add_argument("--unknown-policy", choices=("error", "moris-default"), default="error")
++    ap.add_argument("--evaluation-batch-size", type=int)
+     ap.add_argument("--dry-run", action="store_true")
+     args = ap.parse_args()
+ 
+@@ -165,6 +166,13 @@
+     if not isinstance(search, dict):
+         raise ValueError("plan.search must be an object")
+     simulate_call_budget = int(search["simulate_call_budget"])
++    evaluation_batch_size = int(
++        args.evaluation_batch_size
++        if args.evaluation_batch_size is not None
++        else search.get("evaluation_batch_size", 1)
++    )
++    if evaluation_batch_size <= 0:
++        raise ValueError("evaluation_batch_size must be positive")
+     positions_per_candidate = int(search["positions_per_candidate"])
+     candidate_limit = int(search["candidate_limit"])
+     marginal_cap_raw = search.get("marginal_max_simulate_calls")
+@@ -281,6 +289,7 @@
+         "roster_count": len(snapshot.roster),
+         "blocking_unknown_paths": [row.path for row in snapshot.blocking_unknowns],
+         "simulate_call_budget": simulate_call_budget,
++        "evaluation_batch_size": evaluation_batch_size,
+         "automatic_discovery": {
+             "team_size": discovery_policy.team_size,
+             "single_team_beam_width": discovery_policy.single_team_beam_width,
+@@ -352,6 +361,7 @@
+                 seed_roster=seed_roster,
+                 seed_candidate_teams=seed_candidates_for_mode or None,
+                 evaluate_kwargs=evaluate_kwargs,
++                evaluation_batch_size=evaluation_batch_size,
+             )
+             captured[label] = result
+             return result.search
+@@ -392,6 +402,10 @@
+         "actual_equal_simulate_calls": comparison.simulate_calls,
+         "pure": {
+             "runtime_s": comparison.pure.runtime_s,
++            "simulate_s": comparison.pure.simulate_s,
++            "batch_requests": comparison.pure.batch_requests,
++            "batch_items": comparison.pure.batch_items,
++            "max_batch_size": comparison.pure.max_batch_size,
+             "final_damage": comparison.pure.final_damage,
+             "evaluated_candidate_count": comparison.pure.evaluated_candidate_count,
+             "stage_calls": comparison.pure.stage_calls.__dict__,
+@@ -406,6 +420,10 @@
+         },
+         "meta": {
+             "runtime_s": comparison.meta.runtime_s,
++            "simulate_s": comparison.meta.simulate_s,
++            "batch_requests": comparison.meta.batch_requests,
++            "batch_items": comparison.meta.batch_items,
++            "max_batch_size": comparison.meta.max_batch_size,
+             "final_damage": comparison.meta.final_damage,
+             "evaluated_candidate_count": comparison.meta.evaluated_candidate_count,
+             "stage_calls": comparison.meta.stage_calls.__dict__,
+--- a/tests/benchmark_optimizer_same_budget_auto_enikk_worker.py
++++ b/tests/benchmark_optimizer_same_budget_auto_enikk_worker.py
+@@ -155,6 +155,7 @@
+     ap.add_argument("--preferred-area", type=int)
+     ap.add_argument("--level-mode", choices=("fixed", "sync"), default="fixed")
+     ap.add_argument("--unknown-policy", choices=("error", "moris-default"), default="error")
++    ap.add_argument("--evaluation-batch-size", type=int)
+     args = ap.parse_args()
+ 
+     bundle = build_worker_account_bundle(
+@@ -266,6 +267,8 @@
+         ]
+         if args.preferred_area is not None:
+             command.extend(["--preferred-area", str(args.preferred_area)])
++        if args.evaluation_batch_size is not None:
++            command.extend(["--evaluation-batch-size", str(args.evaluation_batch_size)])
+         completed = subprocess.run(
+             command,
+             cwd=ROOT,
+--- a/tests/benchmark_optimizer_transfer_set.py
++++ b/tests/benchmark_optimizer_transfer_set.py
+@@ -20,9 +20,11 @@
+ import sys
+ import tempfile
+ import zipfile
++from concurrent.futures import ThreadPoolExecutor, as_completed
+ from contextlib import contextmanager
+ from dataclasses import dataclass
+ from pathlib import Path
++from time import perf_counter
+ from typing import Any, Iterator, Sequence
+ 
+ TEST_DIR = Path(__file__).resolve().parent
+@@ -118,6 +120,12 @@
+         "relative_damage_delta": result.get("meta_minus_pure_relative"),
+         "pure_runtime_s": float(pure["runtime_s"]),
+         "meta_runtime_s": float(meta["runtime_s"]),
++        "pure_simulate_s": float(pure.get("simulate_s", pure["runtime_s"])),
++        "meta_simulate_s": float(meta.get("simulate_s", meta["runtime_s"])),
++        "pure_batch_requests": int(pure.get("batch_requests", 0)),
++        "meta_batch_requests": int(meta.get("batch_requests", 0)),
++        "pure_max_batch_size": int(pure.get("max_batch_size", 1)),
++        "meta_max_batch_size": int(meta.get("max_batch_size", 1)),
+         "pure_stage_calls": dict(pure["stage_calls"]),
+         "meta_stage_calls": dict(meta["stage_calls"]),
+         "pure_allocation": list(pure.get("allocation") or ()),
+@@ -171,12 +179,50 @@
+         args.level_mode,
+         "--unknown-policy",
+         args.unknown_policy,
++        "--evaluation-batch-size",
++        str(args.evaluation_batch_size),
+     ]
+     if args.preferred_area is not None:
+         command.extend(["--preferred-area", str(args.preferred_area)])
+     return command
+ 
+ 
++def _run_one(
++    args: argparse.Namespace,
++    worker: WorkerInput,
++    index: int,
++) -> tuple[int, dict[str, Any]]:
++    label = f"sample_{index:03d}"
++    completed = subprocess.run(
++        _child_command(args, worker.path),
++        cwd=ROOT,
++        check=False,
++        capture_output=True,
++        text=True,
++        encoding="utf-8",
++    )
++    if completed.returncode != 0:
++        row: dict[str, Any] = {
++            "sample": label,
++            "status": "error",
++            "error": (completed.stderr or completed.stdout or "child benchmark failed").strip(),
++        }
++    else:
++        try:
++            result = json.loads(completed.stdout)
++        except json.JSONDecodeError as exc:
++            row = {
++                "sample": label,
++                "status": "error",
++                "error": f"child produced invalid JSON: {exc}",
++            }
++        else:
++            row = _result_row(label, result)
++    if args.include_source_labels:
++        row["source_label"] = worker.source_label
++    return index, row
++
++
+ def main() -> None:
+     ap = argparse.ArgumentParser()
