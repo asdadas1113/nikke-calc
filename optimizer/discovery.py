@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from .candidate_generation import (
     AllocationCandidateGenerationResult,
     CandidateGenerationResult,
+    PartialTeamViability,
     PlacementExpander,
     Team,
     TeamValidator,
@@ -152,6 +153,7 @@ def generate_candidate_discovery_bundle(
     allocation_limit: int,
     legal: TeamValidator | None = None,
     placement_expander: PlacementExpander | None = None,
+    partial_viable: PartialTeamViability | None = None,
 ) -> CandidateDiscoveryBundle:
     """Build ordinary and protected coverage from exactly one proxy mapping."""
 
@@ -165,6 +167,7 @@ def generate_candidate_discovery_bundle(
         per_core_limit=single_team_per_core_limit,
         legal=legal,
         placement_expander=placement_expander,
+        partial_viable=partial_viable,
     )
     allocation = generate_additive_allocation_beam_candidates(
         roster,
@@ -177,6 +180,7 @@ def generate_candidate_discovery_bundle(
         allocation_limit=allocation_limit,
         legal=legal,
         placement_expander=placement_expander,
+        partial_viable=partial_viable,
     )
     return CandidateDiscoveryBundle(ordinary=ordinary, allocation=allocation)
 
@@ -197,6 +201,7 @@ def generate_multi_view_candidate_discovery(
     allocation_limit: int,
     legal: TeamValidator | None = None,
     placement_expander: PlacementExpander | None = None,
+    partial_viable: PartialTeamViability | None = None,
 ) -> MultiViewCandidateDiscovery:
     """Run the same bounded discovery policy independently for every full view.
 
@@ -240,6 +245,7 @@ def generate_multi_view_candidate_discovery(
                     allocation_limit=allocation_limit,
                     legal=legal,
                     placement_expander=placement_expander,
+                    partial_viable=partial_viable,
                 ),
             )
         )
