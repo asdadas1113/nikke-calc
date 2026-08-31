@@ -4,7 +4,8 @@ This wrapper owns only common setup before the canonical automatic comparison:
 1. parse an Enikk Teams dump by repository resource ids;
 2. gate it against the full owned roster;
 3. use a separate Moris evaluator to resolve bounded unknown slot placements;
-4. resolve either explicit meta epochs OR curated change events for the owned roster;
+4. resolve either explicit meta epochs OR a curated registry made from confirmed
+   first-availability rows plus optional later change events;
 5. write selected ordered references, optional exploration-only seeds, and resolved
    explicit epochs into temporary inputs;
 6. delegate the actual Pure-vs-Meta comparison to
@@ -97,19 +98,49 @@ def _source_summary(collection, prepared) -> dict[str, Any]:
     }
 
 
+def _epoch_input_mode(payload: dict[str, Any]) -> str:
+    explicit = "epochs" in payload
+    availability = "first_availability" in payload
+    changes = "change_events" in payload
+    if explicit and (availability or changes):
+        return "conflicting"
+    if explicit:
+        return "explicit_epochs"
+    if availability and changes:
+        return "first_availability+change_events"
+    if availability:
+        return "first_availability"
+    if changes:
+        return "change_events"
+    return "none"
+
+
 def _resolved_meta_payload(
     payload: dict[str, Any],
     roster: Sequence[str],
 ) -> tuple[dict[str, Any], dict[str, int]]:
-    """Normalize epochs/change_events into the legacy explicit ``epochs`` shape.
+    """Normalize supported epoch evidence into the legacy explicit ``epochs`` shape.
 
-    The canonical auto-worker runner can therefore stay unchanged. Presence of a
-    key counts as choosing that mode: even ``epochs: {}`` together with
-    ``change_events: []`` is rejected as ambiguous.
+    Presence of a key counts as choosing that mode: even ``epochs: {}`` together
+    with ``first_availability: []`` or ``change_events: []`` is rejected as
+    ambiguous. First availability and change events intentionally share one
+    registry mode and may be supplied together.
     """
 
     parsed = base.parse_meta_evidence(payload)
     explicit_epochs = parsed["epochs"] if "epochs" in payload else None
+
+    availability_rows = (
+        payload.get("first_availability")
+        if "first_availability" in payload
+        else None
+    )
+    if availability_rows is not None and (
+        not isinstance(availability_rows, list)
+        or not all(isinstance(row, dict) for row in availability_rows)
+    ):
+        raise ValueError("meta.first_availability must be a list of objects")
+
     event_rows = payload.get("change_events") if "change_events" in payload else None
     if event_rows is not None and (
         not isinstance(event_rows, list)
@@ -121,10 +152,12 @@ def _resolved_meta_payload(
         roster,
         through=parsed["completed_through"],
         explicit_epochs=explicit_epochs,
+        first_availability_rows=availability_rows,
         change_event_rows=event_rows,
         source="benchmark-meta-epoch-input",
     )
     out = json.loads(json.dumps(payload, ensure_ascii=False))
+    out.pop("first_availability", None)
     out.pop("change_events", None)
     out["epochs"] = {
         name: {
@@ -169,8 +202,9 @@ def main() -> None:
         raise ValueError("strict Worker account audit failed before Enikk reference preparation")
 
     plan = base.load(args.plan)
+    raw_meta_payload = base.load(args.meta)
     meta_payload, epoch_counts = _resolved_meta_payload(
-        base.load(args.meta),
+        raw_meta_payload,
         snapshot.roster,
     )
     config = dict(plan.get("config") or {})
@@ -290,13 +324,7 @@ def main() -> None:
         result["meta_epoch_setup"] = {
             "resolved_owned_character_count": len(snapshot.roster),
             "knowledge_counts": dict(sorted(epoch_counts.items())),
-            "input_mode": (
-                "change_events"
-                if "change_events" in base.load(args.meta)
-                else "explicit_epochs"
-                if "epochs" in base.load(args.meta)
-                else "none"
-            ),
+            "input_mode": _epoch_input_mode(raw_meta_payload),
         }
         print(json.dumps(result, ensure_ascii=False, indent=2))
 
