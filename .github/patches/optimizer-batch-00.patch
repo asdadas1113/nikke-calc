@@ -1,0 +1,160 @@
+--- a/optimizer/evaluator.py
++++ b/optimizer/evaluator.py
+@@ -60,6 +60,9 @@
+     requests: int = 0
+     cache_hits: int = 0
+     simulate_calls: int = 0
++    batch_requests: int = 0
++    batch_items: int = 0
++    max_batch_size: int = 0
+     build_squad_s: float = 0.0
+     build_config_s: float = 0.0
+     simulate_s: float = 0.0
+@@ -231,6 +234,46 @@
+         )
+         return key in self._cache
+ 
++    def evaluate_batch(
++        self,
++        members_batch: Sequence[Sequence[str]],
++        *,
++        characters: Mapping[str, Any] | None = None,
++        config: Mapping[str, Any] | None = None,
++        enemy: Mapping[str, Any] | None = None,
++        seed: int = 42,
++        verbose: bool = False,
++    ) -> tuple[Evaluation, ...]:
++        """Evaluate one ordered batch while preserving scalar-evaluate semantics.
++
++        This Python adapter is intentionally a sequential fallback.  Search code
++        can expose deterministic evaluation rounds through this method today,
++        while browser/controller integrations may map the same round onto Moris'
++        multi-worker ``CalculatorPool`` without changing candidate order, cache
++        identity, or final score authority.
++
++        Cache hits, duplicate rows, timings, and ``simulate_calls`` therefore
++        behave exactly as if :meth:`evaluate` had been called for each row in
++        order.
++        """
++
++        rows = tuple(members_batch)
++        if rows:
++            self.stats.batch_requests += 1
++            self.stats.batch_items += len(rows)
++            self.stats.max_batch_size = max(self.stats.max_batch_size, len(rows))
++        return tuple(
++            self.evaluate(
++                members,
++                characters=characters,
++                config=config,
++                enemy=enemy,
++                seed=seed,
++                verbose=verbose,
++            )
++            for members in rows
++        )
++
+     def evaluate(
+         self,
+         members: Sequence[str],
+--- a/optimizer/budget.py
++++ b/optimizer/budget.py
+@@ -125,6 +125,47 @@
+             )
+         return True
+ 
++    def evaluate_batch(
++        self,
++        members_batch: Sequence[Sequence[str]],
++        *,
++        characters: Mapping[str, Any] | None = None,
++        config: Mapping[str, Any] | None = None,
++        enemy: Mapping[str, Any] | None = None,
++        seed: int = 42,
++        verbose: bool = False,
++    ) -> tuple[Evaluation | None, ...]:
++        """Evaluate a deterministic batch, marking budget-rejected misses.
++
++        Requests are admitted in input order, matching the historical scalar loop.
++        A rejected uncached request becomes ``None`` and later rows are still
++        attempted so cache hits remain reusable after exhaustion.  This shape lets
++        orchestration expose batch boundaries without changing the simulate-call
++        budget contract.
++        """
++
++        rows = tuple(members_batch)
++        if rows:
++            self.stats.batch_requests += 1
++            self.stats.batch_items += len(rows)
++            self.stats.max_batch_size = max(self.stats.max_batch_size, len(rows))
++        out: list[Evaluation | None] = []
++        for members in rows:
++            try:
++                out.append(
++                    self.evaluate(
++                        members,
++                        characters=characters,
++                        config=config,
++                        enemy=enemy,
++                        seed=seed,
++                        verbose=verbose,
++                    )
++                )
++            except SearchBudgetExhausted:
++                out.append(None)
++        return tuple(out)
++
+     def evaluate(
+         self,
+         members: Sequence[str],
+--- a/optimizer/marginal.py
++++ b/optimizer/marginal.py
+@@ -222,6 +222,7 @@
+     plan: CandidateMarginalPlan,
+     *,
+     evaluate_kwargs: dict | None = None,
++    evaluation_batch_size: int = 1,
+ ) -> MarginalMeasurement:
+     """Execute a candidate-specific plan, stopping cleanly at SearchBudget.
+ 
+@@ -237,6 +238,9 @@
+     inventing values for unmeasured candidates.
+     """
+ 
++    if evaluation_batch_size <= 0:
++        raise ValueError("evaluation_batch_size must be positive")
++
+     kwargs = dict(evaluate_kwargs or {})
+     measured: dict[tuple[str, ...], CandidateTeam] = {}
+     baselines: dict[tuple[str, ...], float] = {}
+@@ -244,8 +248,7 @@
+     evaluated_probes = 0
+     budget_exhausted = False
+ 
+-    def evaluate(team: tuple[str, ...], source: str) -> float:
+-        result = evaluator.evaluate(team, **kwargs)
++    def record(team: tuple[str, ...], source: str, result) -> float:
+         measured.setdefault(
+             team,
+             CandidateTeam(
+@@ -257,14 +260,22 @@
+         )
+         return result.score
+ 
+-    for reference in plan.used_reference_teams:
+-        try:
+-            baselines[reference] = evaluate(reference, "marginal-reference")
+-        except SearchBudgetExhausted:
+-            budget_exhausted = True
++    def batches(rows):
++        rows = tuple(rows)
++        for index in range(0, len(rows), evaluation_batch_size):
++            yield rows[index : index + evaluation_batch_size]
++
++    for batch in batches(plan.used_reference_teams):
++        results = evaluator.evaluate_batch(batch, **kwargs)
++        for reference, result in zip(batch, results):
++            if result is None:
++                budget_exhausted = True
++                continue
++            baselines[reference] = record(reference, "marginal-reference", result)
