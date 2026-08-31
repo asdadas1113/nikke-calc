@@ -15,7 +15,11 @@ from enum import Enum
 
 from .anytime import AnytimeSearchResult, CandidateDiscoveryContext, run_anytime_search_round
 from .budget import SearchBudget
-from .candidate_generation import all_permutation_placements, identity_placement
+from .candidate_generation import (
+    PartialTeamViability,
+    all_permutation_placements,
+    identity_placement,
+)
 from .discovery import MultiViewCandidateDiscovery, generate_multi_view_candidate_discovery
 from .evaluator import MorisEvaluator
 from .marginal import PositionPriority
@@ -95,6 +99,7 @@ def run_automatic_anytime_search_round(
     candidate_limit: int,
     team_count: int = 5,
     legal=None,
+    partial_viable: PartialTeamViability | None = None,
     position_priority: PositionPriority | None = None,
     prior_candidates=(),
     refinement_incoming: Sequence[str] = (),
@@ -153,6 +158,7 @@ def run_automatic_anytime_search_round(
                 allocation_limit=discovery_policy.allocation_limit,
                 legal=legal,
                 placement_expander=placement,
+                partial_viable=partial_viable,
             )
         return holder["value"]
 
