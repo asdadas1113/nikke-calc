@@ -88,6 +88,33 @@ def _placement_expander(mode: AutomaticPlacementMode):
     raise ValueError(f"unsupported placement mode: {mode}")
 
 
+def _resolve_partial_viability(
+    legal,
+    explicit: PartialTeamViability | None,
+    *,
+    team_size: int,
+) -> PartialTeamViability | None:
+    """Use only an explicitly exposed hard-feasibility method when available.
+
+    Automatic discovery may safely prune a partial membership only when the
+    legality object itself exposes ``can_complete(partial, roster, team_size=...)``.
+    We do not infer partial semantics from an arbitrary final-team callable.
+    Caller-supplied ``partial_viable`` always wins so experiments can override the
+    adapter explicitly.
+    """
+
+    if explicit is not None:
+        return explicit
+    can_complete = getattr(legal, "can_complete", None)
+    if not callable(can_complete):
+        return None
+
+    def from_legal(partial: tuple[str, ...], available: tuple[str, ...]) -> bool:
+        return bool(can_complete(partial, available, team_size=team_size))
+
+    return from_legal
+
+
 def run_automatic_anytime_search_round(
     evaluator: MorisEvaluator,
     *,
@@ -127,6 +154,11 @@ def run_automatic_anytime_search_round(
     This prevents a large number of protected subchannels from receiving N turns
     for every one ordinary proxy turn. No source gets a score bonus; only exposure
     under a tight Moris-call budget is made category-fair.
+
+    Partial membership pruning remains hard-only. When ``partial_viable`` is not
+    supplied, an object passed as ``legal`` may opt in by exposing a callable
+    ``can_complete`` method. Ordinary legality functions have no inferred partial
+    semantics and therefore keep the previous fail-open behavior.
     """
 
     names = tuple(str(name) for name in roster)
@@ -139,6 +171,11 @@ def run_automatic_anytime_search_round(
         if set(seed.members) <= roster_set
     )
     placement = _placement_expander(discovery_policy.placement_mode)
+    resolved_partial_viable = _resolve_partial_viability(
+        legal,
+        partial_viable,
+        team_size=discovery_policy.team_size,
+    )
     holder: dict[str, MultiViewCandidateDiscovery] = {}
 
     def get_discovery(context: CandidateDiscoveryContext) -> MultiViewCandidateDiscovery:
@@ -158,7 +195,7 @@ def run_automatic_anytime_search_round(
                 allocation_limit=discovery_policy.allocation_limit,
                 legal=legal,
                 placement_expander=placement,
-                partial_viable=partial_viable,
+                partial_viable=resolved_partial_viable,
             )
         return holder["value"]
 
