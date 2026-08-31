@@ -37,6 +37,7 @@ def snapshot(raid: int, appearances: int, *, missing: int = 2):
         missing_player_slots=missing,
         malformed_player_slots=0,
         mapping_uncertain_player_slots=0,
+        ambiguous_player_slots={},
         player_appearances={"A": appearances} if appearances else {},
         mapped_characters=frozenset({"A"}),
         unknown_external_names=(),
