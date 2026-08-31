@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,6 +19,9 @@ SPEC = importlib.util.spec_from_file_location(
 )
 RUNNER = importlib.util.module_from_spec(SPEC)
 assert SPEC is not None and SPEC.loader is not None
+# Python 3.13 dataclasses resolve postponed annotations through sys.modules while
+# the class decorator runs, so register the dynamic benchmark module before exec.
+sys.modules[SPEC.name] = RUNNER
 SPEC.loader.exec_module(RUNNER)
 
 
