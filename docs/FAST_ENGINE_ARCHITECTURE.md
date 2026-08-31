@@ -1,6 +1,6 @@
 # Fast Engine — greenfield architecture contract
 
-Status: Phase 2 baseline. This document defines the production Fast Engine direction; the Crown/Mast research engine is reference-only.
+Status: Phase 2 baseline. This document defines the production Fast Engine direction. The earlier Crown/Mast research engine was a controlled experiment only; its source/archive has been removed from Git and only reusable lessons remain in `fast_engine/research/LESSONS.md`.
 
 ## Objective
 
@@ -132,7 +132,7 @@ Named-state expiry uses generation tokens. Refreshing a state creates a new gene
 Before declaring broad runtime coverage, every Moris damage-affecting path must be classified as one of:
 
 - **Hit formula** — coefficient, ATK/DEF, crit/core/full burst, charge, typed damage, received damage, element.
-- **Derived state** — values derived from caster ATK/HP, ammo, charge-speed overflow, stack/gauge state, etc.
+- **Derived state** — values derived from caster ATK/HP, ammo, gauge, etc. before damage is evaluated.
 - **Damage event** — bonus/DoT/sequential/fixed/accumulated/released damage.
 - **Cadence/timeline** — fire rate, ammo, reload, charge, burst and state timing.
 - **Moris NOP** — not currently reflected by Moris authority.
@@ -152,6 +152,20 @@ Fast is deterministic by default. RNG noise is not useful for candidate ranking.
 
 Expected-value treatment may be used for crit, core, hit-rate and repeated-proc behavior when it does not destroy the interaction being ranked. Expected counters may be fractional and only need to split execution when a threshold changes future state.
 
+## Research-prototype policy
+
+The controlled Crown/Mast prototype is no longer retained as source code or an archive inside this repository.
+
+Only its general lessons are retained:
+
+- event/buff/damage separation is useful;
+- repeated buff resolution is expensive;
+- unchanged spans should be aggregated;
+- a score-only runtime can discard Moris UI/history detail;
+- Crown/Maid Mast-specific roster/rotation assumptions must not leak into production abstractions.
+
+See `fast_engine/research/LESSONS.md`. Production code must not depend on the removed prototype.
+
 ## Validation
 
 Three gates precede production pruning:
@@ -166,7 +180,7 @@ The primary production metric is shortlist recall, not exact damage equality.
 
 1. greenfield immutable compiled model + Moris compile boundary;
 2. continuous-time stable scheduler;
-3. damage-semantics inventory (**initial snapshot complete: 1,799 effects, 0 unknown**) and capability manifest;
+3. damage-semantics inventory and capability manifest;
 4. generic state/stack/counter/gauge store + expiry dispatch;
 5. burst scheduler independent of character names;
 6. weapon cadence/ammo/reload/charge interval model;

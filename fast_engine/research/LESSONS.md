@@ -1,6 +1,6 @@
 # Research-engine lessons for the greenfield Fast runtime
 
-The Crown/Mast research engine is frozen as a reference implementation. It is not the base class hierarchy for the production Fast Engine.
+The controlled Crown/Mast research engine is no longer retained in this repository. Only the reusable design/profiling lessons are kept here. The production Fast Engine must not depend on the removed prototype.
 
 ## Keep the ideas
 
@@ -13,7 +13,7 @@ The Crown/Mast research engine is frozen as a reference implementation. It is no
 
 ## Do not carry the research constraints forward
 
-The following are research-specific and must not define production abstractions:
+The following were research-specific and must not define production abstractions:
 
 - `TeamRoster.crown` / `TeamRoster.mast` as structural slots.
 - B2 rotation restricted to `crown | mast`.
@@ -34,4 +34,4 @@ It proved feasibility, not generality:
 3. aggressive caching/aggregation has large headroom;
 4. character-specific research assumptions make retrofitting the engine into a general Solo Raid runtime more expensive than starting a greenfield core.
 
-Therefore the production Fast Engine is greenfield. The research snapshot remains a benchmark/reference source only.
+Therefore the production Fast Engine is greenfield. These written lessons are the only retained project dependency from that research prototype.

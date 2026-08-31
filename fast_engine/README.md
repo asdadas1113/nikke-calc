@@ -37,7 +37,7 @@ Core is represented initially as:
 effective_core_rate = core_uptime × core_hit_rate_when_open
 ```
 
-The first external interface may expose only `core_uptime` and assume `core_hit_rate_when_open = 1.0`. The expected rate should influence both core damage contribution and core-hit-driven expected triggers where relevant.
+The expected rate should influence both core damage contribution and core-hit-driven expected triggers where relevant.
 
 Not modeled in the initial Fast target:
 
@@ -52,16 +52,11 @@ Those are Moris/final-validation concerns.
 
 ## Greenfield runtime
 
-The production runtime is being built from scratch under `engine/` rather than by generalizing the Crown/Mast research engine.
+The production runtime is built from scratch under `engine/`. The earlier Crown/Mast research engine is **not stored in the repository anymore** and is not a code dependency.
 
-Current baseline contains:
+Reusable findings from that experiment are retained only in `research/LESSONS.md`.
 
-- `engine/model.py`: static enemy profile, compiled squad model, minimal score-oriented runtime state.
-- `engine/compiler.py`: Moris character dict → immutable Fast compile boundary using Moris base-stat and active-favorite semantics.
-- `engine/scheduler.py`: deterministic continuous-time priority queue with no fixed timestep.
-- `tests/test_greenfield_core.py`: compatibility and scheduler baseline tests.
-
-The first **damage-semantics inventory** is complete for the current 1,799-effect snapshot with zero unclassified rows. The next gate is capability routing plus the generic state/stack/counter/gauge store; see `docs/FAST_DAMAGE_SEMANTICS.md`.
+Current production baseline includes the greenfield compiled model, continuous-time scheduler, capability/state infrastructure, and the Phase 1 structural prototype remains separately under `prototype_phase1/` as feasibility history.
 
 ## Quality gates
 
@@ -73,14 +68,15 @@ Primary validation metrics, in order:
 4. wall-clock throughput
 5. absolute Fast-vs-Moris damage error
 
-The first full runtime milestone is a complete 5-person score-only vertical slice under the static 180-second contract. A nominal first performance gate is <= 1.0 s per squad, with 0.5-0.7 s only an initial practical reference; substantially faster approximations are preferred when recall remains strong.
+The first full runtime milestone is a complete 5-person score-only vertical slice under the static 180-second contract. A nominal first performance gate is <= 1.0 s per squad; substantially faster approximations are preferred when recall remains strong.
 
 ## Repository layout
 
 - `engine/`: production greenfield Fast runtime/compiler.
 - `tests/`: production Fast tests.
 - `prototype_phase1/`: feasibility compiler/router snapshot. Structural proof only; not the production runtime.
-- `research/LESSONS.md`: reusable findings and rejected assumptions from the controlled research engine.
-- `research/crown_mast_reference/`: sanitized Crown/Mast reference snapshot. Architecture/profiling reference only.
+- `research/LESSONS.md`: reusable findings and rejected assumptions from the removed controlled research engine.
+
+The original Crown/Mast research prototype and its sanitized archive are intentionally not kept in Git.
 
 See `docs/FAST_ENGINE_ARCHITECTURE.md` for the greenfield contract and `docs/OPTIMIZER_PROJECT_STATE.md` for the broader optimizer handoff state.
