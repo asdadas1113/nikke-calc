@@ -26,6 +26,56 @@ class MetaEpochInputTests(unittest.TestCase):
         self.assertEqual(result["A"].valid_from, date(2026, 5, 1))
         self.assertEqual(result["B"].knowledge, MetaEpochKnowledge.UNKNOWN)
 
+    def test_first_availability_and_change_events_share_registry_mode(self):
+        result = resolve_meta_epoch_input(
+            ("A", "B"),
+            through=date(2026, 8, 31),
+            first_availability_rows=(
+                {
+                    "character": "A",
+                    "knowledge": "known",
+                    "available_from": "2025-01-01",
+                    "mechanism": "special-recruit",
+                    "source": "official-release",
+                },
+                {
+                    "character": "B",
+                    "knowledge": "unknown",
+                    "mechanism": "unknown",
+                    "source": "registry-missing",
+                },
+            ),
+            change_event_rows=(
+                {
+                    "character": "A",
+                    "effective_on": "2026-05-01",
+                    "effect": "reset",
+                    "kind": "favorite-item",
+                    "source": "official-favorite",
+                },
+            ),
+        )
+        self.assertEqual(result["A"].knowledge, MetaEpochKnowledge.KNOWN)
+        self.assertEqual(result["A"].valid_from, date(2026, 5, 1))
+        self.assertEqual(result["B"].knowledge, MetaEpochKnowledge.UNKNOWN)
+
+    def test_first_availability_alone_establishes_release_epoch(self):
+        result = resolve_meta_epoch_input(
+            ("A",),
+            through=date(2026, 8, 31),
+            first_availability_rows=(
+                {
+                    "character": "A",
+                    "knowledge": "known",
+                    "available_from": "2026-07-02",
+                    "mechanism": "special-recruit",
+                    "source": "official-release",
+                },
+            ),
+        )
+        self.assertEqual(result["A"].knowledge, MetaEpochKnowledge.KNOWN)
+        self.assertEqual(result["A"].valid_from, date(2026, 7, 2))
+
     def test_explicit_epochs_fill_missing_owned_rows_as_unknown(self):
         explicit = {
             "A": MetaEpochEvidence(
@@ -43,13 +93,20 @@ class MetaEpochInputTests(unittest.TestCase):
         self.assertEqual(result["A"], explicit["A"])
         self.assertEqual(result["B"].knowledge, MetaEpochKnowledge.UNKNOWN)
 
-    def test_both_modes_are_rejected(self):
-        with self.assertRaisesRegex(ValueError, "either explicit epochs or change_events"):
+    def test_explicit_and_registry_modes_are_rejected_even_when_empty(self):
+        with self.assertRaisesRegex(ValueError, "registry evidence"):
             resolve_meta_epoch_input(
                 ("A",),
                 through=date(2026, 8, 31),
                 explicit_epochs={},
                 change_event_rows=(),
+            )
+        with self.assertRaisesRegex(ValueError, "registry evidence"):
+            resolve_meta_epoch_input(
+                ("A",),
+                through=date(2026, 8, 31),
+                explicit_epochs={},
+                first_availability_rows=(),
             )
 
     def test_no_mode_infers_nothing_from_roster_existence(self):
