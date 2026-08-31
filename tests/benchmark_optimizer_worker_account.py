@@ -29,7 +29,7 @@ def load(path: Path) -> dict[str, Any]:
 
 
 def summarize_skill_investment(profile_payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Return aggregate 1/2/burst skill-investment diagnostics only."""
+    """Return aggregate normalized 1/2/burst skill-investment diagnostics only."""
 
     chars = profile_payload.get("chars")
     if not isinstance(chars, Mapping):
@@ -39,14 +39,21 @@ def summarize_skill_investment(profile_payload: Mapping[str, Any]) -> dict[str, 
     for character, raw in chars.items():
         if not isinstance(raw, Mapping):
             raise ValueError(f"profile character {character!r} must be an object")
+        levels = raw.get("skill_levels")
+        if not isinstance(levels, Mapping):
+            raise ValueError(
+                f"profile character {character!r} lacks normalized skill_levels"
+            )
         try:
             triple = (
-                int(raw["skill1_lv"]),
-                int(raw["skill2_lv"]),
-                int(raw["ulti_skill_lv"]),
+                int(levels["1"]),
+                int(levels["2"]),
+                int(levels["3"]),
             )
         except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError(f"profile character {character!r} lacks usable skill levels") from exc
+            raise ValueError(
+                f"profile character {character!r} lacks usable normalized skill levels"
+            ) from exc
         triples.append(triple)
 
     sums = Counter(str(sum(triple)) for triple in triples)
