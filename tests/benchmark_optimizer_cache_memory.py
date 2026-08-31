@@ -17,7 +17,12 @@ import argparse
 import gc
 import json
 import resource
+import sys
 from dataclasses import replace
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 
 from calculator.sim_result import HitEvent, SimResult
 from optimizer.evaluator import CacheIdentity, MorisEvaluator
