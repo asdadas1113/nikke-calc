@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from itertools import combinations
 
 from optimizer.constraints import (
     BurstMetadata,
@@ -125,6 +126,42 @@ class BurstStructureValidatorTest(unittest.TestCase):
         self.assertEqual(report.min_cooldown_by_stage["1"], 20.0)
         self.assertEqual(report.min_cooldown_by_stage["2"], 20.0)
         self.assertEqual(report.min_cooldown_by_stage["3"], 40.0)
+
+
+class BurstCompletionDpEquivalenceTest(unittest.TestCase):
+    def test_can_complete_matches_bruteforce_hard_legality_on_small_roster(self):
+        metadata = {
+            "B1": BurstMetadata("1"),
+            "B2": BurstMetadata("2"),
+            "B3": BurstMetadata("3"),
+            "FLEX": BurstMetadata("A"),
+            "DYN12": BurstMetadata("3", dynamic_stages=frozenset({"1", "2"})),
+            "OFF": BurstMetadata("1"),
+        }
+        validator = BurstStructureValidator(metadata, no_burst_names={"OFF"})
+        roster = tuple(metadata)
+        team_size = 4
+
+        for partial_size in range(team_size + 1):
+            for partial in combinations(roster, partial_size):
+                remaining = tuple(name for name in roster if name not in partial)
+                fill_count = team_size - len(partial)
+                brute = any(
+                    validator(tuple(partial) + tuple(fill))
+                    for fill in combinations(remaining, fill_count)
+                )
+                with self.subTest(partial=partial):
+                    self.assertEqual(
+                        validator.can_complete(partial, roster, team_size=team_size),
+                        brute,
+                    )
+
+    def test_explicit_sequence_stays_fail_open(self):
+        validator = BurstStructureValidator(
+            {"B3": BurstMetadata("3")},
+            explicit_sequence=True,
+        )
+        self.assertTrue(validator.can_complete(("B3",), ("B3",), team_size=1))
 
 
 if __name__ == "__main__":
