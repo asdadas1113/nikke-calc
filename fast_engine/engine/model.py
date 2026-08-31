@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
+
+if TYPE_CHECKING:
+    from .capabilities import EffectCapability
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +52,7 @@ class CompiledCharacter:
     weapon_type: str
     weapon: Mapping[str, Any]
     effects: tuple[Mapping[str, Any], ...]
+    effect_capabilities: tuple["EffectCapability", ...]
     skill_levels: Mapping[str, int]
     favorite_stage: int
 
@@ -61,19 +65,32 @@ class CompiledSquad:
     def names(self) -> tuple[str, ...]:
         return tuple(member.name for member in self.members)
 
+    @property
+    def capability_blockers(self) -> tuple["EffectCapability", ...]:
+        return tuple(
+            cap
+            for member in self.members
+            for cap in member.effect_capabilities
+            if cap.blocks_fast
+        )
+
+    @property
+    def fast_ready(self) -> bool:
+        return not self.capability_blockers
+
 
 @dataclass(slots=True)
 class ActorRuntimeState:
     """Small mutable state surface that the event runtime is allowed to keep.
 
-    Fields are intentionally score-oriented. Detailed hit/log history is not
+    Fields are intentionally score-oriented.  Detailed hit/log history is not
     part of the production contract.
     """
 
     ammo: float = 0.0
     hp: float = 0.0
     shield: float = 0.0
-    stacks: dict[str, float] = field(default_factory=dict)
+    states: dict[str, Any] = field(default_factory=dict)
     gauges: dict[str, float] = field(default_factory=dict)
     counters: dict[str, float] = field(default_factory=dict)
     last_dealt_damage: float = 0.0

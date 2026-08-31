@@ -111,6 +111,20 @@ Production state should contain only values that can change future score/order. 
 
 Full hit histories and verbose logs are diagnostic-only opt-ins.
 
+## State-version / cache invalidation model
+
+Fast must not use one monolithic "state changed" flag for every hot-path cache. Runtime state is split into invalidation domains:
+
+- effect/state (named buffs, stacks, gauges, counters)
+- health (HP/shield)
+- resource/cadence (ammo, weapon mode)
+- damage memory (last dealt damage, delayed-damage accumulators)
+- burst state
+
+Each mutation increments only the relevant domain version, with actor-scoped versions in addition to global domain versions. This lets a future buff snapshot depend only on the actors/domains it actually reads. For example, updating `last_dealt_damage` must not invalidate an ATK/crit buff cache unless that cache explicitly depends on damage memory.
+
+Named-state expiry uses generation tokens. Refreshing a state creates a new generation, so an old queued expiry becomes a cheap no-op instead of requiring deletion from the event heap.
+
 ## Damage semantics
 
 `calculator.damage.calc_damage()` is not the whole combat model. It is the final single-hit DealForm after runtime state has already derived many values.
