@@ -152,7 +152,7 @@ The primary production metric is shortlist recall, not exact damage equality.
 
 1. greenfield immutable compiled model + Moris compile boundary;
 2. continuous-time stable scheduler;
-3. damage-semantics inventory and capability manifest;
+3. damage-semantics inventory (**initial snapshot complete: 1,799 effects, 0 unknown**) and capability manifest;
 4. generic state/stack/counter/gauge store + expiry dispatch;
 5. burst scheduler independent of character names;
 6. weapon cadence/ammo/reload/charge interval model;

@@ -61,7 +61,7 @@ Current baseline contains:
 - `engine/scheduler.py`: deterministic continuous-time priority queue with no fixed timestep.
 - `tests/test_greenfield_core.py`: compatibility and scheduler baseline tests.
 
-The next implementation gate is the **damage-semantics inventory**: classify every Moris damage-affecting path before the state store and damage kernel are finalized.
+The first **damage-semantics inventory** is complete for the current 1,799-effect snapshot with zero unclassified rows. The next gate is capability routing plus the generic state/stack/counter/gauge store; see `docs/FAST_DAMAGE_SEMANTICS.md`.
 
 ## Quality gates
 

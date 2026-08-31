@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from context.spec import build_squad
 from fast_engine.engine import EnemyStaticProfile, EventKind, EventScheduler, compile_moris_squad
+from fast_engine.tools.damage_semantics_inventory import inventory
 
 
 class EnemyProfileTests(unittest.TestCase):
@@ -44,6 +46,15 @@ class MorisCompatibilityTests(unittest.TestCase):
         self.assertTrue(all(c.base_atk > 0 for c in compiled.members))
         self.assertTrue(all(c.effects for c in compiled.members))
         self.assertEqual(compiled.members[1].burst_stage, "2")
+
+
+class DamageSemanticsInventoryTests(unittest.TestCase):
+    def test_current_moris_effect_inventory_has_no_unclassified_rows(self):
+        root = Path(__file__).resolve().parents[2]
+        inv = inventory(root)
+        self.assertEqual(inv["effects"], 1799)
+        self.assertEqual(inv["unknown_stats"], {})
+        self.assertEqual(sum(inv["counts"].values()), inv["effects"])
 
 
 if __name__ == "__main__":
