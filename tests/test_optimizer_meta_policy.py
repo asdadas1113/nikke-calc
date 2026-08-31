@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import date
+from datetime import date, timedelta
 
 from optimizer.cold_pool import UsageClass
 from optimizer.meta_eligibility import (
@@ -56,10 +56,12 @@ def snapshots() -> tuple[EnikkSeasonUsageSnapshot, ...]:
 
 
 def epoch(name: str, month: int = 3) -> MetaEpochEvidence:
+    # LOW/USED policy tests are not same-day precision tests. Put the epoch one
+    # day before the target raid opens so all intended seasons are provably full.
     return MetaEpochEvidence(
         name,
         MetaEpochKnowledge.KNOWN,
-        date(2026, month, 1),
+        date(2026, month, 1) - timedelta(days=1),
         "fixture",
     )
 
