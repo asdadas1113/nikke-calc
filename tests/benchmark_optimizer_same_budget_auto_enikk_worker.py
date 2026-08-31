@@ -41,7 +41,7 @@ from optimizer import (  # noqa: E402
     collect_enikk_team_dump_compositions,
     prepare_external_references,
 )
-from optimizer.meta_epoch_input import resolve_meta_epoch_input  # noqa: E402
+from optimizer.meta_bounds_input import parse_bounded_meta_evidence  # noqa: E402
 
 AUTO_RUNNER = TEST_DIR / "benchmark_optimizer_same_budget_auto_worker.py"
 
@@ -119,43 +119,9 @@ def _resolved_meta_payload(
     payload: dict[str, Any],
     roster: Sequence[str],
 ) -> tuple[dict[str, Any], dict[str, int]]:
-    """Normalize supported epoch evidence into the legacy explicit ``epochs`` shape.
+    """Normalize supported epoch evidence after strict bounded Meta parsing."""
 
-    Presence of a key counts as choosing that mode: even ``epochs: {}`` together
-    with ``first_availability: []`` or ``change_events: []`` is rejected as
-    ambiguous. First availability and change events intentionally share one
-    registry mode and may be supplied together.
-    """
-
-    parsed = base.parse_meta_evidence(payload)
-    explicit_epochs = parsed["epochs"] if "epochs" in payload else None
-
-    availability_rows = (
-        payload.get("first_availability")
-        if "first_availability" in payload
-        else None
-    )
-    if availability_rows is not None and (
-        not isinstance(availability_rows, list)
-        or not all(isinstance(row, dict) for row in availability_rows)
-    ):
-        raise ValueError("meta.first_availability must be a list of objects")
-
-    event_rows = payload.get("change_events") if "change_events" in payload else None
-    if event_rows is not None and (
-        not isinstance(event_rows, list)
-        or not all(isinstance(row, dict) for row in event_rows)
-    ):
-        raise ValueError("meta.change_events must be a list of objects")
-
-    resolved = resolve_meta_epoch_input(
-        roster,
-        through=parsed["completed_through"],
-        explicit_epochs=explicit_epochs,
-        first_availability_rows=availability_rows,
-        change_event_rows=event_rows,
-        source="benchmark-meta-epoch-input",
-    )
+    parsed = parse_bounded_meta_evidence(payload, roster=roster)
     out = json.loads(json.dumps(payload, ensure_ascii=False))
     out.pop("first_availability", None)
     out.pop("change_events", None)
@@ -170,10 +136,10 @@ def _resolved_meta_payload(
             "source": row.source,
             "reason": row.reason,
         }
-        for name, row in resolved.items()
+        for name, row in parsed.epochs.items()
     }
     counts: dict[str, int] = {}
-    for row in resolved.values():
+    for row in parsed.epochs.values():
         counts[row.knowledge.value] = counts.get(row.knowledge.value, 0) + 1
     return out, counts
 

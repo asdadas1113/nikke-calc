@@ -37,6 +37,7 @@ from optimizer import (  # noqa: E402
     prepare_meta_guided_search_roster,
     run_automatic_anytime_search_round,
 )
+from optimizer.meta_bounds_input import parse_bounded_meta_evidence  # noqa: E402
 from optimizer.same_budget import run_same_budget_comparison  # noqa: E402
 
 
@@ -147,7 +148,10 @@ def main() -> None:
     owned = set(snapshot.roster)
 
     plan = base.load(args.plan)
-    meta = base.parse_meta_evidence(base.load(args.meta))
+    meta = parse_bounded_meta_evidence(
+        base.load(args.meta),
+        roster=snapshot.roster,
+    )
     config = dict(plan.get("config") or {})
     if config.get("rng_mode") not in (None, "expected"):
         raise ValueError("same-budget benchmark requires rng_mode=expected")
@@ -240,17 +244,17 @@ def main() -> None:
     roles = build_burst_role_map(validator, snapshot.roster)
     meta_prepared = prepare_meta_guided_search_roster(
         snapshot.roster,
-        meta["snapshots"],
-        meta["epochs"],
+        meta.snapshots,
+        meta.epochs,
         overload,
         roles,
         demand,
-        schedule=meta["schedule"],
-        completed_through=meta["completed_through"],
-        policy=meta["policy"],
-        restoration_batch_size=meta["restoration_batch_size"],
-        cold_exploration_limit=meta["cold_exploration_limit"],
-        protected_names=meta["protected_names"],
+        schedule=meta.schedule,
+        completed_through=meta.completed_through,
+        policy=meta.policy,
+        restoration_batch_size=meta.restoration_batch_size,
+        cold_exploration_limit=meta.cold_exploration_limit,
+        protected_names=meta.protected_names,
     )
     if not meta_prepared.prepared.structurally_feasible:
         raise ValueError("Meta-guided roster remains structurally infeasible after Cold restoration")
