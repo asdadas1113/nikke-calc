@@ -1,0 +1,54 @@
+name: Optimizer API one-shot migration
+
+on:
+  push:
+    branches:
+      - optimizer-debug-localized-ambiguity-20260831
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.event.head_commit.message == 'ci: migrate legacy benchmark imports'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: optimizer-debug-localized-ambiguity-20260831
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Move historical benchmark to explicit research API
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/benchmark_optimizer_same_budget_account.py')
+          text = path.read_text(encoding='utf-8')
+          replacements = {
+              '"""Strict real-account Pure-vs-Meta benchmark under equal Moris call counts.': '"""Historical research Pure-vs-Meta benchmark under equal Moris call counts.',
+              '    EnikkSeasonUsageSnapshot,': '    ResearchEnikkSeasonUsageSnapshot,',
+              '    prepare_meta_guided_search_roster,': '    research_prepare_meta_guided_search_roster,',
+              'snapshots: list[EnikkSeasonUsageSnapshot] = []': 'snapshots: list[ResearchEnikkSeasonUsageSnapshot] = []',
+              '            EnikkSeasonUsageSnapshot(': '            ResearchEnikkSeasonUsageSnapshot(',
+              '    meta_prepared = prepare_meta_guided_search_roster(': '    meta_prepared = research_prepare_meta_guided_search_roster(',
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f'missing expected text: {old!r}')
+              text = text.replace(old, new, 1)
+          marker = 'uploaded and the script only prints JSON to stdout.\n'
+          note = ('uploaded and the script only prints JSON to stdout.\n\n'
+                  'This file intentionally replays the earlier descriptive Meta evidence format via\n'
+                  'explicit ``Research*``/``research_*`` APIs. It is not a production Cold entry point.\n')
+          if marker not in text:
+              raise SystemExit('missing docstring marker')
+          text = text.replace(marker, note, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add tests/benchmark_optimizer_same_budget_account.py
+          git commit -m 'test: mark legacy same-budget benchmark research-only'
+          git push origin HEAD:optimizer-debug-localized-ambiguity-20260831
