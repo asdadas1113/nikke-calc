@@ -13,13 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Measure score-only retention
-        run: |
-          for n in 50 100 200; do
-            python tests/benchmark_optimizer_cache_memory.py --mode score-only --count "$n"
-          done
-      - name: Measure raw retention
-        run: |
-          for n in 50 100 200; do
-            python tests/benchmark_optimizer_cache_memory.py --mode raw --count "$n"
-          done
+      - name: Measure score-only retention at 500
+        run: python tests/benchmark_optimizer_cache_memory.py --mode score-only --count 500
+      - name: Measure raw retention at 500
+        run: python tests/benchmark_optimizer_cache_memory.py --mode raw --count 500
