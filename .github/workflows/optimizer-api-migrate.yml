@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   migrate:
-    if: github.event.head_commit.message == 'ci: migrate legacy benchmark imports'
+    if: "${{ github.event.head_commit.message == 'ci: run one-shot migration' }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
