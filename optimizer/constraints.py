@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from itertools import combinations
 from pathlib import Path
 
 TeamValidator = Callable[[tuple[str, ...]], bool]
@@ -195,6 +196,92 @@ class BurstStructureValidator:
             missing_stages=definitely_missing,
             uncertain_stages=uncertain,
         )
+
+    def _possible_stages_for(self, name: str) -> frozenset[str] | None:
+        """Return stages this member might satisfy; None means fail-open unknown."""
+
+        meta = self._metadata.get(name)
+        if meta is None:
+            return None
+        if name in self._no_burst_names:
+            return frozenset()
+
+        stage = self._stage_overrides.get(name, meta.stage)
+        possible: set[str] = set(meta.dynamic_stages)
+        if stage == "A":
+            possible.update(_BURST_STAGES)
+        elif stage in _BURST_STAGES:
+            possible.add(stage)
+        return frozenset(possible)
+
+    def can_complete(
+        self,
+        members: Sequence[str],
+        available_roster: Sequence[str],
+        *,
+        team_size: int,
+    ) -> bool:
+        """Whether a partial membership can still satisfy hard burst structure.
+
+        This is a simulation-free *impossibility* test for candidate beams. It is
+        deliberately optimistic: dynamic stage possibilities are treated as
+        available and any unknown metadata fails open. Therefore False means the
+        remaining slots provably cannot cover every required auto-burst stage;
+        True does not claim the completed team will be strong or even ultimately
+        legal under other constraints.
+        """
+
+        partial = tuple(str(name) for name in members)
+        roster = tuple(str(name) for name in available_roster)
+        if team_size <= 0:
+            raise ValueError("team_size must be positive")
+        if len(partial) != len(set(partial)) or len(partial) > team_size:
+            return False
+        if len(roster) != len(set(roster)):
+            raise ValueError("available_roster must contain unique members")
+        if not set(partial) <= set(roster):
+            raise ValueError("partial members must belong to available_roster")
+        if len(roster) < team_size:
+            return False
+        if self._explicit_sequence:
+            return True
+
+        covered: set[str] = set()
+        for name in partial:
+            possible = self._possible_stages_for(name)
+            if possible is None:
+                return True
+            covered.update(possible)
+
+        missing = set(_BURST_STAGES) - covered
+        if not missing:
+            return True
+
+        remaining_slots = team_size - len(partial)
+        if remaining_slots <= 0:
+            return False
+
+        selected = set(partial)
+        providers: list[frozenset[str]] = []
+        for name in roster:
+            if name in selected:
+                continue
+            possible = self._possible_stages_for(name)
+            if possible is None:
+                return True
+            relevant = possible & missing
+            if relevant:
+                providers.append(frozenset(relevant))
+
+        max_take = min(remaining_slots, len(providers))
+        for take in range(1, max_take + 1):
+            for group in combinations(providers, take):
+                supplied: set[str] = set()
+                for stages in group:
+                    supplied.update(stages)
+                if missing <= supplied:
+                    return True
+        return False
 
     def __call__(self, members: tuple[str, ...]) -> bool:
         return self.inspect(members).legal
