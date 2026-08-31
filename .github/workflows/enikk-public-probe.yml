@@ -1,0 +1,112 @@
+name: Enikk public completeness probe
+
+on:
+  pull_request:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Probe public SRRankings shape
+        run: |
+          python - <<'PY'
+          import collections
+          import json
+          import urllib.request
+
+          endpoint = "https://enikk.app/api/graphql"
+          query = "query($raid: Float!) { SRRankings(raid: $raid) { rank playerid server damage cp teams } }"
+
+          def fetch(raid):
+              body = json.dumps({"query": query, "variables": {"raid": raid}}).encode()
+              req = urllib.request.Request(
+                  endpoint,
+                  data=body,
+                  headers={
+                      "Content-Type": "application/json",
+                      "User-Agent": "nikke-calc public completeness probe",
+                  },
+                  method="POST",
+              )
+              with urllib.request.urlopen(req, timeout=60) as response:
+                  payload = json.loads(response.read().decode())
+              if payload.get("errors"):
+                  raise RuntimeError(payload["errors"][:1])
+              return [row for row in (payload.get("data", {}).get("SRRankings") or []) if isinstance(row, dict)]
+
+          for raid in range(33, 41):
+              rows = fetch(raid)
+              ranks = []
+              players = []
+              team_counts = collections.Counter()
+              char_counts = collections.Counter()
+              exact_5x5 = 0
+              duplicate_character_rows = 0
+              malformed_team_rows = 0
+
+              for row in rows:
+                  try:
+                      ranks.append(int(row.get("rank")))
+                  except (TypeError, ValueError):
+                      pass
+                  players.append(str(row.get("playerid")))
+                  teams = row.get("teams")
+                  if not isinstance(teams, list):
+                      team_counts["non-list"] += 1
+                      malformed_team_rows += 1
+                      continue
+                  team_counts[len(teams)] += 1
+                  all_chars = []
+                  exact = len(teams) == 5
+                  for team in teams:
+                      if not isinstance(team, dict):
+                          char_counts["non-object-team"] += 1
+                          exact = False
+                          continue
+                      chars = team.get("characters")
+                      if not isinstance(chars, list):
+                          char_counts["non-list"] += 1
+                          exact = False
+                          continue
+                      char_counts[len(chars)] += 1
+                      all_chars.extend(str(value) for value in chars)
+                      if len(chars) != 5:
+                          exact = False
+                  if len(all_chars) != len(set(all_chars)):
+                      duplicate_character_rows += 1
+                      exact = False
+                  if exact:
+                      exact_5x5 += 1
+
+              rank_counts = collections.Counter(ranks)
+              duplicate_ranks = sum(count - 1 for count in rank_counts.values() if count > 1)
+              duplicate_players = len(players) - len(set(players))
+              min_rank = min(ranks) if ranks else None
+              max_rank = max(ranks) if ranks else None
+              missing_inside = []
+              if min_rank is not None and max_rank is not None:
+                  present = set(ranks)
+                  missing_inside = [rank for rank in range(min_rank, max_rank + 1) if rank not in present]
+              missing_top300 = [rank for rank in range(1, 301) if rank not in set(ranks)]
+
+              print(json.dumps({
+                  "raid": raid,
+                  "rows": len(rows),
+                  "rank_min": min_rank,
+                  "rank_max": max_rank,
+                  "duplicate_ranks": duplicate_ranks,
+                  "missing_inside_count": len(missing_inside),
+                  "missing_top300_count": len(missing_top300),
+                  "duplicate_players": duplicate_players,
+                  "team_count_distribution": dict(sorted(team_counts.items(), key=lambda kv: str(kv[0]))),
+                  "team_character_count_distribution": dict(sorted(char_counts.items(), key=lambda kv: str(kv[0]))),
+                  "exact_5x5_rows": exact_5x5,
+                  "malformed_team_rows": malformed_team_rows,
+                  "duplicate_character_rows": duplicate_character_rows,
+              }, sort_keys=True))
+          PY
