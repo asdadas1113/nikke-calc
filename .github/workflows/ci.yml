@@ -55,6 +55,19 @@ jobs:
       - name: 옵티마이저 단위 테스트
         run: python -m unittest discover -s tests -p 'test_optimizer_*.py'
 
+      # Temporary bridge for running private-account benchmarks locally without
+      # ever uploading the private Worker payload. This source artifact contains
+      # only public repository files and will be removed after local materialization.
+      - name: Pack optimizer source bridge
+        run: tar -czf /tmp/optimizer-source-bridge.tgz calculator optimizer data scraper tests context
+
+      - name: Upload optimizer source bridge
+        uses: actions/upload-artifact@v4
+        with:
+          name: optimizer-source-bridge
+          path: /tmp/optimizer-source-bridge.tgz
+          retention-days: 1
+
       - name: 브리지 스모크 테스트
         working-directory: site
         run: python scripts/test-bridge.py
