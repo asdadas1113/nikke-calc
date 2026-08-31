@@ -56,9 +56,9 @@ class MetaEpochEligibilityTests(unittest.TestCase):
         epoch = MetaEpochEvidence(
             "N",
             MetaEpochKnowledge.KNOWN,
-            date(2026, 3, 1),
+            date(2026, 2, 28),
             "fixture",
-            "major change",
+            "major change before S3",
         )
         snapshots = tuple(snapshot(raid, 1) for raid in range(1, 11))
 
@@ -75,6 +75,34 @@ class MetaEpochEligibilityTests(unittest.TestCase):
         self.assertEqual(result.eligible_post_epoch_raids, tuple(range(3, 11)))
         self.assertEqual(result.inspected_raids, tuple(range(3, 11)))
         self.assertEqual(result.window.peak_usage, 0.01)
+
+    def test_same_day_epoch_is_excluded_when_only_date_precision_is_known(self):
+        epoch = MetaEpochEvidence(
+            "N",
+            MetaEpochKnowledge.KNOWN,
+            date(2026, 3, 1),
+            "fixture",
+            "release/change same calendar day as S3 start",
+        )
+
+        eligible = post_epoch_completed_raids(
+            epoch,
+            schedule(),
+            completed_through=date(2026, 10, 7),
+        )
+        self.assertEqual(eligible, tuple(range(4, 11)))
+
+        result = classify_meta_epoch_usage(
+            "N",
+            tuple(snapshot(raid, 0) for raid in range(1, 11)),
+            epoch=epoch,
+            schedule=schedule(),
+            completed_through=date(2026, 10, 7),
+            policy=POLICY,
+        )
+        self.assertEqual(result.classification, UsageClass.INSUFFICIENT)
+        self.assertEqual(result.reason, "insufficient-completed-post-epoch-raids")
+        self.assertEqual(result.eligible_post_epoch_raids, tuple(range(4, 11)))
 
     def test_change_after_raid_start_excludes_that_raid_and_fails_open_when_short(self):
         epoch = MetaEpochEvidence(
@@ -124,7 +152,7 @@ class MetaEpochEligibilityTests(unittest.TestCase):
         )
 
         self.assertEqual(result.classification, UsageClass.INSUFFICIENT)
-        self.assertEqual(result.eligible_post_epoch_raids, (6, 7, 8, 9, 10))
+        self.assertEqual(result.eligible_post_epoch_raids, (7, 8, 9, 10))
 
     def test_unknown_or_uncertain_epoch_fails_open(self):
         for knowledge in (MetaEpochKnowledge.UNKNOWN, MetaEpochKnowledge.UNCERTAIN):
@@ -145,7 +173,7 @@ class MetaEpochEligibilityTests(unittest.TestCase):
         epoch = MetaEpochEvidence(
             "N",
             MetaEpochKnowledge.KNOWN,
-            date(2026, 3, 1),
+            date(2026, 2, 28),
             "fixture",
         )
         complete_snapshots = tuple(snapshot(raid) for raid in range(1, 11))
@@ -180,7 +208,7 @@ class MetaEpochEligibilityTests(unittest.TestCase):
         epoch = MetaEpochEvidence(
             "N",
             MetaEpochKnowledge.KNOWN,
-            date(2026, 3, 1),
+            date(2026, 2, 28),
             "fixture",
         )
         snapshots = tuple(
@@ -204,7 +232,7 @@ class MetaEpochEligibilityTests(unittest.TestCase):
         epoch = MetaEpochEvidence(
             "N",
             MetaEpochKnowledge.KNOWN,
-            date(2026, 3, 1),
+            date(2026, 2, 28),
             "fixture",
         )
         periods = schedule().periods + (
