@@ -1,4 +1,9 @@
-"""Roster optimizer prototype built around the Moris simulator evaluator."""
+"""Roster optimizer prototype built around the Moris simulator evaluator.
+
+The package-level Meta/Cold API is production-oriented and therefore uses
+certified bounded usage evidence by default.  Descriptive point-estimate helpers
+remain available only through explicit ``Research*`` / ``research_*`` names.
+"""
 
 from .account import (
     AccountSnapshot,
@@ -109,28 +114,43 @@ from .meta_eligibility import (
     MetaUsageDecision,
     SoloRaidPeriod,
     SoloRaidSchedule,
-    classify_meta_epoch_usage,
+    classify_meta_epoch_usage as research_classify_meta_epoch_usage,
     post_epoch_completed_raids,
     to_solo_raid_usage_evidence,
 )
+from .meta_eligibility_bounds import classify_meta_epoch_usage_bounded
 from .meta_policy import (
     MetaGuidedPartitionResult,
     MetaUsageRosterResult,
     PreparedMetaGuidedRoster,
     PreparedMetaGuidedSearchRoster,
-    build_meta_guided_partition,
-    classify_roster_meta_usage,
-    prepare_meta_guided_roster,
-    prepare_meta_guided_search_roster,
+    build_meta_guided_partition as research_build_meta_guided_partition,
+    classify_roster_meta_usage as research_classify_roster_meta_usage,
+    prepare_meta_guided_roster as research_prepare_meta_guided_roster,
+    prepare_meta_guided_search_roster as research_prepare_meta_guided_search_roster,
+)
+from .meta_policy_bounds import (
+    build_meta_guided_partition_bounded,
+    classify_roster_meta_usage_bounded,
+    prepare_meta_guided_roster_bounded,
+    prepare_meta_guided_search_roster_bounded,
 )
 from .meta_usage import (
-    CharacterUsageWindow,
-    EnikkSeasonUsageSnapshot,
+    CharacterUsageWindow as ResearchCharacterUsageWindow,
+    EnikkSeasonUsageSnapshot as ResearchEnikkSeasonUsageSnapshot,
     ExternalNameMapping,
-    SeasonUsageObservation,
-    aggregate_character_window,
+    SeasonUsageObservation as ResearchSeasonUsageObservation,
+    aggregate_character_window as research_aggregate_character_window,
     build_external_name_mapping,
-    summarize_enikk_rankings,
+    summarize_enikk_rankings as research_summarize_enikk_rankings,
+)
+from .meta_usage_bounds import (
+    BoundedCharacterUsageWindow,
+    BoundedSeasonUsageObservation,
+    CertifiedEnikkSeasonUsageSnapshot,
+    RankingCoverageContract,
+    aggregate_bounded_character_window,
+    certify_enikk_rankings,
 )
 from .overload import (
     OverloadKnowledge,
@@ -194,6 +214,13 @@ from .synergy import PairSynergyObservation, PairSynergyProbe, measure_pair_prob
 from .validation import ValidationMetrics, enumerate_legal_teams, run_exhaustive_validation
 from .worker_account import WorkerAccountBundle, build_worker_account_bundle
 
+# Production package-level Meta API: certified bounded evidence only.
+classify_meta_epoch_usage = classify_meta_epoch_usage_bounded
+classify_roster_meta_usage = classify_roster_meta_usage_bounded
+build_meta_guided_partition = build_meta_guided_partition_bounded
+prepare_meta_guided_roster = prepare_meta_guided_roster_bounded
+prepare_meta_guided_search_roster = prepare_meta_guided_search_roster_bounded
+
 __all__ = [
     "AccountSnapshot",
     "AccountSyncAdapter",
@@ -207,6 +234,8 @@ __all__ = [
     "AutomaticPlacementMode",
     "AutomaticSearchResult",
     "AvailabilityKnowledge",
+    "BoundedCharacterUsageWindow",
+    "BoundedSeasonUsageObservation",
     "BudgetedEvaluator",
     "BurstMetadata",
     "BurstStructureReport",
@@ -218,7 +247,7 @@ __all__ = [
     "CandidateMarginalPlan",
     "CandidateMarginalPlanEntry",
     "CandidateTeam",
-    "CharacterUsageWindow",
+    "CertifiedEnikkSeasonUsageSnapshot",
     "ColdDecision",
     "ColdExplorationPick",
     "ColdExplorationPlan",
@@ -227,7 +256,6 @@ __all__ = [
     "CompositionOrderKnowledge",
     "ConstraintSet",
     "CoreSeed",
-    "EnikkSeasonUsageSnapshot",
     "EvaluatedReferencePlacement",
     "Evaluation",
     "EvaluationTimings",
@@ -267,16 +295,19 @@ __all__ = [
     "ProxyView",
     "ProxyViewCandidate",
     "ProxyViewHit",
+    "RankingCoverageContract",
     "ReferenceComposition",
     "ReferenceDiscoveryResult",
     "ReferenceSourceAdaptation",
+    "ResearchCharacterUsageWindow",
+    "ResearchEnikkSeasonUsageSnapshot",
+    "ResearchSeasonUsageObservation",
     "RestorationStep",
     "SameBudgetComparison",
     "SearchBudget",
     "SearchBudgetExhausted",
     "SearchRunMetrics",
     "SearchStageCalls",
-    "SeasonUsageObservation",
     "SeedCandidate",
     "SeedSelection",
     "SeedSourceAdaptation",
@@ -295,7 +326,7 @@ __all__ = [
     "WorkerAccountBundle",
     "adapt_external_compositions",
     "adapt_external_reference_compositions",
-    "aggregate_character_window",
+    "aggregate_bounded_character_window",
     "all_permutation_placements",
     "balanced_placement_order",
     "build_burst_role_map",
@@ -303,11 +334,15 @@ __all__ = [
     "build_external_hypothesis_plan",
     "build_external_name_mapping",
     "build_meta_guided_partition",
+    "build_meta_guided_partition_bounded",
     "build_planned_marginal_prefix_views",
     "build_worker_account_bundle",
+    "certify_enikk_rankings",
     "check_structural_feasibility",
     "classify_meta_epoch_usage",
+    "classify_meta_epoch_usage_bounded",
     "classify_roster_meta_usage",
+    "classify_roster_meta_usage_bounded",
     "collect_enikk_sr_compositions",
     "collect_enikk_team_dump_compositions",
     "completed_raids_after_first_positive",
@@ -338,8 +373,17 @@ __all__ = [
     "post_epoch_completed_raids",
     "prepare_external_references",
     "prepare_meta_guided_roster",
+    "prepare_meta_guided_roster_bounded",
     "prepare_meta_guided_search_roster",
+    "prepare_meta_guided_search_roster_bounded",
     "reorder_candidate_marginal_plan",
+    "research_aggregate_character_window",
+    "research_build_meta_guided_partition",
+    "research_classify_meta_epoch_usage",
+    "research_classify_roster_meta_usage",
+    "research_prepare_meta_guided_roster",
+    "research_prepare_meta_guided_search_roster",
+    "research_summarize_enikk_rankings",
     "restore_cold_until_feasible",
     "run_automatic_anytime_search_round",
     "run_anytime_search_round",
@@ -349,7 +393,6 @@ __all__ = [
     "select_global_allocation",
     "select_proxy_view_candidates",
     "select_seed_candidates",
-    "summarize_enikk_rankings",
     "teams_are_disjoint",
     "to_solo_raid_usage_evidence",
 ]
