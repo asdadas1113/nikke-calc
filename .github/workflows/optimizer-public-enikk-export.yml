@@ -44,7 +44,7 @@ jobs:
           ranking_query = '''query($raid: Float!) {
             SRRankings(raid: $raid) { rank playerid server damage cp teams }
           }'''
-          for raid in range(33, 41):
+          for raid in range(21, 41):
               rankings[str(raid)] = query(ranking_query, {'raid': raid})['SRRankings']
 
           out = {
@@ -54,12 +54,12 @@ jobs:
               'rankings': rankings,
           }
           Path('/tmp/enikk-public').mkdir(parents=True, exist_ok=True)
-          Path('/tmp/enikk-public/enikk-public-s33-s40.json').write_text(
+          Path('/tmp/enikk-public/enikk-public-s21-s40.json').write_text(
               json.dumps(out, ensure_ascii=False, indent=2), encoding='utf-8'
           )
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: optimizer-public-enikk-s33-s40
-          path: /tmp/enikk-public/enikk-public-s33-s40.json
+          name: optimizer-public-enikk-s21-s40
+          path: /tmp/enikk-public/enikk-public-s21-s40.json
           retention-days: 1
