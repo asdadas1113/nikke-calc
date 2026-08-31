@@ -50,6 +50,21 @@ class WorkerPolicySweepRunnerTests(unittest.TestCase):
             AutomaticPlacementMode.CANONICAL_ONLY,
         )
 
+    def test_structural_diverse_mode_is_explicitly_selectable(self):
+        policies = RUNNER.parse_policy_variants(
+            {
+                "policy_variants": {
+                    "canonical": variant(),
+                    "diverse": variant(placement_mode="structural-diverse"),
+                }
+            },
+            team_size=5,
+        )
+        self.assertEqual(
+            policies["diverse"].placement_mode,
+            AutomaticPlacementMode.STRUCTURAL_DIVERSE,
+        )
+
     def test_requires_at_least_two_variants(self):
         with self.assertRaisesRegex(ValueError, "at least two"):
             RUNNER.parse_policy_variants(
