@@ -74,6 +74,7 @@ class CertifiedUsageTests(unittest.TestCase):
         obs = snapshot.observe("리타")
         self.assertTrue(snapshot.fully_complete)
         self.assertEqual(snapshot.uncertain_player_slots, 0)
+        self.assertEqual(snapshot.ambiguous_player_slots, {})
         self.assertEqual(obs.lower_fraction, 0.5)
         self.assertEqual(obs.upper_fraction, 0.5)
 
@@ -125,8 +126,31 @@ class CertifiedUsageTests(unittest.TestCase):
             contract=contract(),
         )
         self.assertEqual(snapshot.mapping_uncertain_player_slots, 1)
+        self.assertEqual(snapshot.ambiguous_player_slots, {})
         self.assertEqual(snapshot.unknown_external_names, ("Mystery",))
         self.assertEqual(snapshot.observe("리타").upper_fraction, 0.25)
+
+    def test_known_ambiguous_label_only_uncertain_for_possible_candidates(self):
+        ambiguous = row("JP", 2, "j2", ("Rei", "Crown", "Alice", "A", "B"))
+        snapshot = certify_enikk_rankings(
+            39,
+            (
+                row("GLOBAL", 1, "g1", ("Crown", "Alice", "A", "B", "C")),
+                row("GLOBAL", 2, "g2", ("Crown", "Alice", "A", "B", "C")),
+                row("JP", 1, "j1", ("Crown", "Alice", "A", "B", "C")),
+                ambiguous,
+            ),
+            NAME_MAP,
+            contract=contract(),
+            ambiguous_name_map={"Rei": ("라이", "레이")},
+        )
+        self.assertEqual(snapshot.mapping_uncertain_player_slots, 0)
+        self.assertEqual(snapshot.ambiguous_player_slots, {"라이": 1, "레이": 1})
+        self.assertEqual(snapshot.unknown_external_names, ("Rei",))
+        self.assertEqual(snapshot.observe("리타").upper_fraction, 0.0)
+        self.assertEqual(snapshot.observe("라이").lower_fraction, 0.0)
+        self.assertEqual(snapshot.observe("라이").upper_fraction, 0.25)
+        self.assertEqual(snapshot.observe("레이").upper_fraction, 0.25)
 
     def test_unmapped_target_never_gets_bounds(self):
         snapshot = certify_enikk_rankings(
