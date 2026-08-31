@@ -16,6 +16,15 @@
 - `worker/`: 블라블라링크 조회 프록시 (Cloudflare Workers). 사이트와 따로 배포합니다
 - `.github/workflows/pages.yml`: 테스트, 빌드, GitHub Pages 배포 자동화
 
+## 로스터 옵티마이저 개발
+
+로스터 기반 솔로레이드 5덱 옵티마이저와 별도 Fast Engine 연구는 `master`와 분리된 실험 작업입니다. 현재 방향·검증된 사실·로컬 미커밋 상태·향후 로드맵은 다음 문서를 정본으로 사용합니다.
+
+- [`docs/OPTIMIZER_PROJECT_STATE.md`](docs/OPTIMIZER_PROJECT_STATE.md) — 현재 프로젝트 상태와 Fast Engine/Moris 역할 분담
+- [`docs/README.md`](docs/README.md) — 옵티마이저 문서 인덱스와 과거 실험 문서 안내
+
+과거 옵티마이저 문서와 현재 방향이 충돌하면 `OPTIMIZER_PROJECT_STATE.md`를 우선합니다. 옵티마이저 실험을 `master`에 암묵적으로 합치지 않습니다.
+
 ## 주요 기능
 
 - 캐릭터별 오버로드·하모니 큐브(17종)·소장품/애장품·스킬 레벨·한계돌파·컨트롤 개별 설정
