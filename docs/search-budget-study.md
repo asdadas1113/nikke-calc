@@ -99,6 +99,26 @@ adjacent-ally position-sensitive exception character. None of the calls that
 improved the final total contained that character, so the marginal placement
 benefit above is not attributed to that exception case.
 
+## Rejected naive exposure decoupling
+
+The width result suggested that membership breadth and placement exposure might be
+coupled too tightly, so a score-blind scheduler experiment kept the full `1x`
+membership universe but split its ordered candidates into two categories:
+
+- first placement of a newly seen membership;
+- additional placement of an already seen membership.
+
+A naive 1:1 category round-robin moved the first later placement improvement from
+call 30 to call 25, but it also delayed the first complete five-team allocation
+from call 7 to call 11. A second variant forced new memberships until five disjoint
+membership sets were structurally available and only then switched to 1:1; it
+still did not outperform the simpler 1/4x width policy.
+
+Conclusion: do **not** add a new membership/placement scheduler from this evidence.
+The simpler explicit width policy currently dominates the tested extra
+complexity. Revisit decoupling only after a new failure shows that width control is
+insufficient.
+
 ## Transfer check on ordinary memberships
 
 To avoid basing placement conclusions on the position-sensitive exception fixture,
