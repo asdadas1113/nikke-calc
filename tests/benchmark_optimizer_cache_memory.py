@@ -2,13 +2,13 @@
 
 This benchmark uses the real ``SimResult`` and ``HitEvent`` payload classes but an
 injected simulator so the measurement isolates optimizer-cache retention rather
-than combat CPU.  ``hits-per-result=19195`` matches the previously observed
+than combat CPU. ``hits-per-result=19195`` matches the previously observed
 180-second benchmark payload size in docs/BENCHMARK.md.
 
-Each CLI invocation must run in a fresh process.  ``score-only`` still constructs
-one full SimResult per evaluation, then immediately replaces only the cached entry
-with an equivalent Evaluation whose ``raw`` field is None.  Its peak/current RSS
-therefore includes normal one-result transient cost but not N-result retention.
+Each CLI invocation must run in a fresh process. Both modes still construct one
+full SimResult per evaluation. ``score-only`` exercises the production default
+``retain_raw=False``; ``raw`` opts into diagnostic retention with
+``retain_raw=True``.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ import gc
 import json
 import resource
 import sys
-from dataclasses import replace
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -88,19 +87,17 @@ def main() -> None:
         simulate,
         cache_identity=CacheIdentity("cache-memory-benchmark", "synthetic-account"),
         use_cache=True,
+        retain_raw=args.mode == "raw",
     )
 
     gc.collect()
     rss_start = _rss_kib()
     for i in range(args.count):
         result = evaluator.evaluate(("A", f"B{i}"))
-        if args.mode == "score-only":
-            # Deliberately benchmark the storage policy without changing
-            # MorisEvaluator yet. Dict insertion order makes this the entry just
-            # created by the evaluate() call above.
-            key = next(reversed(evaluator._cache))
-            cached = evaluator._cache[key]
-            evaluator._cache[key] = replace(cached, raw=None)
+        if args.mode == "score-only" and result.raw is not None:
+            raise AssertionError("score-only evaluator unexpectedly retained raw result")
+        if args.mode == "raw" and result.raw is None:
+            raise AssertionError("raw evaluator did not retain raw result")
         result = None
     gc.collect()
 
