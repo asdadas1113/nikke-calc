@@ -112,9 +112,37 @@ used by itself to promote structural slot diversity for ordinary squads. This is
 exactly the kind of transfer risk that forbids promoting one ordering from
 intuition alone.
 
+## First shared-marginal equal-call smoke
+
+A later 20-second real-account smoke compared the three placement modes after one
+shared 114-call marginal phase. Discovery widths were held fixed and each policy
+received exactly **11 new candidate-team Moris calls**.
+
+Observed five-team totals:
+
+- `canonical-only`: **628.34M**
+- `all-permutations` raw order: **628.34M**
+- `structural-diverse`: **654.91M**
+- `structural-diverse` vs canonical/raw: about **+4.23%**
+
+The gain came from a different ordered placement of the same non-position-
+sensitive membership: the selected squad improved from about **320.28M** to
+**346.85M** while the other four selected squads were unchanged.
+
+The watched adjacent-ally character appeared in exactly one evaluated candidate
+for each policy, but was **not selected in any final five-team allocation**.
+Therefore this particular +4.23% result is not attributed to the position-
+sensitive exception fixture. The exception evidence is still kept separate and
+must not be used to justify general absolute-slot widening.
+
+This is positive transfer evidence for `structural-diverse`, not enough evidence
+to make it the default. More memberships, bosses, durations, and candidate-call
+budgets are still required.
+
 ## Next benchmark
 
-Compare `canonical-only`, `all-permutations`, and `structural-diverse` using:
+Continue comparing `canonical-only`, `all-permutations`, and
+`structural-diverse` using:
 
 - the same account snapshot;
 - the same boss/config and expected RNG;
@@ -123,8 +151,9 @@ Compare `canonical-only`, `all-permutations`, and `structural-diverse` using:
 - the same exact non-overlapping final allocator.
 
 Primary metric remains final five-team Moris damage. Also record candidate-call
-allocation, cheap discovery runtime, and whether additional ordered variants
-actually change the selected five-team allocation.
+allocation, cheap discovery runtime, whether additional ordered variants actually
+change the selected five-team allocation, and whether a position-sensitive
+exception fixture participated in the evidence.
 
 When interpreting placement results, report position-sensitive fixtures separately
 from ordinary fixtures. A material position-sensitive effect should be carried
