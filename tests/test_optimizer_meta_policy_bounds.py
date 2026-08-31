@@ -50,6 +50,7 @@ def snapshots():
             missing_player_slots=2,
             malformed_player_slots=0,
             mapping_uncertain_player_slots=0,
+            ambiguous_player_slots={},
             player_appearances={"B": 2, "C": 4},
             mapped_characters=frozenset({"A", "B", "C"}),
             unknown_external_names=(),
