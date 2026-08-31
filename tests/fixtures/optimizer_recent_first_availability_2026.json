@@ -1,0 +1,88 @@
+{
+  "description": "Public 2026 first-availability evidence used only for meta-epoch eligibility regression tests. This is not a strength tier, usage score, or production-complete release registry.",
+  "first_availability": [
+    {
+      "character": "네온 : 비전 아이",
+      "knowledge": "known",
+      "available_from": "2026-04-30",
+      "mechanism": "special-recruit",
+      "source": "https://nikke.gg/april-23-update-patchnotes/"
+    },
+    {
+      "character": "민트",
+      "knowledge": "known",
+      "available_from": "2026-05-14",
+      "mechanism": "special-recruit",
+      "source": "https://nikkers.cc/updates/2026-05-14"
+    },
+    {
+      "character": "아크레인저 블랙",
+      "knowledge": "known",
+      "available_from": "2026-06-11",
+      "mechanism": "special-recruit",
+      "source": "https://nikkers.cc/updates/2026-06-11"
+    },
+    {
+      "character": "신데렐라 : 크리스탈 웨이브",
+      "knowledge": "known",
+      "available_from": "2026-07-02",
+      "mechanism": "limited-time-recruit",
+      "source": "https://nikkers.cc/updates/2026-07-02"
+    },
+    {
+      "character": "마르차나 : 마린 스터디",
+      "knowledge": "known",
+      "available_from": "2026-07-09",
+      "mechanism": "limited-time-recruit",
+      "source": "https://nikkers.cc/updates/2026-07-02"
+    },
+    {
+      "character": "라플라스 : 얼티밋 히어로",
+      "knowledge": "known",
+      "available_from": "2026-07-23",
+      "mechanism": "special-recruit",
+      "source": "https://nikkers.cc/updates/2026-07-23"
+    },
+    {
+      "character": "맥스웰 : 오디너리 미케닉",
+      "knowledge": "known",
+      "available_from": "2026-07-30",
+      "mechanism": "special-recruit",
+      "source": "https://nikkers.cc/updates/2026-07-23"
+    },
+    {
+      "character": "퀸(마코토)",
+      "knowledge": "known",
+      "available_from": "2026-08-13",
+      "mechanism": "limited-time-recruit",
+      "source": "https://nikkers.cc/updates/2026-08-13"
+    },
+    {
+      "character": "유키코",
+      "knowledge": "known",
+      "available_from": "2026-08-20",
+      "mechanism": "limited-time-recruit",
+      "source": "https://nikkers.cc/updates/2026-08-13"
+    }
+  ],
+  "normal_solo_raid_periods": [
+    {
+      "raid": 38,
+      "start_on": "2026-06-18",
+      "end_on": "2026-06-25",
+      "source": "https://nikkers.cc/updates/2026-06-11"
+    },
+    {
+      "raid": 39,
+      "start_on": "2026-07-16",
+      "end_on": "2026-07-23",
+      "source": "https://nikkers.cc/updates/2026-07-02"
+    },
+    {
+      "raid": 40,
+      "start_on": "2026-08-20",
+      "end_on": "2026-08-27",
+      "source": "https://nikkers.cc/updates/2026-08-13"
+    }
+  ]
+}
