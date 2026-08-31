@@ -13,6 +13,7 @@
   접근권)와 함께 어떤 경우에도 커밋 대상에 올리지 않는다. 만드는 건 `profile-sync` skill뿐이다.
 - `context/baseline/`의 golden snapshot은 손으로 편집하지 않는다.
 - 공용 skill의 정본은 `.agent/skills/`다. `.claude/skills/`는 호환 진입점일 뿐이다.
+- 로스터 옵티마이저/Fast Engine 실험은 `master`에 암묵적으로 합치지 않는다. 현재 방향의 정본은 `docs/OPTIMIZER_PROJECT_STATE.md`다.
 
 ## Context routing
 
@@ -28,10 +29,24 @@
 | 기본 스펙·회귀 운영 | `context/HARNESS.md` |
 | 게임 메커니즘 | `context/GAMEPLAY.md`의 관련 절만 |
 | 캐릭터별 사이클·검증 또는 메커니즘 조사 | 해당 `context/scenarios/*.md`가 있을 때만 |
+| 로스터 옵티마이저·Fast Engine 현재 상태/로드맵 | `docs/OPTIMIZER_PROJECT_STATE.md` |
+| 과거 옵티마이저 실험 상세/문서 목록 | `docs/README.md`에서 필요한 문서만 선택 |
 
 `GAMEPLAY.md`는 전체 통독하지 않는다. 편성은 `§스쿼드 구성`, 사이클은
 `§버스트 쿨타임 감소`·`§풀버스트 사이클`, 파싱은 `§트리거 발동 의미`,
 컨트롤은 요약만 읽고 상세는 `CONTROL.md`를 쓴다.
+
+## Optimizer / Fast Engine invariants
+
+옵티마이저 또는 Fast Engine 작업을 시작하면 먼저 `docs/OPTIMIZER_PROJECT_STATE.md`를 읽는다. 과거 실험 문서와 충돌하면 그 문서의 현재 결정을 우선한다.
+
+- Moris는 최종 대미지 authority다.
+- Fast Engine은 정적 180초 대상에서 광범위 후보를 고속 screening하는 별도 runtime이다.
+- Fast의 정적 적 입력은 DEF·속성·코어 기대 노출률을 포함하며, 보스 패턴 시간축은 초기 범위에서 제외한다.
+- 지원하지 않는 Fast primitive/effect는 0이나 추정값으로 조용히 처리하지 않고 Moris fallback으로 보낸다.
+- Meta/Cold/투자도 신호는 탐색 우선순위에만 쓰며 대미지를 수정하지 않는다.
+- 최종 5팀 선택은 Moris로 점수화된 후보 풀에서 캐릭터 중복 없는 exact allocation을 사용한다.
+- GitHub에 커밋된 상태와 로컬 실험 산출물을 구분해서 보고한다.
 
 ## Character names
 
