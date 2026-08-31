@@ -42,17 +42,18 @@ from optimizer import (  # noqa: E402
     CandidateTeam,
     MorisEvaluator,
     SearchBudget,
-    all_permutation_placements,
     build_planned_marginal_prefix_views,
     build_worker_account_bundle,
     generate_multi_view_candidate_discovery,
-    identity_placement,
     measure_planned_marginals_with_candidates,
     plan_candidate_specific_marginals,
     select_global_allocation,
     select_proxy_view_candidates,
 )
-from optimizer.automatic_search import AutomaticPlacementMode  # noqa: E402
+from optimizer.automatic_search import (  # noqa: E402
+    AutomaticPlacementMode,
+    _placement_expander as automatic_placement_expander,
+)
 
 
 Team = tuple[str, ...]
@@ -89,12 +90,10 @@ def _interleave_team_channels(*channels: tuple[Team, ...]) -> tuple[Team, ...]:
     return tuple(out)
 
 
-def _placement_expander(mode: AutomaticPlacementMode):
-    if mode is AutomaticPlacementMode.CANONICAL_ONLY:
-        return identity_placement
-    if mode is AutomaticPlacementMode.ALL_PERMUTATIONS:
-        return all_permutation_placements
-    raise ValueError(f"unsupported placement mode: {mode}")
+def _placement_expander(mode: AutomaticPlacementMode, legal):
+    """Use the exact automatic-search placement semantics in this benchmark."""
+
+    return automatic_placement_expander(mode, legal)
 
 
 def _common_candidate_map(measurement) -> dict[Team, CandidateTeam]:
@@ -157,7 +156,7 @@ def run_policy_after_common_marginal(
         allocation_beam_width=policy.allocation_beam_width,
         allocation_limit=policy.allocation_limit,
         legal=legal,
-        placement_expander=_placement_expander(policy.placement_mode),
+        placement_expander=_placement_expander(policy.placement_mode, legal),
         partial_viable=partial_viable,
     )
     proxy_rows = select_proxy_view_candidates(
