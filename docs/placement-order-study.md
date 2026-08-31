@@ -11,6 +11,19 @@ Placement heuristics may only decide **which ordered variants Moris sees first**
 They never add a damage bonus, replace Moris damage, or declare one placement
 stronger without simulation.
 
+A second guardrail applies to explicitly position-sensitive characters. Evidence
+from a squad containing a character whose skill targets adjacent/leftmost/etc.
+allies is treated as **exception evidence**, not as proof that every ordinary
+squad needs the same degree of absolute-slot exploration. The current adjacent-
+ally fixture is retained for later exception-policy design, but it must not by
+itself justify changing the general placement algorithm.
+
+For now this is an interpretation rule only. The optimizer does not contain a
+character-name special case, does not award any position-sensitive bonus, and
+does not automatically widen search because a particular character is present.
+If later benchmarks show a material benefit, a generic metadata-driven exception
+policy can be designed separately.
+
 ## Why canonical-only is unsafe
 
 A short 2-second real-account smoke initially made several permutations of the
@@ -49,13 +62,16 @@ Observed aggregate result:
 - maximum: about **129.82M**
 - spread: about **+2.25%**
 
-Therefore placements sharing the same burst-priority order are not generally
-interchangeable. Moris also contains order-sensitive target resolution such as
-adjacent allies, first-N allies, leftmost filters, and stable squad-order tie
-breaking.
+This result is deliberately classified as **position-sensitive exception
+evidence**. It proves that burst-relative order is not an exact equivalence
+relation, but it does **not** prove that ordinary squads without position-sensitive
+targeting need the same absolute-slot search budget.
 
-Conclusion: burst-relative order is useful exploration structure, not an exact
-placement equivalence relation.
+Moris contains order-sensitive target resolution such as adjacent allies,
+first-N allies, leftmost filters, and stable squad-order tie breaking. Later
+exception work should first identify those mechanics generically from simulator
+metadata/skill structure, then benchmark whether extra placement exposure pays
+for itself. Do not infer a global placement rule from this one fixture.
 
 ## Failure-driven candidate: structural-diverse ordering
 
@@ -87,12 +103,14 @@ Offline replay of the 20-second exhaustive results showed both sides:
 
 - on the first fixture, canonical order already happened to be almost optimal, so
   raw permutation order was marginally better at several tiny budgets;
-- on the positional fixture with fixed burst priority, raw order needed about ten
-  variants to reach the near-optimal placement, while maximin slot diversity
-  reached a 99.998% placement by the fourth variant.
+- on the position-sensitive fixture with fixed burst priority, raw order needed
+  about ten variants to reach the near-optimal placement, while maximin slot
+  diversity reached a 99.998% placement by the fourth variant.
 
-This is exactly the kind of transfer failure that forbids promoting one ordering
-from intuition alone.
+The second bullet is retained as an exception-case diagnostic only. It must not be
+used by itself to promote structural slot diversity for ordinary squads. This is
+exactly the kind of transfer risk that forbids promoting one ordering from
+intuition alone.
 
 ## Next benchmark
 
@@ -107,3 +125,8 @@ Compare `canonical-only`, `all-permutations`, and `structural-diverse` using:
 Primary metric remains final five-team Moris damage. Also record candidate-call
 allocation, cheap discovery runtime, and whether additional ordered variants
 actually change the selected five-team allocation.
+
+When interpreting placement results, report position-sensitive fixtures separately
+from ordinary fixtures. A material position-sensitive effect should be carried
+forward as evidence for a later generic exception policy, not folded into the
+ordinary-placement conclusion.
