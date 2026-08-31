@@ -1,0 +1,160 @@
+ 
+     max_depth = max((len(entry.positions) for entry in plan.entries), default=0)
+     for depth in range(max_depth):
++        probes = []
+         for entry in plan.entries:
+             if depth >= len(entry.positions) or entry.reference not in baselines:
+                 continue
+@@ -272,24 +283,28 @@
+             trial = list(entry.reference)
+             replaced = trial[index]
+             trial[index] = entry.candidate
+-            trial_tuple = tuple(trial)
+-            try:
+-                score = evaluate(trial_tuple, "marginal-trial")
+-            except SearchBudgetExhausted:
+-                budget_exhausted = True
+-                continue
+-            evaluated_probes += 1
+-            obs = MarginalObservation(
+-                candidate=entry.candidate,
+-                reference=entry.reference,
+-                replaced=replaced,
+-                baseline_score=baselines[entry.reference],
+-                trial_score=score,
+-            )
+-            context = (entry.candidate, entry.reference)
+-            previous = best_by_context.get(context)
+-            if previous is None or obs.delta > previous.delta:
+-                best_by_context[context] = obs
++            probes.append((entry, replaced, tuple(trial)))
++
++        for batch in batches(probes):
++            teams = tuple(row[2] for row in batch)
++            results = evaluator.evaluate_batch(teams, **kwargs)
++            for (entry, replaced, trial_tuple), result in zip(batch, results):
++                if result is None:
++                    budget_exhausted = True
++                    continue
++                score = record(trial_tuple, "marginal-trial", result)
++                evaluated_probes += 1
++                obs = MarginalObservation(
++                    candidate=entry.candidate,
++                    reference=entry.reference,
++                    replaced=replaced,
++                    baseline_score=baselines[entry.reference],
++                    trial_score=score,
++                )
++                context = (entry.candidate, entry.reference)
++                previous = best_by_context.get(context)
++                if previous is None or obs.delta > previous.delta:
++                    best_by_context[context] = obs
+ 
+     observations: dict[str, list[MarginalObservation]] = {
+         entry.candidate: [] for entry in plan.entries
+--- a/optimizer/anytime.py
++++ b/optimizer/anytime.py
+@@ -209,6 +209,11 @@
+     )
+ 
+ 
++def _batches(rows: Sequence, size: int):
++    for index in range(0, len(rows), size):
++        yield rows[index : index + size]
++
++
+ def run_anytime_search_round(
+     evaluator: MorisEvaluator,
+     *,
+@@ -236,6 +241,7 @@
+     seed_roster: Sequence[str] | None = None,
+     seed_candidate_teams: Iterable[Sequence[str]] | None = None,
+     evaluate_kwargs: dict | None = None,
++    evaluation_batch_size: int = 1,
+ ) -> AnytimeSearchResult:
+     """Spend one explicit simulate-call budget without hidden strength bonuses.
+ 
+@@ -271,6 +277,8 @@
+         raise ValueError("seed_max_per_core must be non-negative")
+     if refinement_max_new < 0:
+         raise ValueError("refinement_max_new must be non-negative")
++    if evaluation_batch_size <= 0:
++        raise ValueError("evaluation_batch_size must be positive")
+     if refinement_max_new and not refinement_incoming:
+         raise ValueError(
+             "refinement_incoming must be explicit when refinement_max_new is positive"
+@@ -280,23 +288,26 @@
+     budgeted = BudgetedEvaluator(evaluator, budget)
+     candidates: dict[Team, CandidateTeam] = {}
+ 
+-    for item in prior_candidates:
++    prior_rows = tuple(prior_candidates)
++    for item in prior_rows:
+         team = tuple(item.members)
+         if legal is not None and not legal(team):
+             raise ValueError(f"prior candidate is hard-illegal: {team}")
+-        try:
+-            result = budgeted.evaluate(team, **kwargs)
+-        except SearchBudgetExhausted:
+-            continue
+-        _merge_candidate(
+-            candidates,
+-            CandidateTeam(
+-                members=team,
+-                proxy_score=item.proxy_score,
+-                simulated_score=result.score,
+-                source=item.source,
+-            ),
+-        )
++    for batch in _batches(prior_rows, evaluation_batch_size):
++        teams = tuple(tuple(item.members) for item in batch)
++        results = budgeted.evaluate_batch(teams, **kwargs)
++        for item, team, result in zip(batch, teams, results):
++            if result is None:
++                continue
++            _merge_candidate(
++                candidates,
++                CandidateTeam(
++                    members=team,
++                    proxy_score=item.proxy_score,
++                    simulated_score=result.score,
++                    source=item.source,
++                ),
++            )
+ 
+     marginal_before = budgeted.used_simulate_calls
+     plan = plan_candidate_specific_marginals(
+@@ -316,6 +327,7 @@
+         marginal_evaluator,
+         plan,
+         evaluate_kwargs=kwargs,
++        evaluation_batch_size=evaluation_batch_size,
+     )
+     for item in marginal.evaluated_candidates:
+         _merge_candidate(candidates, item)
+@@ -402,22 +414,23 @@
+     candidate_before = budgeted.used_simulate_calls
+     candidate_attempted = 0
+     candidate_evaluated = 0
+-    for team, proxy_score, source in selected:
+-        candidate_attempted += 1
+-        try:
+-            result = budgeted.evaluate(team, **kwargs)
+-        except SearchBudgetExhausted:
+-            continue
+-        candidate_evaluated += 1
+-        _merge_candidate(
+-            candidates,
+-            CandidateTeam(
+-                members=team,
+-                proxy_score=proxy_score,
+-                simulated_score=result.score,
+-                source=source,
+-            ),
+-        )
++    for batch in _batches(selected, evaluation_batch_size):
++        candidate_attempted += len(batch)
++        teams = tuple(row[0] for row in batch)
++        results = budgeted.evaluate_batch(teams, **kwargs)
++        for (team, proxy_score, source), result in zip(batch, results):
++            if result is None:
