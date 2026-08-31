@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -13,6 +14,7 @@ RUNNER_PATH = ROOT / "tests" / "benchmark_optimizer_transfer_set.py"
 SPEC = importlib.util.spec_from_file_location("benchmark_optimizer_transfer_set", RUNNER_PATH)
 RUNNER = importlib.util.module_from_spec(SPEC)
 assert SPEC is not None and SPEC.loader is not None
+sys.modules[SPEC.name] = RUNNER
 SPEC.loader.exec_module(RUNNER)
 
 
