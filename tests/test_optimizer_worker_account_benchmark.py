@@ -17,10 +17,10 @@ class WorkerAccountBenchmarkTests(unittest.TestCase):
     def test_skill_investment_is_aggregate_context_not_strength_score(self):
         profile = {
             "chars": {
-                "A": {"skill1_lv": 10, "skill2_lv": 10, "ulti_skill_lv": 10},
-                "B": {"skill1_lv": 7, "skill2_lv": 8, "ulti_skill_lv": 9},
-                "C": {"skill1_lv": 4, "skill2_lv": 4, "ulti_skill_lv": 4},
-                "D": {"skill1_lv": 1, "skill2_lv": 1, "ulti_skill_lv": 1},
+                "A": {"skill_levels": {"1": 10, "2": 10, "3": 10}},
+                "B": {"skill_levels": {"1": 7, "2": 8, "3": 9}},
+                "C": {"skill_levels": {"1": 4, "2": 4, "3": 4}},
+                "D": {"skill_levels": {"1": 1, "2": 1, "3": 1}},
             }
         }
         result = RUNNER.summarize_skill_investment(profile)
@@ -31,6 +31,10 @@ class WorkerAccountBenchmarkTests(unittest.TestCase):
         self.assertEqual(result["skill_level_sum_distribution"], {"3": 1, "12": 1, "24": 1, "30": 1})
         self.assertNotIn("score", result)
         self.assertNotIn("priority", result)
+
+    def test_missing_normalized_skill_levels_fail_loudly(self):
+        with self.assertRaisesRegex(ValueError, "normalized skill_levels"):
+            RUNNER.summarize_skill_investment({"chars": {"A": {}}})
 
 
 if __name__ == "__main__":
