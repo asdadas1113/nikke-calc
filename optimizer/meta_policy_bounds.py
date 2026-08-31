@@ -2,7 +2,7 @@
 
 This module mirrors ``meta_policy`` but requires
 ``CertifiedEnikkSeasonUsageSnapshot`` inputs and the conservative bounded
-classifier.  Keeping the path explicit prevents legacy/descriptive ranking
+classifier. Keeping the path explicit prevents legacy/descriptive ranking
 snapshots from accidentally becoming production zero-usage evidence.
 """
 
@@ -12,9 +12,6 @@ from collections.abc import Mapping, Sequence
 from datetime import date
 
 from .cold_exploration import plan_cold_exploration
-from .cold_pool import (
-    OverloadPieceEvidence,  # type: ignore[attr-defined]
-)
 from .cold_pool import (
     StructuralDemand,
     partition_meta_guided_roster,
