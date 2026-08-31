@@ -1,0 +1,25 @@
+name: Optimizer cache memory benchmark
+
+on:
+  push:
+    branches:
+      - optimizer-debug-localized-ambiguity-20260831
+
+jobs:
+  memory:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Measure score-only retention
+        run: |
+          for n in 50 100 200; do
+            python tests/benchmark_optimizer_cache_memory.py --mode score-only --count "$n"
+          done
+      - name: Measure raw retention
+        run: |
+          for n in 50 100 200; do
+            python tests/benchmark_optimizer_cache_memory.py --mode raw --count "$n"
+          done
