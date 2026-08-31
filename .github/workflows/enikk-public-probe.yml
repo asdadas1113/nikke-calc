@@ -43,6 +43,7 @@ jobs:
               rows = fetch(raid)
               ranks = []
               players = []
+              server_ranks = collections.defaultdict(list)
               team_counts = collections.Counter()
               char_counts = collections.Counter()
               exact_5x5 = 0
@@ -50,8 +51,11 @@ jobs:
               malformed_team_rows = 0
 
               for row in rows:
+                  server = str(row.get("server"))
                   try:
-                      ranks.append(int(row.get("rank")))
+                      rank = int(row.get("rank"))
+                      ranks.append(rank)
+                      server_ranks[server].append(rank)
                   except (TypeError, ValueError):
                       pass
                   players.append(str(row.get("playerid")))
@@ -83,26 +87,37 @@ jobs:
                   if exact:
                       exact_5x5 += 1
 
+              server_coverage = {}
+              expected_slots = set()
+              present_slots = set()
+              for server, values in sorted(server_ranks.items()):
+                  counts = collections.Counter(values)
+                  missing = [rank for rank in range(1, 51) if rank not in counts]
+                  duplicate = sum(count - 1 for count in counts.values() if count > 1)
+                  server_coverage[server] = {
+                      "rows": len(values),
+                      "min": min(values) if values else None,
+                      "max": max(values) if values else None,
+                      "missing_1_50": missing,
+                      "duplicate_ranks": duplicate,
+                  }
+                  expected_slots.update((server, rank) for rank in range(1, 51))
+                  present_slots.update((server, rank) for rank in values)
+
               rank_counts = collections.Counter(ranks)
               duplicate_ranks = sum(count - 1 for count in rank_counts.values() if count > 1)
               duplicate_players = len(players) - len(set(players))
-              min_rank = min(ranks) if ranks else None
-              max_rank = max(ranks) if ranks else None
-              missing_inside = []
-              if min_rank is not None and max_rank is not None:
-                  present = set(ranks)
-                  missing_inside = [rank for rank in range(min_rank, max_rank + 1) if rank not in present]
-              missing_top300 = [rank for rank in range(1, 301) if rank not in set(ranks)]
 
               print(json.dumps({
                   "raid": raid,
                   "rows": len(rows),
-                  "rank_min": min_rank,
-                  "rank_max": max_rank,
-                  "duplicate_ranks": duplicate_ranks,
-                  "missing_inside_count": len(missing_inside),
-                  "missing_top300_count": len(missing_top300),
+                  "rank_min": min(ranks) if ranks else None,
+                  "rank_max": max(ranks) if ranks else None,
+                  "duplicate_ranks_ignoring_server": duplicate_ranks,
                   "duplicate_players": duplicate_players,
+                  "server_count": len(server_ranks),
+                  "server_coverage": server_coverage,
+                  "missing_server_rank_slots": len(expected_slots - present_slots),
                   "team_count_distribution": dict(sorted(team_counts.items(), key=lambda kv: str(kv[0]))),
                   "team_character_count_distribution": dict(sorted(char_counts.items(), key=lambda kv: str(kv[0]))),
                   "exact_5x5_rows": exact_5x5,
