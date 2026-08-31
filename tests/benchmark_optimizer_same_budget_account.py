@@ -1,9 +1,12 @@
-"""Strict real-account Pure-vs-Meta benchmark under equal Moris call counts.
+"""Historical research Pure-vs-Meta benchmark under equal Moris call counts.
 
 This runner is local-only by design. It consumes gitignored profile/raw account
 files plus an explicit search plan and normalized meta-evidence file, then runs
 Pure and Meta-guided search through ``run_same_budget_comparison``. Nothing is
 uploaded and the script only prints JSON to stdout.
+
+This file intentionally replays the earlier descriptive Meta evidence format via
+explicit ``Research*``/``research_*`` APIs. It is not a production Cold entry point.
 
 The benchmark does not invent a roster-wide candidate generator. Reference teams,
 candidate-team order, refinement order, search caps, and per-mode seed policy are
@@ -22,7 +25,7 @@ from typing import Any
 from optimizer import (
     BurstStructureValidator,
     CoreSeed,
-    EnikkSeasonUsageSnapshot,
+    ResearchEnikkSeasonUsageSnapshot,
     ExactCompSeed,
     LowUsagePolicy,
     MetaEpochEvidence,
@@ -34,7 +37,7 @@ from optimizer import (
     build_burst_role_map,
     derive_overload_piece_evidence,
     normalize_account_bundle,
-    prepare_meta_guided_search_roster,
+    research_prepare_meta_guided_search_roster,
     run_anytime_search_round,
 )
 from optimizer.same_budget import run_same_budget_comparison
@@ -172,7 +175,7 @@ def parse_meta_evidence(payload: dict[str, Any]):
     snapshots_raw = payload.get("snapshots")
     if not isinstance(snapshots_raw, list):
         raise ValueError("meta.snapshots must be a list")
-    snapshots: list[EnikkSeasonUsageSnapshot] = []
+    snapshots: list[ResearchEnikkSeasonUsageSnapshot] = []
     for i, row in enumerate(snapshots_raw):
         if not isinstance(row, dict):
             raise ValueError(f"meta.snapshots[{i}] must be an object")
@@ -186,7 +189,7 @@ def parse_meta_evidence(payload: dict[str, Any]):
         if not isinstance(unknown, list) or not all(isinstance(x, str) for x in unknown):
             raise ValueError(f"meta.snapshots[{i}].unknown_external_names must be a string list")
         snapshots.append(
-            EnikkSeasonUsageSnapshot(
+            ResearchEnikkSeasonUsageSnapshot(
                 raid=int(row["raid"]),
                 boss=None if row.get("boss") is None else str(row.get("boss")),
                 player_count=int(row["player_count"]),
@@ -319,7 +322,7 @@ def main() -> None:
 
     overload = derive_overload_piece_evidence(profile, raw)
     roles = build_burst_role_map(validator, snapshot.roster)
-    meta_prepared = prepare_meta_guided_search_roster(
+    meta_prepared = research_prepare_meta_guided_search_roster(
         snapshot.roster,
         meta["snapshots"],
         meta["epochs"],
