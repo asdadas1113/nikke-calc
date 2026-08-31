@@ -5,6 +5,9 @@ from typing import TYPE_CHECKING, Any, Mapping
 
 if TYPE_CHECKING:
     from .capabilities import EffectCapability
+    from .conditions import ConditionRule
+    from .targets import TargetSpec
+    from .triggers import TriggerIndex, TriggerRule
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +42,37 @@ class EnemyStaticProfile:
 
 
 @dataclass(frozen=True, slots=True)
+class CompiledEffect:
+    """One Moris effect lowered into Fast compile-time metadata.
+
+    Runtime hot paths should use the numeric fields and precompiled trigger rules
+    instead of repeatedly decoding parsed JSON strings/dicts.
+    """
+
+    effect_id: int
+    actor: int
+    actor_effect_index: int
+    source: str | None
+    source_tag: str
+    name: str
+    effect_type: str
+    stat: str | None
+    polarity: str | None
+    target: Any
+    target_spec: "TargetSpec"
+    conditions: tuple[str, ...]
+    condition_rules: tuple["ConditionRule", ...]
+    triggers: tuple["TriggerRule", ...]
+    value: float | None
+    duration: float | None
+    max_stack: float | None
+    max_trigger: int | None
+    tick_interval: float | None
+    parameters: Mapping[str, Any]
+    capability: "EffectCapability"
+
+
+@dataclass(frozen=True, slots=True)
 class CompiledCharacter:
     """Moris input reduced to immutable Fast compile-time data."""
 
@@ -47,32 +81,38 @@ class CompiledCharacter:
     base_def: float
     base_hp: float
     element: str | None
+    character_class: str
+    squad_group: str | None
     burst_stage: str
     burst_cooldown: float
+    burst_regen_time: float
     weapon_type: str
     weapon: Mapping[str, Any]
-    effects: tuple[Mapping[str, Any], ...]
-    effect_capabilities: tuple["EffectCapability", ...]
+    effects: tuple[CompiledEffect, ...]
     skill_levels: Mapping[str, int]
     favorite_stage: int
+
+    @property
+    def effect_capabilities(self) -> tuple["EffectCapability", ...]:
+        return tuple(effect.capability for effect in self.effects)
 
 
 @dataclass(frozen=True, slots=True)
 class CompiledSquad:
     members: tuple[CompiledCharacter, ...]
+    trigger_index: "TriggerIndex"
 
     @property
     def names(self) -> tuple[str, ...]:
         return tuple(member.name for member in self.members)
 
     @property
+    def effects(self) -> tuple[CompiledEffect, ...]:
+        return tuple(effect for member in self.members for effect in member.effects)
+
+    @property
     def capability_blockers(self) -> tuple["EffectCapability", ...]:
-        return tuple(
-            cap
-            for member in self.members
-            for cap in member.effect_capabilities
-            if cap.blocks_fast
-        )
+        return tuple(effect.capability for effect in self.effects if effect.capability.blocks_fast)
 
     @property
     def fast_ready(self) -> bool:
@@ -81,11 +121,7 @@ class CompiledSquad:
 
 @dataclass(slots=True)
 class ActorRuntimeState:
-    """Small mutable state surface that the event runtime is allowed to keep.
-
-    Fields are intentionally score-oriented.  Detailed hit/log history is not
-    part of the production contract.
-    """
+    """Small mutable state surface that the event runtime is allowed to keep."""
 
     ammo: float = 0.0
     hp: float = 0.0

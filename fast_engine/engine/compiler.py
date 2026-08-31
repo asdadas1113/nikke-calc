@@ -5,50 +5,134 @@ from pathlib import Path
 from typing import Any
 
 from calculator.base_stat import calc_base_stats
-from calculator.buff_manager import char_effects
 
 _ROOT = Path(__file__).resolve().parents[2]
 _NIKKE = json.loads((_ROOT / "data" / "parsed_nikke.json").read_text(encoding="utf-8"))
+_MECHANICS = json.loads((_ROOT / "data" / "weapon_mechanics.json").read_text(encoding="utf-8"))
+_DELAYS = json.loads((_ROOT / "data" / "weapon_delays.json").read_text(encoding="utf-8"))
 
-from .capabilities import CURRENT_RUNTIME_CAPABILITIES, inspect_character_effects
-from .model import CompiledCharacter, CompiledSquad
-
-
-_WEAPON_KEYS = (
-    "weapon_type",
-    "max_ammo",
-    "reload_time",
-    "fire_rate",
-    "fire_rate_max",
-    "fire_rate_change_pershot",
-    "pellets",
-    "muzzles",
-    "damage_coeff",
-    "core_dmg_mult",
-    "full_charge_mult",
-    "charge_time",
-)
+from .capabilities import CURRENT_RUNTIME_CAPABILITIES, inspect_effect
+from .conditions import compile_condition
+from .model import CompiledCharacter, CompiledEffect, CompiledSquad
+from .moris_bridge import effect_skill_level, registered_effects
+from .targets import compile_target
+from .triggers import TriggerIndex, compile_trigger_rule
 
 
-def _weapon_view(meta: dict[str, Any]) -> dict[str, Any]:
-    return {key: meta[key] for key in _WEAPON_KEYS if key in meta}
+def _pick(key: str, *sources: dict[str, Any] | None, default=None):
+    for source in sources:
+        if source is not None and source.get(key) is not None:
+            return source[key]
+    return default
+
+
+def _weapon_view(name: str, meta: dict[str, Any], char: dict[str, Any]) -> dict[str, Any]:
+    """Compile Moris weapon metadata into a branch-light Fast view.
+
+    This mirrors the *data precedence* used by CharState without importing its
+    frame-loop execution model. Values that depend on live buffs stay runtime
+    concerns.
+    """
+    weapon_type = str(meta["weapon_type"])
+    mech = _MECHANICS["weapon_type_defaults"][weapon_type]
+    delay_exc = _DELAYS["_exceptions"].get(name, {})
+    delay_wt = _DELAYS["_defaults_by_weapon_type"].get(weapon_type, {})
+    fire_mode = str(meta.get("fire_mode") or mech["type"])
+    fire_rate = float(_pick(
+        "fire_rate", delay_exc, meta, mech, default=mech.get("fire_rate_min", 1.0)
+    ))
+    fire_rate_max = _pick("fire_rate_max", delay_exc, meta, mech)
+    fr_step = _pick("fire_rate_change_pershot", delay_exc, meta)
+    if fire_rate_max is not None and fr_step:
+        warmup_bullets = (float(fire_rate_max) - fire_rate) / float(fr_step)
+    else:
+        warmup_bullets = float(mech.get("warmup_bullets", 1.0))
+    charge_frames = char.get("charge_time_frames")
+    charge_time = (float(charge_frames) / 60.0) if charge_frames is not None else float(meta.get("charge_time") or 0.0)
+    clip_chars = _MECHANICS.get("clip_characters", {}).get(weapon_type, [])
+    return {
+        "weapon_type": weapon_type,
+        "fire_mode": fire_mode,
+        "max_ammo": int(meta["max_ammo"]),
+        "reload_time": float(meta["reload_time"]),
+        "fire_rate": fire_rate,
+        "fire_rate_max": None if fire_rate_max is None else float(fire_rate_max),
+        "warmup_bullets": float(warmup_bullets),
+        "warmup_cooldown_time": float(mech.get("cooldown_time", 1.0)),
+        "post_fire_delay": float(_pick("post_fire_delay", delay_exc, delay_wt, mech, default=0.0)),
+        "post_reload_delay": float(_pick("post_reload_delay", delay_exc, delay_wt, default=0.0)),
+        "reload_start_delay": float(_pick("reload_start_delay", delay_exc, delay_wt, default=0.0)),
+        "cover_during_delay": bool(delay_exc.get("cover_during_delay", False)),
+        "charge_time": charge_time,
+        "pellets": int(_pick("pellets", delay_exc, meta, mech, default=1)),
+        "muzzles": int(_pick("muzzles", delay_exc, meta, mech, default=1)),
+        "is_clip": name in clip_chars,
+        "damage_coeff": float(meta.get("damage_coeff") or 0.0),
+        "core_dmg_mult": float(meta.get("core_dmg_mult") or 200.0),
+        "full_charge_mult": float(meta.get("full_charge_mult") or 100.0),
+    }
+
+
+_CORE_EFFECT_KEYS = frozenset({
+    "source", "type", "name", "trigger", "target", "stat", "polarity",
+    "values", "fixed_value", "duration", "duration_values", "max_stack",
+    "max_trigger", "tick_interval", "trigger_values",
+})
+
+
+def _level_value(mapping: Any, skill_level: str, default: float | None = None) -> float | None:
+    if not isinstance(mapping, dict):
+        return default
+    raw = mapping.get(skill_level, mapping.get("10"))
+    if raw is None:
+        return default
+    return float(raw)
+
+
+def _effect_value(effect: dict[str, Any], skill_level: str) -> float | None:
+    if "fixed_value" in effect:
+        return float(effect["fixed_value"])
+    return _level_value(effect.get("values"), skill_level)
+
+
+def _effect_duration(effect: dict[str, Any], skill_level: str) -> float | None:
+    duration = effect.get("duration")
+    if duration is None and "duration_values" in effect:
+        duration = _level_value(effect.get("duration_values"), skill_level, 0.0)
+    return None if duration is None else float(duration)
+
+
+def _trigger_value(effect: dict[str, Any], skill_level: str) -> float | None:
+    return _level_value(effect.get("trigger_values"), skill_level)
+
+
+def _parameters(effect: dict[str, Any]) -> dict[str, Any]:
+    # Private Moris metadata is provenance/cache information, not Fast semantics.
+    return {
+        key: value
+        for key, value in effect.items()
+        if key not in _CORE_EFFECT_KEYS and not key.startswith("_")
+    }
 
 
 def compile_moris_squad(squad: list[dict], *, require_five: bool = True) -> CompiledSquad:
     """Compile already-built Moris character dicts into immutable Fast input.
 
-    Input assembly remains Moris-owned (`context.spec.build_squad`).  This
-    function intentionally does not reimplement profile/equipment/favorite
-    selection. Compile-time use of Moris helpers is cheap and keeps both engines
-    on the same account/build semantics.
+    Input assembly remains Moris-owned (`context.spec.build_squad`).  Effect
+    expansion is also Moris-owned at this boundary: the compile-only bridge uses
+    the exact BuffManager registration path so overload/equipment, cube,
+    collection, manual stats and favorite-stage skill variants cannot silently
+    disappear.  The Fast combat runtime itself never instantiates BuffManager.
     """
 
     if require_five and len(squad) != 5:
         raise ValueError(f"Fast Solo Raid squad must contain 5 members, got {len(squad)}")
 
-    out: list[CompiledCharacter] = []
     seen: set[str] = set()
-    for char in squad:
+    actor_by_name: dict[str, int] = {}
+    stats_by_actor: list[dict[str, float]] = []
+    meta_by_actor: list[dict[str, Any]] = []
+    for actor, char in enumerate(squad):
         name = str(char["name"])
         if name in seen:
             raise ValueError(f"duplicate squad member: {name}")
@@ -56,28 +140,89 @@ def compile_moris_squad(squad: list[dict], *, require_five: bool = True) -> Comp
         meta = _NIKKE.get(name)
         if meta is None:
             raise ValueError(f"unknown Moris character: {name}")
-        stats = calc_base_stats(char)
-        favorite_stage = int(char.get("favorite_stage", 3))
-        effects = tuple(char_effects(name, favorite_stage))
-        capabilities = inspect_character_effects(
-            name, effects, profile=CURRENT_RUNTIME_CAPABILITIES,
-            root=_ROOT, character_names=frozenset(_NIKKE),
+        actor_by_name[name] = actor
+        stats_by_actor.append(calc_base_stats(char))
+        meta_by_actor.append(meta)
+
+    registered = registered_effects(squad)
+    char_names = frozenset(_NIKKE)
+    effects_by_actor: list[list[CompiledEffect]] = [[] for _ in squad]
+
+    for effect_id, (effect, caster_name) in enumerate(registered):
+        actor = actor_by_name[caster_name]
+        char = squad[actor]
+        actor_effect_index = len(effects_by_actor[actor])
+        skill_level = effect_skill_level(char, effect)
+        trigger_value = _trigger_value(effect, skill_level)
+        timings = tuple(
+            compile_trigger_rule(timing, trigger_value=trigger_value)
+            for timing in (effect.get("trigger") or {}).get("timing", ())
         )
-        out.append(
+        raw_conditions = tuple(str(c) for c in (effect.get("trigger") or {}).get("condition", ()))
+        condition_rules = tuple(compile_condition(c, trigger_value=trigger_value) for c in raw_conditions)
+        target_spec = compile_target(effect.get("target"), actor_by_name=actor_by_name)
+        capability = inspect_effect(
+            caster_name,
+            actor_effect_index,
+            effect,
+            profile=CURRENT_RUNTIME_CAPABILITIES,
+            root=_ROOT,
+            character_names=char_names,
+        )
+        effects_by_actor[actor].append(
+            CompiledEffect(
+                effect_id=effect_id,
+                actor=actor,
+                actor_effect_index=actor_effect_index,
+                source=effect.get("source"),
+                source_tag=str(effect.get("_source_tag") or "skill"),
+                name=str(effect.get("name") or ""),
+                effect_type=str(effect.get("type") or ""),
+                stat=str(effect["stat"]) if effect.get("stat") is not None else None,
+                polarity=str(effect["polarity"]) if effect.get("polarity") is not None else None,
+                target=effect.get("target"),
+                target_spec=target_spec,
+                conditions=raw_conditions,
+                condition_rules=condition_rules,
+                triggers=timings,
+                value=_effect_value(effect, skill_level),
+                duration=_effect_duration(effect, skill_level),
+                max_stack=float(effect["max_stack"]) if effect.get("max_stack") is not None else None,
+                max_trigger=int(effect["max_trigger"]) if effect.get("max_trigger") is not None else None,
+                tick_interval=float(effect["tick_interval"]) if effect.get("tick_interval") is not None else None,
+                parameters=_parameters(effect),
+                capability=capability,
+            )
+        )
+
+    members: list[CompiledCharacter] = []
+    for actor, char in enumerate(squad):
+        name = str(char["name"])
+        meta = meta_by_actor[actor]
+        stats = stats_by_actor[actor]
+        members.append(
             CompiledCharacter(
                 name=name,
                 base_atk=float(stats["atk"]),
                 base_def=float(stats["def"]),
                 base_hp=float(stats["hp"]),
                 element=meta.get("element_code"),
-                burst_stage=str(meta.get("burst_stage", "")),
+                character_class=str(meta.get("class") or ""),
+                squad_group=meta.get("squad"),
+                burst_stage=str(char.get("burst_stage") or meta.get("burst_stage", "")),
                 burst_cooldown=float(meta.get("burst_cooldown") or 0.0),
+                burst_regen_time=float(char.get("burst_regen_time", 2.0)),
                 weapon_type=str(meta.get("weapon_type", "")),
-                weapon=_weapon_view(meta),
-                effects=effects,
-                effect_capabilities=capabilities,
+                weapon=_weapon_view(name, meta, char),
+                effects=tuple(effects_by_actor[actor]),
                 skill_levels=dict(char.get("skill_levels") or {}),
-                favorite_stage=favorite_stage,
+                favorite_stage=int(char.get("favorite_stage", 3)),
             )
         )
-    return CompiledSquad(tuple(out))
+
+    flat_effects = tuple(effect for member in members for effect in member.effects)
+    # effect_id order is Moris registration order, which is actor-major. Assert it
+    # before relying on tuple indexing in the later dispatcher.
+    if tuple(effect.effect_id for effect in flat_effects) != tuple(range(len(flat_effects))):
+        raise AssertionError("compiled effect order drifted from Moris registration order")
+    return CompiledSquad(tuple(members), TriggerIndex.from_effects(flat_effects, actor_count=len(members)))

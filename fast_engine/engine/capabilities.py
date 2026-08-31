@@ -13,9 +13,11 @@ HIT_FORMULA_STATS = frozenset({
     "atk_pct", "atk_flat", "def_ignore_pct", "crit_rate", "normal_atk_crit_rate",
     "crit_dmg", "normal_atk_crit_dmg", "core_dmg_pct", "atk_dmg_pct",
     "burst_dmg_pct", "burst_dmg_aoe_pct", "pierce_dmg_pct", "armor_break_dmg_pct",
-    "dot_dmg_pct", "projectile_explosion_dmg_pct", "projectile_attachment_dmg_pct",
-    "sequential_dmg_pct", "part_dmg_pct", "received_dmg_pct", "split_dmg_pct",
-    "element_bonus_pct", "normal_atk_dmg_pct", "charge_dmg_pct", "charge_dmg_mag_pct",
+    "dot_dmg_pct", "projectile_explosion_dmg_pct", "projectile_explosion_dmg",
+    "projectile_attachment_dmg_pct", "projectile_attachment_dmg",
+    "sequential_dmg_pct", "part_dmg_pct", "part_dmg", "received_dmg_pct", "personal_received_dmg_pct", "split_dmg_pct",
+    "element_bonus_pct", "element_bonus", "personal_enemy_def_down_pct",
+    "normal_atk_dmg_pct", "charge_dmg_pct", "charge_dmg_mag_pct",
 })
 
 DERIVED_STATE_STATS = frozenset({
@@ -150,6 +152,8 @@ class CapabilityProfile:
     supported_stats: frozenset[str] = frozenset()
     supported_stat_prefixes: tuple[str, ...] = ()
     supported_timing_families: frozenset[str] = frozenset()
+    supported_timing_exact: frozenset[str] = frozenset()
+    supported_timing_prefixes: tuple[str, ...] = ()
     supported_condition_families: frozenset[str] = frozenset()
     supported_target_families: frozenset[str] = frozenset()
     supported_advanced_fields: frozenset[str] = frozenset()
@@ -160,10 +164,33 @@ class CapabilityProfile:
             return self.marker_states and category is EffectCategory.STATE_TRIGGER and effect_type == "buff"
         return stat in self.supported_stats or any(stat.startswith(p) for p in self.supported_stat_prefixes)
 
+    def supports_timing(self, raw: str) -> bool:
+        fam = timing_family(raw)
+        return (
+            fam in self.supported_timing_families
+            or raw in self.supported_timing_exact
+            or any(raw.startswith(prefix) for prefix in self.supported_timing_prefixes)
+        )
 
-# No combat semantics are certified by the greenfield runtime yet. The StateStore
-# implemented in Phase 2 is infrastructure; effect dispatch certification comes next.
-CURRENT_RUNTIME_CAPABILITIES = CapabilityProfile()
+
+# Phase 2 first certified combat slice.  Only burst-cycle primitives that have
+# direct Moris parity tests are READY; all damage/weapon primitives remain planned.
+CURRENT_RUNTIME_CAPABILITIES = CapabilityProfile(
+    supported_categories=frozenset({EffectCategory.CADENCE_TIMELINE}),
+    supported_stats=frozenset({
+        "burst_cooldown_reduce",
+        "burst_cooldown",
+        "fullburst_duration",
+    }),
+    supported_stat_prefixes=("burst_stage_override:",),
+    supported_timing_families=frozenset({"lifecycle", "burst"}),
+    # Weapon-count support is certified more narrowly than the whole
+    # `weapon_hit` family: only reducible full-charge modulo counters are
+    # currently materialized by the trigger-boundary fast-forward bridge.
+    supported_timing_prefixes=("full_charge_count:",),
+    supported_condition_families=frozenset({"named_state", "stack", "roster"}),
+    supported_target_families=frozenset({"ally_static", "named_character"}),
+)
 
 
 @lru_cache(maxsize=4)
@@ -337,7 +364,9 @@ def target_family(target: Any, *, character_names: frozenset[str] = frozenset())
 
 
 def _advanced_fields(effect: dict[str, Any]) -> tuple[str, ...]:
-    return tuple(sorted(set(effect) - _COMMON_FIELDS))
+    # Moris compile-time provenance/cache metadata (`_source_tag`, `_quant_group`, ...)
+    # is not combat semantics and must not block Fast certification.
+    return tuple(sorted(k for k in set(effect) - _COMMON_FIELDS if not k.startswith("_")))
 
 
 def inspect_effect(
@@ -354,7 +383,8 @@ def inspect_effect(
     stat = effect.get("stat")
     stat = str(stat) if stat is not None else None
     trigger = effect.get("trigger") or {}
-    timings = tuple(sorted({timing_family(str(t)) for t in trigger.get("timing", [])}))
+    raw_timings = tuple(str(t) for t in trigger.get("timing", []))
+    timings = tuple(sorted({timing_family(t) for t in raw_timings}))
     conditions = tuple(sorted({condition_family(str(c)) for c in trigger.get("condition", [])}))
     target = target_family(effect.get("target"), character_names=character_names)
     advanced = _advanced_fields(effect)
@@ -377,9 +407,9 @@ def inspect_effect(
             blockers.append(f"category:{category.value}")
         if not profile.supports_stat(stat, category, typ):
             blockers.append(f"stat:{stat}")
-        for fam in timings:
-            if fam not in profile.supported_timing_families:
-                blockers.append(f"timing:{fam}")
+        for raw in raw_timings:
+            if not profile.supports_timing(raw):
+                blockers.append(f"timing:{timing_family(raw)}")
         for fam in conditions:
             if fam not in profile.supported_condition_families:
                 blockers.append(f"condition:{fam}")

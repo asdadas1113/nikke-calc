@@ -12,7 +12,8 @@ Structural representability is not the same as runtime support: a generic effect
 | --- | ---: |
 | `fallback` | 3 |
 | `mirror_moris_nop` | 159 |
-| `planned` | 1637 |
+| `planned` | 1598 |
+| `ready` | 39 |
 
 ## Semantic categories
 
@@ -43,4 +44,4 @@ Structural representability is not the same as runtime support: a generic effect
 - `fallback`: explicit special subsystem/Moris route until implemented.
 - `unknown`: audit failure; never silently approximate it.
 
-The Phase 2 greenfield baseline intentionally starts with no combat effects marked `ready`. StateStore/scheduler/compiler infrastructure does not count as certified skill execution.
+Only primitives with direct runtime tests are marked `ready`. A structurally expressible effect remains `planned` until its timing, conditions, targets and operation are certified together.

@@ -79,6 +79,23 @@ class CapabilityManifestTests(unittest.TestCase):
         self.assertEqual(cap.disposition, CapabilityDisposition.MIRROR_MORIS_NOP)
         self.assertFalse(cap.blocks_fast)
 
+    def test_weapon_count_capability_is_narrowly_certified(self):
+        killer = compile_moris_squad(
+            build_squad(["D : 킬러 와이프", "아니스", "라피", "미하라", "프로덕트 08"])
+        )
+        kw = next(e for e in killer.members[0].effects if e.stat == "burst_cooldown_reduce")
+        self.assertEqual(kw.capability.disposition, CapabilityDisposition.READY)
+
+        dorothy = compile_moris_squad(
+            build_squad(["도로시", "아니스", "라피", "미하라", "프로덕트 08"])
+        )
+        last_bullet = next(
+            e for e in dorothy.members[0].effects
+            if e.stat == "burst_cooldown_reduce" and any(r.raw == "last_bullet_fire" for r in e.triggers)
+        )
+        self.assertEqual(last_bullet.capability.disposition, CapabilityDisposition.PLANNED)
+        self.assertIn("timing:weapon_hit", last_bullet.capability.blockers)
+
     def test_unknown_synthetic_mechanic_fails_closed(self):
         synthetic = {
             "source": "스킬1", "type": "instant", "name": "x",

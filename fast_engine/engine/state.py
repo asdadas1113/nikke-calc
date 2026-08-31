@@ -116,6 +116,10 @@ class StateStore:
         if not 0 <= actor < len(self.actors):
             raise IndexError(f"actor out of range: {actor}")
 
+    def touch(self, entity: int, domain: StateDomain) -> None:
+        """Public invalidation hook for compact runtime subsystems."""
+        self._touch(entity, domain)
+
     def _touch(self, entity: int, domain: StateDomain) -> None:
         self._version += 1
         idx = int(domain)
