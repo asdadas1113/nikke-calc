@@ -75,6 +75,12 @@ class MorisEvaluator:
     Cached evaluators require an explicit engine commit and account/build snapshot
     identity. This prevents persistent or reused evaluator instances from silently
     mixing results across engine/profile revisions.
+
+    ``retain_raw=False`` is the optimizer default. Moris still constructs the full
+    simulation result for each real evaluation, but the evaluator extracts the
+    scalar squad score and then releases that result instead of attaching it to
+    returned/cached :class:`Evaluation` objects. Diagnostics that need the full
+    Moris result can opt into the previous behavior with ``retain_raw=True``.
     """
 
     def __init__(
@@ -85,6 +91,7 @@ class MorisEvaluator:
         *,
         cache_identity: CacheIdentity | None = None,
         use_cache: bool = True,
+        retain_raw: bool = False,
     ) -> None:
         if use_cache and cache_identity is None:
             raise ValueError("cache_identity is required when evaluator cache is enabled")
@@ -92,6 +99,7 @@ class MorisEvaluator:
         self._build_config = build_config
         self._simulate = simulate
         self._use_cache = use_cache
+        self._retain_raw = retain_raw
         self._cache_identity = cache_identity
         self._cache: dict[str, Evaluation] = {}
         self.stats = EvaluatorStats()
@@ -109,6 +117,12 @@ class MorisEvaluator:
         return self._use_cache
 
     @property
+    def retain_raw(self) -> bool:
+        """Whether returned and cached evaluations retain full Moris results."""
+
+        return self._retain_raw
+
+    @property
     def cache_size(self) -> int:
         """Number of locally cached evaluation keys, without exposing entries."""
 
@@ -121,6 +135,7 @@ class MorisEvaluator:
         engine_commit: str,
         account_snapshot: str,
         use_cache: bool = True,
+        retain_raw: bool = False,
     ) -> "MorisEvaluator":
         """Bind to the same engine entry points used by site/pybridge/bridge.py."""
         from calculator.timeline import simulate
@@ -133,6 +148,7 @@ class MorisEvaluator:
             simulate,
             cache_identity=identity,
             use_cache=use_cache,
+            retain_raw=retain_raw,
         )
 
     @classmethod
@@ -143,6 +159,7 @@ class MorisEvaluator:
         snapshot: "AccountSnapshot",
         use_cache: bool = True,
         allow_unowned: bool = False,
+        retain_raw: bool = False,
     ) -> "MorisEvaluator":
         """Bind every evaluation to one normalized account-build snapshot.
 
@@ -170,6 +187,7 @@ class MorisEvaluator:
             simulate,
             cache_identity=identity,
             use_cache=use_cache,
+            retain_raw=retain_raw,
         )
 
     def clear_cache(self) -> None:
@@ -270,7 +288,13 @@ class MorisEvaluator:
 
         timings = EvaluationTimings(t1 - t0, t2 - t1, t3 - t2)
         score = float(result.squad_total)
-        evaluation = Evaluation(ordered, score, timings, False, result)
+        evaluation = Evaluation(
+            ordered,
+            score,
+            timings,
+            False,
+            result if self._retain_raw else None,
+        )
 
         self.stats.simulate_calls += 1
         self.stats.build_squad_s += timings.build_squad_s
