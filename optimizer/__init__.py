@@ -176,6 +176,7 @@ from .reference_discovery import (
     ReferenceDiscoveryResult,
     balanced_placement_order,
     discover_reference_placements,
+    ensure_marginal_reference_coverage,
 )
 from .reference_pipeline import ExternalReferencePreparation, prepare_external_references
 from .reference_sources import (
@@ -350,6 +351,7 @@ __all__ = [
     "derive_overload_piece_evidence",
     "derive_roster_first_positive_availability",
     "discover_reference_placements",
+    "ensure_marginal_reference_coverage",
     "enumerate_legal_teams",
     "evaluate_allocation_with_one_swap_refinement",
     "generate_additive_allocation_beam_candidates",

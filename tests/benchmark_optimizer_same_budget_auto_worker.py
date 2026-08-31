@@ -34,6 +34,7 @@ from optimizer import (  # noqa: E402
     build_burst_role_map,
     build_worker_account_bundle,
     derive_overload_piece_evidence,
+    ensure_marginal_reference_coverage,
     prepare_meta_guided_search_roster,
     run_automatic_anytime_search_round,
 )
@@ -206,8 +207,8 @@ def main() -> None:
     discovery_policy = parse_discovery_policy(search, team_size=team_size)
 
     refs_raw = plan.get("reference_teams")
-    if not isinstance(refs_raw, list) or not refs_raw:
-        raise ValueError("plan.reference_teams must be a non-empty list")
+    if not isinstance(refs_raw, list):
+        raise ValueError("plan.reference_teams must be a list")
     references = tuple(
         base.team(row, f"plan.reference_teams[{i}]")
         for i, row in enumerate(refs_raw)
@@ -273,15 +274,32 @@ def main() -> None:
     meta_allowed = set(meta_roster)
     pure_refs = base._filter_teams(references, pure_allowed)
     meta_refs = base._filter_teams(references, meta_allowed)
+
+    def partial_viable(partial, available):
+        return validator.can_complete(partial, available, team_size=team_size)
+
+    pure_refs, pure_structural_refs = ensure_marginal_reference_coverage(
+        pure_roster,
+        pure_refs,
+        positions_per_candidate=positions_per_candidate,
+        team_size=team_size,
+        legal=validator,
+        partial_viable=partial_viable,
+    )
+    meta_refs, meta_structural_refs = ensure_marginal_reference_coverage(
+        meta_roster,
+        meta_refs,
+        positions_per_candidate=positions_per_candidate,
+        team_size=team_size,
+        legal=validator,
+        partial_viable=partial_viable,
+    )
     pure_incoming = tuple(name for name in refinement_incoming if name in pure_allowed)
     meta_incoming = tuple(name for name in refinement_incoming if name in meta_allowed)
     pure_seed_candidates = base._filter_teams(seed_candidates, pure_allowed)
     # Meta seed-only hypotheses are allowed to inspect still-Cold owned characters
     # only when the caller supplied those bounded candidate teams explicitly.
     meta_seed_candidates = seed_candidates
-
-    if not pure_refs or not meta_refs:
-        raise ValueError("both Pure and Meta require at least one surviving reference team")
 
     dry = {
         "engine_commit": args.engine_commit,
@@ -310,6 +328,10 @@ def main() -> None:
         "meta_still_deferred_cold": list(meta_prepared.still_deferred_cold),
         "pure_reference_count": len(pure_refs),
         "meta_reference_count": len(meta_refs),
+        "pure_structural_fallback_reference_count": len(pure_structural_refs),
+        "meta_structural_fallback_reference_count": len(meta_structural_refs),
+        "pure_structural_fallback_references": [list(team) for team in pure_structural_refs],
+        "meta_structural_fallback_references": [list(team) for team in meta_structural_refs],
         "recall": None,
         "recall_reason": "production roster has no exhaustive oracle",
     }

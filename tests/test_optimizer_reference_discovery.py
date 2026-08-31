@@ -8,6 +8,7 @@ from optimizer.reference_discovery import (
     ReferenceComposition,
     balanced_placement_order,
     discover_reference_placements,
+    ensure_marginal_reference_coverage,
 )
 
 
@@ -115,6 +116,77 @@ class ReferenceDiscoveryTests(unittest.TestCase):
         self.assertEqual(result.unfulfilled_sources, ())
         self.assertEqual(result.simulate_calls, 1)
         self.assertEqual(evaluator.stats.simulate_calls - before, 1)
+
+
+    @staticmethod
+    def _three_stage_legal(team):
+        members = set(team)
+        return (
+            bool(members & {"A", "D"})
+            and bool(members & {"B", "E"})
+            and bool(members & {"C", "F"})
+        )
+
+    def test_score_blind_coverage_repairs_single_reference_members(self):
+        roster = ("A", "B", "C", "D", "E", "F", "G", "H")
+        refs, added = ensure_marginal_reference_coverage(
+            roster,
+            (("A", "B", "C", "G"),),
+            positions_per_candidate=1,
+            team_size=4,
+            legal=self._three_stage_legal,
+            beam_width=32,
+            candidates_per_rotation=8,
+            max_rotations=6,
+        )
+        self.assertGreaterEqual(len(added), 1)
+        self.assertEqual(set(added[0]), {"D", "E", "F", "H"})
+
+        from optimizer.marginal import plan_candidate_specific_marginals
+
+        plan = plan_candidate_specific_marginals(
+            roster, refs, positions_per_candidate=1, legal=self._three_stage_legal
+        )
+        self.assertEqual(plan.unplanned_candidates, ())
+
+    def test_zero_reference_case_builds_diverse_coverage_instead_of_shared_core_loop(self):
+        roster = ("A", "B", "C", "D", "E", "F", "G", "H")
+        refs, added = ensure_marginal_reference_coverage(
+            roster,
+            (),
+            positions_per_candidate=1,
+            team_size=4,
+            legal=self._three_stage_legal,
+            beam_width=32,
+            candidates_per_rotation=8,
+            max_rotations=8,
+        )
+        self.assertGreaterEqual(len(added), 2)
+        self.assertEqual(refs, added)
+        self.assertLess(
+            max(len(set(left) & set(right)) for left in refs for right in refs if left != right),
+            3,
+        )
+
+        from optimizer.marginal import plan_candidate_specific_marginals
+
+        plan = plan_candidate_specific_marginals(
+            roster, refs, positions_per_candidate=1, legal=self._three_stage_legal
+        )
+        self.assertEqual(plan.unplanned_candidates, ())
+
+    def test_impossible_full_roster_reference_coverage_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, "cannot construct bounded score-blind"):
+            ensure_marginal_reference_coverage(
+                ("A", "B", "C"),
+                (("A", "B", "C"),),
+                positions_per_candidate=1,
+                team_size=3,
+                legal=self._three_stage_legal,
+                beam_width=8,
+                candidates_per_rotation=4,
+                max_rotations=3,
+            )
 
     def test_known_order_never_invents_permutations(self):
         evaluator = make_evaluator({("A", "B"): 10})

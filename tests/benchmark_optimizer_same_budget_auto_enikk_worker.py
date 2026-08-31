@@ -230,9 +230,6 @@ def main() -> None:
         legal=validator,
         evaluate_kwargs=evaluate_kwargs,
     )
-    if not prepared.references:
-        raise ValueError("Enikk preparation produced no owned, hard-legal Moris references")
-
     delegated_plan = json.loads(json.dumps(plan, ensure_ascii=False))
     delegated_plan["reference_teams"] = [list(team) for team in prepared.references]
     _append_external_seeds(delegated_plan, prepared, external_seed_mode)
@@ -288,6 +285,13 @@ def main() -> None:
         result["external_reference_setup"] = {
             "source": f"enikk:S{args.enikk_raid}:teams-dump",
             "external_seed_mode": external_seed_mode,
+            "external_reference_count_before_mode_fallback": len(prepared.references),
+            "pure_structural_fallback_reference_count": result.get(
+                "pure_structural_fallback_reference_count", 0
+            ),
+            "meta_structural_fallback_reference_count": result.get(
+                "meta_structural_fallback_reference_count", 0
+            ),
             **_source_summary(collection, prepared),
         }
         result["meta_epoch_setup"] = {
