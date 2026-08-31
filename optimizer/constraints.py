@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from itertools import combinations
 from pathlib import Path
 
 TeamValidator = Callable[[tuple[str, ...]], bool]
 _BURST_STAGES = ("1", "2", "3")
+_BURST_STAGE_BITS = {"1": 1, "2": 2, "3": 4}
+_ALL_BURST_STAGE_BITS = 1 | 2 | 4
 
 
 @dataclass(frozen=True)
@@ -214,6 +215,13 @@ class BurstStructureValidator:
             possible.add(stage)
         return frozenset(possible)
 
+    @staticmethod
+    def _stage_mask(stages: Iterable[str]) -> int:
+        mask = 0
+        for stage in stages:
+            mask |= _BURST_STAGE_BITS.get(stage, 0)
+        return mask
+
     def can_complete(
         self,
         members: Sequence[str],
@@ -229,6 +237,11 @@ class BurstStructureValidator:
         remaining slots provably cannot cover every required auto-burst stage;
         True does not claim the completed team will be strong or even ultimately
         legal under other constraints.
+
+        Only three burst stages exist, so completion is solved as an 8-state
+        minimum-provider DP rather than enumerating provider combinations. This is
+        exactly the same hard coverage question while keeping wide roster beams
+        cheap even when many characters can provide the same stage.
         """
 
         partial = tuple(str(name) for name in members)
@@ -246,15 +259,15 @@ class BurstStructureValidator:
         if self._explicit_sequence:
             return True
 
-        covered: set[str] = set()
+        covered_mask = 0
         for name in partial:
             possible = self._possible_stages_for(name)
             if possible is None:
                 return True
-            covered.update(possible)
+            covered_mask |= self._stage_mask(possible)
 
-        missing = set(_BURST_STAGES) - covered
-        if not missing:
+        missing_mask = _ALL_BURST_STAGE_BITS & ~covered_mask
+        if missing_mask == 0:
             return True
 
         remaining_slots = team_size - len(partial)
@@ -262,26 +275,34 @@ class BurstStructureValidator:
             return False
 
         selected = set(partial)
-        providers: list[frozenset[str]] = []
+        provider_masks: list[int] = []
         for name in roster:
             if name in selected:
                 continue
             possible = self._possible_stages_for(name)
             if possible is None:
                 return True
-            relevant = possible & missing
-            if relevant:
-                providers.append(frozenset(relevant))
+            mask = self._stage_mask(possible) & missing_mask
+            if mask:
+                provider_masks.append(mask)
 
-        max_take = min(remaining_slots, len(providers))
-        for take in range(1, max_take + 1):
-            for group in combinations(providers, take):
-                supplied: set[str] = set()
-                for stages in group:
-                    supplied.update(stages)
-                if missing <= supplied:
-                    return True
-        return False
+        # dp[mask] = fewest distinct remaining characters needed to supply mask.
+        unreachable = team_size + 1
+        dp = [unreachable] * (_ALL_BURST_STAGE_BITS + 1)
+        dp[0] = 0
+        for provider_mask in provider_masks:
+            previous = tuple(dp)
+            for supplied_mask, count in enumerate(previous):
+                if count >= unreachable:
+                    continue
+                combined = supplied_mask | provider_mask
+                candidate_count = count + 1
+                if candidate_count < dp[combined]:
+                    dp[combined] = candidate_count
+            if dp[missing_mask] <= remaining_slots:
+                return True
+
+        return dp[missing_mask] <= remaining_slots
 
     def __call__(self, members: tuple[str, ...]) -> bool:
         return self.inspect(members).legal
