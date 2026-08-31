@@ -23,6 +23,7 @@ from itertools import permutations
 
 Team = tuple[str, ...]
 TeamValidator = Callable[[Team], bool]
+PartialTeamViability = Callable[[Team, tuple[str, ...]], bool]
 PlacementExpander = Callable[[Team], Iterable[Sequence[str]]]
 
 
@@ -131,6 +132,7 @@ def _membership_beam(
     team_size: int,
     beam_width: int,
     required_members: tuple[str, ...] = (),
+    partial_viable: PartialTeamViability | None = None,
 ) -> tuple[tuple[tuple[Team, float], ...], int]:
     """Return top additive membership states without choosing squad order."""
 
@@ -140,6 +142,8 @@ def _membership_beam(
     required_set = frozenset(required_members)
     required_canonical = tuple(sorted(required_set, key=index.__getitem__))
     start_score = sum(float(score_by_character[name]) for name in required_canonical)
+    if partial_viable is not None and not partial_viable(required_canonical, roster):
+        return (), 0
     states: list[tuple[Team, float]] = [(required_canonical, start_score)]
     expanded = 0
 
@@ -152,6 +156,8 @@ def _membership_beam(
                     continue
                 expanded += 1
                 combined = tuple(sorted((*members, name), key=index.__getitem__))
+                if partial_viable is not None and not partial_viable(combined, roster):
+                    continue
                 candidate_score = score + float(score_by_character[name])
                 previous = next_by_members.get(combined)
                 if previous is None or candidate_score > previous:
@@ -217,6 +223,7 @@ def _beam_channel(
     source: str,
     legal: TeamValidator | None,
     placement_expander: PlacementExpander,
+    partial_viable: PartialTeamViability | None = None,
 ) -> tuple[tuple[GeneratedCandidate, ...], int, int]:
     memberships, expanded = _membership_beam(
         roster,
@@ -224,6 +231,7 @@ def _beam_channel(
         team_size=team_size,
         beam_width=beam_width,
         required_members=required_members,
+        partial_viable=partial_viable,
     )
     channels: list[tuple[GeneratedCandidate, ...]] = []
     rejected = 0
@@ -256,6 +264,7 @@ def generate_additive_beam_candidates(
     per_core_limit: int = 0,
     legal: TeamValidator | None = None,
     placement_expander: PlacementExpander | None = None,
+    partial_viable: PartialTeamViability | None = None,
 ) -> CandidateGenerationResult:
     """Generate a bounded single-team universe without Moris calls.
 
@@ -298,6 +307,7 @@ def generate_additive_beam_candidates(
             source="additive-beam:global",
             legal=legal,
             placement_expander=placement,
+            partial_viable=partial_viable,
         )
         channels.append(channel)
         expanded += work
@@ -318,6 +328,7 @@ def generate_additive_beam_candidates(
             source="additive-beam:core",
             legal=legal,
             placement_expander=placement,
+            partial_viable=partial_viable,
         )
         expanded += work
         rejected += bad
@@ -346,6 +357,7 @@ def generate_additive_allocation_beam_candidates(
     allocation_limit: int,
     legal: TeamValidator | None = None,
     placement_expander: PlacementExpander | None = None,
+    partial_viable: PartialTeamViability | None = None,
 ) -> AllocationCandidateGenerationResult:
     """Protect ordered candidates from bounded non-overlap membership allocations.
 
@@ -418,6 +430,7 @@ def generate_additive_allocation_beam_candidates(
                 score_by_character,
                 team_size=team_size,
                 beam_width=team_beam_width,
+                partial_viable=partial_viable,
             )
             expanded += work
 
