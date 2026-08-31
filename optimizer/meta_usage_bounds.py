@@ -9,12 +9,17 @@ unusable player slot remains adversarial uncertainty.
 For one character in one season:
 
     lower = observed_appearances / expected_player_slots
-    upper = (observed_appearances + uncertain_player_slots) / expected_player_slots
+    upper = (observed_appearances + character_uncertain_player_slots)
+            / expected_player_slots
 
-The upper bound assumes every uncertain player used the character.  Therefore a
-LOW decision based on ``upper <= cutoff`` is conservative even when a small
-number of source rows are absent.  No popularity score or Moris score exists in
-this module.
+Missing/malformed rows and truly unknown external labels are global uncertainty.
+A known ambiguous external label is narrower: if ``Rei`` can only mean one of two
+canonical characters, that row is uncertain only for those two candidates.  It
+must not make an unrelated character look potentially used.  The upper bound
+therefore remains conservative without spreading one label collision across the
+whole roster.
+
+No popularity score or Moris score exists in this module.
 """
 
 from __future__ import annotations
@@ -101,6 +106,7 @@ class CertifiedEnikkSeasonUsageSnapshot:
     missing_player_slots: int
     malformed_player_slots: int
     mapping_uncertain_player_slots: int
+    ambiguous_player_slots: Mapping[str, int]
     player_appearances: Mapping[str, int]
     mapped_characters: frozenset[str]
     unknown_external_names: tuple[str, ...]
@@ -127,6 +133,11 @@ class CertifiedEnikkSeasonUsageSnapshot:
             )
         if self.mapping_uncertain_player_slots > self.observed_complete_player_slots:
             raise ValueError("mapping-uncertain slots cannot exceed complete rows")
+        for name, count in self.ambiguous_player_slots.items():
+            if count < 0 or count > self.observed_complete_player_slots:
+                raise ValueError(f"invalid ambiguous-slot count for {name}: {count}")
+            if name not in self.mapped_characters:
+                raise ValueError(f"ambiguous-slot character is not source-known: {name}")
         for name, count in self.player_appearances.items():
             if count < 0 or count > self.observed_complete_player_slots:
                 raise ValueError(f"invalid appearance count for {name}: {count}")
@@ -136,9 +147,9 @@ class CertifiedEnikkSeasonUsageSnapshot:
         return self.contract.expected_player_slots
 
     @property
-    def uncertain_player_slots(self) -> int:
-        # Mapping-uncertain rows are structurally present but may hide an
-        # appearance of any canonical character whose absence is being tested.
+    def global_uncertain_player_slots(self) -> int:
+        """Rows that could hide an appearance of any canonical character."""
+
         return (
             self.missing_player_slots
             + self.malformed_player_slots
@@ -146,8 +157,19 @@ class CertifiedEnikkSeasonUsageSnapshot:
         )
 
     @property
+    def uncertain_player_slots(self) -> int:
+        """Worst per-character uncertainty, retained as a compact diagnostic."""
+
+        return self.global_uncertain_player_slots + max(
+            self.ambiguous_player_slots.values(),
+            default=0,
+        )
+
+    @property
     def fully_complete(self) -> bool:
-        return self.uncertain_player_slots == 0
+        return self.global_uncertain_player_slots == 0 and not any(
+            self.ambiguous_player_slots.values()
+        )
 
     def observe(self, character: str) -> BoundedSeasonUsageObservation:
         name = str(character)
@@ -156,7 +178,10 @@ class CertifiedEnikkSeasonUsageSnapshot:
             raid=self.raid,
             expected_player_slots=self.expected_player_slots,
             observed_appearances=int(self.player_appearances.get(name, 0)),
-            uncertain_player_slots=self.uncertain_player_slots,
+            uncertain_player_slots=(
+                self.global_uncertain_player_slots
+                + int(self.ambiguous_player_slots.get(name, 0))
+            ),
             source_character_known=name in self.mapped_characters,
         )
 
@@ -183,22 +208,44 @@ def certify_enikk_rankings(
     *,
     contract: RankingCoverageContract,
     boss: str | None = None,
+    ambiguous_name_map: Mapping[str, Sequence[str]] | None = None,
 ) -> CertifiedEnikkSeasonUsageSnapshot:
-    """Validate SRRankings rows and retain missing/malformed slots as uncertainty.
+    """Validate SRRankings rows and retain uncertainty without zero-filling.
 
     Duplicate server/rank slots, duplicate player ids, or rows outside the declared
     cohort are contract violations and raise.  A row inside the cohort but with an
-    invalid 5x5 team shape is retained as one malformed/unknown player slot rather
-    than silently contributing zero appearances.
+    invalid 5x5 team shape is retained as one malformed/global-unknown player slot.
+
+    ``ambiguous_name_map`` is optional explicit evidence for external labels that
+    collide after the resource-id join.  Those rows create uncertainty only for
+    the listed canonical candidates.  An external label absent from both maps is
+    still unbounded mapping uncertainty for the whole row.
     """
 
     if raid <= 0:
         raise ValueError("raid must be positive")
-    mapped_characters = frozenset(str(name) for name in name_map.values())
+
+    normalized_ambiguous: dict[str, tuple[str, ...]] = {}
+    for external, raw_candidates in (ambiguous_name_map or {}).items():
+        key = str(external)
+        if key in name_map:
+            raise ValueError(f"external label cannot be both unique and ambiguous: {key}")
+        if isinstance(raw_candidates, (str, bytes)):
+            raise ValueError(f"ambiguous mapping candidates must be a sequence: {key}")
+        candidates = tuple(dict.fromkeys(str(value) for value in raw_candidates))
+        if not candidates:
+            raise ValueError(f"ambiguous mapping candidates must be non-empty: {key}")
+        normalized_ambiguous[key] = candidates
+
+    mapped_characters = frozenset(
+        [str(name) for name in name_map.values()]
+        + [name for names in normalized_ambiguous.values() for name in names]
+    )
     expected_slots = contract.expected_slots
     seen_slots: set[tuple[str, int]] = set()
     seen_players: set[str] = set()
     appearances: dict[str, int] = {}
+    ambiguous_slots: dict[str, int] = {}
     unknown_names: set[str] = set()
     malformed = 0
     mapping_uncertain = 0
@@ -257,16 +304,26 @@ def certify_enikk_rankings(
 
         complete += 1
         used_by_player: set[str] = set()
-        row_has_unknown_mapping = False
+        row_ambiguous_candidates: set[str] = set()
+        row_has_unbounded_mapping = False
         for external in raw_external:
             canonical = name_map.get(external)
-            if canonical is None:
-                unknown_names.add(external)
-                row_has_unknown_mapping = True
+            if canonical is not None:
+                used_by_player.add(str(canonical))
                 continue
-            used_by_player.add(str(canonical))
-        if row_has_unknown_mapping:
+            candidates = normalized_ambiguous.get(external)
+            unknown_names.add(external)
+            if candidates is None:
+                row_has_unbounded_mapping = True
+                continue
+            row_ambiguous_candidates.update(candidates)
+
+        if row_has_unbounded_mapping:
             mapping_uncertain += 1
+        else:
+            for name in row_ambiguous_candidates - used_by_player:
+                ambiguous_slots[name] = ambiguous_slots.get(name, 0) + 1
+
         for name in used_by_player:
             appearances[name] = appearances.get(name, 0) + 1
 
@@ -279,6 +336,7 @@ def certify_enikk_rankings(
         missing_player_slots=missing,
         malformed_player_slots=malformed,
         mapping_uncertain_player_slots=mapping_uncertain,
+        ambiguous_player_slots=dict(sorted(ambiguous_slots.items())),
         player_appearances=dict(sorted(appearances.items())),
         mapped_characters=mapped_characters,
         unknown_external_names=tuple(sorted(unknown_names)),
