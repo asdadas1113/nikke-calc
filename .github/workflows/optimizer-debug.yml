@@ -21,10 +21,20 @@ jobs:
           status=${PIPESTATUS[0]}
           echo "$status" > /tmp/status.txt
           exit 0
+      - name: Run bounded Enikk benchmark
+        shell: bash
+        run: |
+          set +e
+          python tests/benchmark_optimizer_meta_usage_enikk_bounds.py 2>&1 | tee /tmp/enikk-bounds.txt
+          status=${PIPESTATUS[0]}
+          echo "$status" > /tmp/enikk-status.txt
+          exit 0
       - uses: actions/upload-artifact@v4
         with:
-          name: optimizer-test-output
+          name: optimizer-debug-output
           path: |
             /tmp/optimizer-test.txt
             /tmp/status.txt
+            /tmp/enikk-bounds.txt
+            /tmp/enikk-status.txt
           retention-days: 1
