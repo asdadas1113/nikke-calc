@@ -79,6 +79,28 @@ def parse_discovery_policy(search: dict[str, Any], *, team_size: int) -> Automat
 
 
 def _discovery_summary(result) -> dict[str, Any]:
+    per_view = []
+    ordinary_expanded = 0
+    allocation_expanded = 0
+    ordinary_rejected = 0
+    allocation_rejected = 0
+    for name, bundle in result.discovery.bundles:
+        ordinary_expanded += bundle.ordinary.expanded_states
+        allocation_expanded += bundle.allocation.expanded_states
+        ordinary_rejected += bundle.ordinary.rejected_illegal
+        allocation_rejected += bundle.allocation.rejected_illegal
+        per_view.append(
+            {
+                "name": name,
+                "ordinary_candidate_count": len(bundle.ordinary.candidates),
+                "ordinary_expanded_states": bundle.ordinary.expanded_states,
+                "ordinary_rejected_illegal": bundle.ordinary.rejected_illegal,
+                "allocation_count": len(bundle.allocation.allocations),
+                "allocation_candidate_count": len(bundle.allocation.candidates),
+                "allocation_expanded_states": bundle.allocation.expanded_states,
+                "allocation_rejected_illegal": bundle.allocation.rejected_illegal,
+            }
+        )
     return {
         "source_views": list(result.discovery.source_views),
         "skipped_views": [
@@ -87,7 +109,17 @@ def _discovery_summary(result) -> dict[str, Any]:
         ],
         "ordinary_candidate_count": len(result.discovery.ordinary_teams),
         "protected_channel_count": len(result.discovery.protected_channels),
+        "protected_team_count": len(result.discovery.protected_teams),
         "candidate_evaluation_order_count": len(result.search.candidate_evaluation_order),
+        "cheap_work": {
+            "ordinary_expanded_states": ordinary_expanded,
+            "allocation_expanded_states": allocation_expanded,
+            "total_expanded_states": ordinary_expanded + allocation_expanded,
+            "ordinary_rejected_illegal": ordinary_rejected,
+            "allocation_rejected_illegal": allocation_rejected,
+            "total_rejected_illegal": ordinary_rejected + allocation_rejected,
+        },
+        "views": per_view,
     }
 
 
@@ -290,12 +322,12 @@ def main() -> None:
         incoming: tuple[str, ...],
         exact_seeds,
         core_seeds,
-        seed_rows: tuple[tuple[str, ...], ...],
+        seed_candidates_for_mode: tuple[tuple[str, ...], ...],
         *,
         seed_roster: tuple[str, ...],
     ):
         def runner(evaluator, budget):
-            automatic = run_automatic_anytime_search_round(
+            result = run_automatic_anytime_search_round(
                 evaluator,
                 budget=budget,
                 roster=roster,
@@ -314,11 +346,11 @@ def main() -> None:
                 core_seeds=core_seeds,
                 seed_max_per_core=seed_max_per_core,
                 seed_roster=seed_roster,
-                seed_candidate_teams=seed_rows or None,
+                seed_candidate_teams=seed_candidates_for_mode or None,
                 evaluate_kwargs=evaluate_kwargs,
             )
-            captured[label] = automatic
-            return automatic.search
+            captured[label] = result
+            return result.search
         return runner
 
     pure_runner = run_mode(
@@ -362,12 +394,10 @@ def main() -> None:
             "allocation": base._allocation_rows(captured["pure"].search),
             "discovery": _discovery_summary(captured["pure"]),
             "unfulfilled_exact_seeds": [
-                list(row.members)
-                for row in captured["pure"].search.seed_selection.unfulfilled_exact
+                list(row.members) for row in captured["pure"].search.seed_selection.unfulfilled_exact
             ],
             "unfulfilled_core_seeds": [
-                list(row.members)
-                for row in captured["pure"].search.seed_selection.unfulfilled_cores
+                list(row.members) for row in captured["pure"].search.seed_selection.unfulfilled_cores
             ],
         },
         "meta": {
@@ -378,12 +408,10 @@ def main() -> None:
             "allocation": base._allocation_rows(captured["meta"].search),
             "discovery": _discovery_summary(captured["meta"]),
             "unfulfilled_exact_seeds": [
-                list(row.members)
-                for row in captured["meta"].search.seed_selection.unfulfilled_exact
+                list(row.members) for row in captured["meta"].search.seed_selection.unfulfilled_exact
             ],
             "unfulfilled_core_seeds": [
-                list(row.members)
-                for row in captured["meta"].search.seed_selection.unfulfilled_cores
+                list(row.members) for row in captured["meta"].search.seed_selection.unfulfilled_cores
             ],
         },
         "meta_minus_pure_damage": comparison.damage_delta,
