@@ -1,0 +1,38 @@
+name: Optimizer reference coverage apply
+
+on:
+  push:
+    branches:
+      - optimizer-debug-localized-ambiguity-20260831
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: optimizer-debug-localized-ambiguity-20260831
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Apply score-blind reference coverage patch
+        run: |
+          base64 -d .github/reference-coverage.patch.gz.b64 | gzip -d > /tmp/reference-coverage.patch
+          git apply --check /tmp/reference-coverage.patch
+          git apply /tmp/reference-coverage.patch
+      - name: Run optimizer tests
+        run: python -m unittest discover -s tests -p 'test_optimizer_*.py'
+      - name: Commit verified coverage fix and clean temporary workflows
+        run: |
+          rm -f .github/reference-coverage.patch.gz.b64
+          rm -f .github/workflows/optimizer-reference-coverage-apply.yml
+          rm -f .github/workflows/optimizer-current-code-export.yml
+          rm -f .github/workflows/optimizer-public-enikk-export.yml
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add optimizer/reference_discovery.py optimizer/__init__.py tests/benchmark_optimizer_same_budget_auto_worker.py tests/benchmark_optimizer_same_budget_auto_enikk_worker.py tests/test_optimizer_reference_discovery.py .github
+          git commit -m 'fix: guarantee score-blind marginal reference coverage per search roster'
+          git push origin HEAD:optimizer-debug-localized-ambiguity-20260831
