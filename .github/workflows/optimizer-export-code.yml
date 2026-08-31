@@ -1,0 +1,21 @@
+name: Optimizer code export
+
+on:
+  push:
+    branches:
+      - optimizer-debug-localized-ambiguity-20260831
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pack repository code
+        run: |
+          rm -rf .git
+          zip -qr /tmp/nikke-calc-optimizer-code.zip .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nikke-calc-optimizer-code
+          path: /tmp/nikke-calc-optimizer-code.zip
+          retention-days: 1
