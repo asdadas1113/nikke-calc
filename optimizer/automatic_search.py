@@ -23,6 +23,10 @@ from .candidate_generation import (
 from .discovery import MultiViewCandidateDiscovery, generate_multi_view_candidate_discovery
 from .evaluator import MorisEvaluator
 from .marginal import PositionPriority
+from .placement import (
+    diverse_grouped_permutation_placements,
+    static_burst_priority_group_key,
+)
 from .refinement import PlacementResolver
 from .seeds import CoreSeed, ExactCompSeed
 
@@ -32,6 +36,7 @@ class AutomaticPlacementMode(str, Enum):
 
     CANONICAL_ONLY = "canonical-only"
     ALL_PERMUTATIONS = "all-permutations"
+    STRUCTURAL_DIVERSE = "structural-diverse"
 
 
 @dataclass(frozen=True)
@@ -80,11 +85,21 @@ class AutomaticSearchResult:
         return self.search.total_score
 
 
-def _placement_expander(mode: AutomaticPlacementMode):
+def _placement_expander(mode: AutomaticPlacementMode, legal=None):
     if mode is AutomaticPlacementMode.CANONICAL_ONLY:
         return identity_placement
     if mode is AutomaticPlacementMode.ALL_PERMUTATIONS:
         return all_permutation_placements
+    if mode is AutomaticPlacementMode.STRUCTURAL_DIVERSE:
+        group_key = static_burst_priority_group_key(legal)
+
+        def structurally_diverse(members):
+            return diverse_grouped_permutation_placements(
+                members,
+                group_key=group_key,
+            )
+
+        return structurally_diverse
     raise ValueError(f"unsupported placement mode: {mode}")
 
 
@@ -159,6 +174,11 @@ def run_automatic_anytime_search_round(
     supplied, an object passed as ``legal`` may opt in by exposing a callable
     ``can_complete`` method. Ordinary legality functions have no inferred partial
     semantics and therefore keep the previous fail-open behavior.
+
+    ``STRUCTURAL_DIVERSE`` placement is likewise exploration-only: it reorders the
+    complete permutation set using static burst-priority grouping when ``legal``
+    exposes ``inspect(team)``, plus score-blind slot diversity inside each group.
+    It never removes placements or changes Moris scores.
     """
 
     names = tuple(str(name) for name in roster)
@@ -170,7 +190,7 @@ def run_automatic_anytime_search_round(
         for seed in core_seeds
         if set(seed.members) <= roster_set
     )
-    placement = _placement_expander(discovery_policy.placement_mode)
+    placement = _placement_expander(discovery_policy.placement_mode, legal)
     resolved_partial_viable = _resolve_partial_viability(
         legal,
         partial_viable,
