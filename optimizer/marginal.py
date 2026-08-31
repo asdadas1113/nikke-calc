@@ -222,6 +222,7 @@ def measure_planned_marginals_with_candidates(
     plan: CandidateMarginalPlan,
     *,
     evaluate_kwargs: dict | None = None,
+    evaluation_batch_size: int = 1,
 ) -> MarginalMeasurement:
     """Execute a candidate-specific plan, stopping cleanly at SearchBudget.
 
@@ -237,6 +238,9 @@ def measure_planned_marginals_with_candidates(
     inventing values for unmeasured candidates.
     """
 
+    if evaluation_batch_size <= 0:
+        raise ValueError("evaluation_batch_size must be positive")
+
     kwargs = dict(evaluate_kwargs or {})
     measured: dict[tuple[str, ...], CandidateTeam] = {}
     baselines: dict[tuple[str, ...], float] = {}
@@ -244,8 +248,7 @@ def measure_planned_marginals_with_candidates(
     evaluated_probes = 0
     budget_exhausted = False
 
-    def evaluate(team: tuple[str, ...], source: str) -> float:
-        result = evaluator.evaluate(team, **kwargs)
+    def record(team: tuple[str, ...], source: str, result) -> float:
         measured.setdefault(
             team,
             CandidateTeam(
@@ -257,14 +260,22 @@ def measure_planned_marginals_with_candidates(
         )
         return result.score
 
-    for reference in plan.used_reference_teams:
-        try:
-            baselines[reference] = evaluate(reference, "marginal-reference")
-        except SearchBudgetExhausted:
-            budget_exhausted = True
+    def batches(rows):
+        rows = tuple(rows)
+        for index in range(0, len(rows), evaluation_batch_size):
+            yield rows[index : index + evaluation_batch_size]
+
+    for batch in batches(plan.used_reference_teams):
+        results = evaluator.evaluate_batch(batch, **kwargs)
+        for reference, result in zip(batch, results):
+            if result is None:
+                budget_exhausted = True
+                continue
+            baselines[reference] = record(reference, "marginal-reference", result)
 
     max_depth = max((len(entry.positions) for entry in plan.entries), default=0)
     for depth in range(max_depth):
+        probes = []
         for entry in plan.entries:
             if depth >= len(entry.positions) or entry.reference not in baselines:
                 continue
@@ -272,24 +283,28 @@ def measure_planned_marginals_with_candidates(
             trial = list(entry.reference)
             replaced = trial[index]
             trial[index] = entry.candidate
-            trial_tuple = tuple(trial)
-            try:
-                score = evaluate(trial_tuple, "marginal-trial")
-            except SearchBudgetExhausted:
-                budget_exhausted = True
-                continue
-            evaluated_probes += 1
-            obs = MarginalObservation(
-                candidate=entry.candidate,
-                reference=entry.reference,
-                replaced=replaced,
-                baseline_score=baselines[entry.reference],
-                trial_score=score,
-            )
-            context = (entry.candidate, entry.reference)
-            previous = best_by_context.get(context)
-            if previous is None or obs.delta > previous.delta:
-                best_by_context[context] = obs
+            probes.append((entry, replaced, tuple(trial)))
+
+        for batch in batches(probes):
+            teams = tuple(row[2] for row in batch)
+            results = evaluator.evaluate_batch(teams, **kwargs)
+            for (entry, replaced, trial_tuple), result in zip(batch, results):
+                if result is None:
+                    budget_exhausted = True
+                    continue
+                score = record(trial_tuple, "marginal-trial", result)
+                evaluated_probes += 1
+                obs = MarginalObservation(
+                    candidate=entry.candidate,
+                    reference=entry.reference,
+                    replaced=replaced,
+                    baseline_score=baselines[entry.reference],
+                    trial_score=score,
+                )
+                context = (entry.candidate, entry.reference)
+                previous = best_by_context.get(context)
+                if previous is None or obs.delta > previous.delta:
+                    best_by_context[context] = obs
 
     observations: dict[str, list[MarginalObservation]] = {
         entry.candidate: [] for entry in plan.entries

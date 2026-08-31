@@ -133,6 +133,7 @@ def main() -> None:
     ap.add_argument("--preferred-area", type=int)
     ap.add_argument("--level-mode", choices=("fixed", "sync"), default="fixed")
     ap.add_argument("--unknown-policy", choices=("error", "moris-default"), default="error")
+    ap.add_argument("--evaluation-batch-size", type=int)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -165,6 +166,13 @@ def main() -> None:
     if not isinstance(search, dict):
         raise ValueError("plan.search must be an object")
     simulate_call_budget = int(search["simulate_call_budget"])
+    evaluation_batch_size = int(
+        args.evaluation_batch_size
+        if args.evaluation_batch_size is not None
+        else search.get("evaluation_batch_size", 1)
+    )
+    if evaluation_batch_size <= 0:
+        raise ValueError("evaluation_batch_size must be positive")
     positions_per_candidate = int(search["positions_per_candidate"])
     candidate_limit = int(search["candidate_limit"])
     marginal_cap_raw = search.get("marginal_max_simulate_calls")
@@ -281,6 +289,7 @@ def main() -> None:
         "roster_count": len(snapshot.roster),
         "blocking_unknown_paths": [row.path for row in snapshot.blocking_unknowns],
         "simulate_call_budget": simulate_call_budget,
+        "evaluation_batch_size": evaluation_batch_size,
         "automatic_discovery": {
             "team_size": discovery_policy.team_size,
             "single_team_beam_width": discovery_policy.single_team_beam_width,
@@ -352,6 +361,7 @@ def main() -> None:
                 seed_roster=seed_roster,
                 seed_candidate_teams=seed_candidates_for_mode or None,
                 evaluate_kwargs=evaluate_kwargs,
+                evaluation_batch_size=evaluation_batch_size,
             )
             captured[label] = result
             return result.search
@@ -392,6 +402,10 @@ def main() -> None:
         "actual_equal_simulate_calls": comparison.simulate_calls,
         "pure": {
             "runtime_s": comparison.pure.runtime_s,
+            "simulate_s": comparison.pure.simulate_s,
+            "batch_requests": comparison.pure.batch_requests,
+            "batch_items": comparison.pure.batch_items,
+            "max_batch_size": comparison.pure.max_batch_size,
             "final_damage": comparison.pure.final_damage,
             "evaluated_candidate_count": comparison.pure.evaluated_candidate_count,
             "stage_calls": comparison.pure.stage_calls.__dict__,
@@ -406,6 +420,10 @@ def main() -> None:
         },
         "meta": {
             "runtime_s": comparison.meta.runtime_s,
+            "simulate_s": comparison.meta.simulate_s,
+            "batch_requests": comparison.meta.batch_requests,
+            "batch_items": comparison.meta.batch_items,
+            "max_batch_size": comparison.meta.max_batch_size,
             "final_damage": comparison.meta.final_damage,
             "evaluated_candidate_count": comparison.meta.evaluated_candidate_count,
             "stage_calls": comparison.meta.stage_calls.__dict__,

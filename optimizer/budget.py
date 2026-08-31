@@ -125,6 +125,47 @@ class BudgetedEvaluator:
             )
         return True
 
+    def evaluate_batch(
+        self,
+        members_batch: Sequence[Sequence[str]],
+        *,
+        characters: Mapping[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
+        enemy: Mapping[str, Any] | None = None,
+        seed: int = 42,
+        verbose: bool = False,
+    ) -> tuple[Evaluation | None, ...]:
+        """Evaluate a deterministic batch, marking budget-rejected misses.
+
+        Requests are admitted in input order, matching the historical scalar loop.
+        A rejected uncached request becomes ``None`` and later rows are still
+        attempted so cache hits remain reusable after exhaustion.  This shape lets
+        orchestration expose batch boundaries without changing the simulate-call
+        budget contract.
+        """
+
+        rows = tuple(members_batch)
+        if rows:
+            self.stats.batch_requests += 1
+            self.stats.batch_items += len(rows)
+            self.stats.max_batch_size = max(self.stats.max_batch_size, len(rows))
+        out: list[Evaluation | None] = []
+        for members in rows:
+            try:
+                out.append(
+                    self.evaluate(
+                        members,
+                        characters=characters,
+                        config=config,
+                        enemy=enemy,
+                        seed=seed,
+                        verbose=verbose,
+                    )
+                )
+            except SearchBudgetExhausted:
+                out.append(None)
+        return tuple(out)
+
     def evaluate(
         self,
         members: Sequence[str],

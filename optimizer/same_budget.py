@@ -47,7 +47,11 @@ class SearchRunMetrics:
     mode: str
     requested_budget: int
     simulate_calls: int
+    simulate_s: float
     runtime_s: float
+    batch_requests: int
+    batch_items: int
+    max_batch_size: int
     final_damage: float | None
     evaluated_candidate_count: int
     final_team_count: int
@@ -130,7 +134,11 @@ def _metrics(
         mode=mode,
         requested_budget=requested_budget,
         simulate_calls=calls,
+        simulate_s=evaluator.stats.simulate_s,
         runtime_s=runtime_s,
+        batch_requests=evaluator.stats.batch_requests,
+        batch_items=evaluator.stats.batch_items,
+        max_batch_size=evaluator.stats.max_batch_size,
         final_damage=None if allocation is None else allocation.total_score,
         evaluated_candidate_count=len(result.evaluated_candidates),
         final_team_count=0 if allocation is None else len(allocation.teams),

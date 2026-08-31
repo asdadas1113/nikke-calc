@@ -209,6 +209,11 @@ def _stage_metrics(
     )
 
 
+def _batches(rows: Sequence, size: int):
+    for index in range(0, len(rows), size):
+        yield rows[index : index + size]
+
+
 def run_anytime_search_round(
     evaluator: MorisEvaluator,
     *,
@@ -236,6 +241,7 @@ def run_anytime_search_round(
     seed_roster: Sequence[str] | None = None,
     seed_candidate_teams: Iterable[Sequence[str]] | None = None,
     evaluate_kwargs: dict | None = None,
+    evaluation_batch_size: int = 1,
 ) -> AnytimeSearchResult:
     """Spend one explicit simulate-call budget without hidden strength bonuses.
 
@@ -271,6 +277,8 @@ def run_anytime_search_round(
         raise ValueError("seed_max_per_core must be non-negative")
     if refinement_max_new < 0:
         raise ValueError("refinement_max_new must be non-negative")
+    if evaluation_batch_size <= 0:
+        raise ValueError("evaluation_batch_size must be positive")
     if refinement_max_new and not refinement_incoming:
         raise ValueError(
             "refinement_incoming must be explicit when refinement_max_new is positive"
@@ -280,23 +288,26 @@ def run_anytime_search_round(
     budgeted = BudgetedEvaluator(evaluator, budget)
     candidates: dict[Team, CandidateTeam] = {}
 
-    for item in prior_candidates:
+    prior_rows = tuple(prior_candidates)
+    for item in prior_rows:
         team = tuple(item.members)
         if legal is not None and not legal(team):
             raise ValueError(f"prior candidate is hard-illegal: {team}")
-        try:
-            result = budgeted.evaluate(team, **kwargs)
-        except SearchBudgetExhausted:
-            continue
-        _merge_candidate(
-            candidates,
-            CandidateTeam(
-                members=team,
-                proxy_score=item.proxy_score,
-                simulated_score=result.score,
-                source=item.source,
-            ),
-        )
+    for batch in _batches(prior_rows, evaluation_batch_size):
+        teams = tuple(tuple(item.members) for item in batch)
+        results = budgeted.evaluate_batch(teams, **kwargs)
+        for item, team, result in zip(batch, teams, results):
+            if result is None:
+                continue
+            _merge_candidate(
+                candidates,
+                CandidateTeam(
+                    members=team,
+                    proxy_score=item.proxy_score,
+                    simulated_score=result.score,
+                    source=item.source,
+                ),
+            )
 
     marginal_before = budgeted.used_simulate_calls
     plan = plan_candidate_specific_marginals(
@@ -316,6 +327,7 @@ def run_anytime_search_round(
         marginal_evaluator,
         plan,
         evaluate_kwargs=kwargs,
+        evaluation_batch_size=evaluation_batch_size,
     )
     for item in marginal.evaluated_candidates:
         _merge_candidate(candidates, item)
@@ -402,22 +414,23 @@ def run_anytime_search_round(
     candidate_before = budgeted.used_simulate_calls
     candidate_attempted = 0
     candidate_evaluated = 0
-    for team, proxy_score, source in selected:
-        candidate_attempted += 1
-        try:
-            result = budgeted.evaluate(team, **kwargs)
-        except SearchBudgetExhausted:
-            continue
-        candidate_evaluated += 1
-        _merge_candidate(
-            candidates,
-            CandidateTeam(
-                members=team,
-                proxy_score=proxy_score,
-                simulated_score=result.score,
-                source=source,
-            ),
-        )
+    for batch in _batches(selected, evaluation_batch_size):
+        candidate_attempted += len(batch)
+        teams = tuple(row[0] for row in batch)
+        results = budgeted.evaluate_batch(teams, **kwargs)
+        for (team, proxy_score, source), result in zip(batch, results):
+            if result is None:
+                continue
+            candidate_evaluated += 1
+            _merge_candidate(
+                candidates,
+                CandidateTeam(
+                    members=team,
+                    proxy_score=proxy_score,
+                    simulated_score=result.score,
+                    source=source,
+                ),
+            )
     candidate_stage = _stage_metrics(
         candidate_before,
         candidate_attempted,
@@ -446,22 +459,23 @@ def run_anytime_search_round(
             placement_resolver=placement_resolver,
             max_new=refinement_max_new,
         )
-        for neighbor in neighbors:
-            refinement_attempted += 1
-            try:
-                result = budgeted.evaluate(neighbor.members, **kwargs)
-            except SearchBudgetExhausted:
-                continue
-            refinement_evaluated += 1
-            _merge_candidate(
-                candidates,
-                CandidateTeam(
-                    members=neighbor.members,
-                    proxy_score=0.0,
-                    simulated_score=result.score,
-                    source="budgeted-one-swap",
-                ),
-            )
+        for batch in _batches(tuple(neighbors), evaluation_batch_size):
+            refinement_attempted += len(batch)
+            teams = tuple(neighbor.members for neighbor in batch)
+            results = budgeted.evaluate_batch(teams, **kwargs)
+            for neighbor, result in zip(batch, results):
+                if result is None:
+                    continue
+                refinement_evaluated += 1
+                _merge_candidate(
+                    candidates,
+                    CandidateTeam(
+                        members=neighbor.members,
+                        proxy_score=0.0,
+                        simulated_score=result.score,
+                        source="budgeted-one-swap",
+                    ),
+                )
     refinement_stage = _stage_metrics(
         refinement_before,
         refinement_attempted,

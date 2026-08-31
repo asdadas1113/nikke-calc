@@ -155,6 +155,7 @@ def main() -> None:
     ap.add_argument("--preferred-area", type=int)
     ap.add_argument("--level-mode", choices=("fixed", "sync"), default="fixed")
     ap.add_argument("--unknown-policy", choices=("error", "moris-default"), default="error")
+    ap.add_argument("--evaluation-batch-size", type=int)
     args = ap.parse_args()
 
     bundle = build_worker_account_bundle(
@@ -266,6 +267,8 @@ def main() -> None:
         ]
         if args.preferred_area is not None:
             command.extend(["--preferred-area", str(args.preferred_area)])
+        if args.evaluation_batch_size is not None:
+            command.extend(["--evaluation-batch-size", str(args.evaluation_batch_size)])
         completed = subprocess.run(
             command,
             cwd=ROOT,

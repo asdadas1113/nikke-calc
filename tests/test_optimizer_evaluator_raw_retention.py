@@ -80,5 +80,36 @@ class EvaluatorRawRetentionTests(unittest.TestCase):
         self.assertEqual(diagnostic.cache_size, 0)
 
 
+class EvaluatorBatchTests(unittest.TestCase):
+    def test_batch_matches_scalar_order_and_cache_semantics(self):
+        calls = []
+
+        def build_squad(names, characters):
+            return tuple(names)
+
+        def build_config(squad, config):
+            return dict(config)
+
+        def simulate(squad, *, config, enemy, seed, verbose):
+            calls.append(tuple(squad))
+            return SimpleNamespace(squad_total=float(ord(squad[0]) - 64))
+
+        evaluator = MorisEvaluator(
+            build_squad,
+            build_config,
+            simulate,
+            cache_identity=CacheIdentity("engine", "account"),
+        )
+        results = evaluator.evaluate_batch((("A",), ("B",), ("A",)))
+
+        self.assertEqual([row.score for row in results], [1.0, 2.0, 1.0])
+        self.assertEqual([row.cache_hit for row in results], [False, False, True])
+        self.assertEqual(calls, [("A",), ("B",)])
+        self.assertEqual(evaluator.stats.simulate_calls, 2)
+        self.assertEqual(evaluator.stats.batch_requests, 1)
+        self.assertEqual(evaluator.stats.batch_items, 3)
+        self.assertEqual(evaluator.stats.max_batch_size, 3)
+
+
 if __name__ == "__main__":
     unittest.main()

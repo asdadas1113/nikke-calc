@@ -156,6 +156,7 @@ def run_automatic_anytime_search_round(
     seed_roster: Sequence[str] | None = None,
     seed_candidate_teams: Sequence[Sequence[str]] | None = None,
     evaluate_kwargs: dict | None = None,
+    evaluation_batch_size: int = 1,
 ) -> AutomaticSearchResult:
     """Run marginal -> multi-view discovery -> Moris -> exact allocation.
 
@@ -249,6 +250,7 @@ def run_automatic_anytime_search_round(
         seed_roster=seed_roster,
         seed_candidate_teams=seed_candidate_teams,
         evaluate_kwargs=evaluate_kwargs,
+        evaluation_batch_size=evaluation_batch_size,
     )
     if "value" not in holder:
         raise RuntimeError("automatic discovery builder was not invoked")

@@ -60,6 +60,9 @@ class EvaluatorStats:
     requests: int = 0
     cache_hits: int = 0
     simulate_calls: int = 0
+    batch_requests: int = 0
+    batch_items: int = 0
+    max_batch_size: int = 0
     build_squad_s: float = 0.0
     build_config_s: float = 0.0
     simulate_s: float = 0.0
@@ -230,6 +233,46 @@ class MorisEvaluator:
             cache_identity=self._cache_identity,
         )
         return key in self._cache
+
+    def evaluate_batch(
+        self,
+        members_batch: Sequence[Sequence[str]],
+        *,
+        characters: Mapping[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
+        enemy: Mapping[str, Any] | None = None,
+        seed: int = 42,
+        verbose: bool = False,
+    ) -> tuple[Evaluation, ...]:
+        """Evaluate one ordered batch while preserving scalar-evaluate semantics.
+
+        This Python adapter is intentionally a sequential fallback.  Search code
+        can expose deterministic evaluation rounds through this method today,
+        while browser/controller integrations may map the same round onto Moris'
+        multi-worker ``CalculatorPool`` without changing candidate order, cache
+        identity, or final score authority.
+
+        Cache hits, duplicate rows, timings, and ``simulate_calls`` therefore
+        behave exactly as if :meth:`evaluate` had been called for each row in
+        order.
+        """
+
+        rows = tuple(members_batch)
+        if rows:
+            self.stats.batch_requests += 1
+            self.stats.batch_items += len(rows)
+            self.stats.max_batch_size = max(self.stats.max_batch_size, len(rows))
+        return tuple(
+            self.evaluate(
+                members,
+                characters=characters,
+                config=config,
+                enemy=enemy,
+                seed=seed,
+                verbose=verbose,
+            )
+            for members in rows
+        )
 
     def evaluate(
         self,

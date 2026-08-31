@@ -107,6 +107,22 @@ class SearchBudgetTests(unittest.TestCase):
             evaluator.is_cached(("A",), config={"duration": 60}, enemy={"def": 123})
         )
 
+
+    def test_batch_marks_budget_rejected_misses_but_keeps_later_cache_hits(self):
+        evaluator = make_evaluator({("A",): 10, ("B",): 20, ("C",): 30})
+        evaluator.evaluate(("C",))
+        budgeted = BudgetedEvaluator(evaluator, SearchBudget(1))
+
+        rows = budgeted.evaluate_batch((("A",), ("B",), ("C",)))
+
+        self.assertEqual(rows[0].score, 10.0)
+        self.assertIsNone(rows[1])
+        self.assertIsNotNone(rows[2])
+        self.assertTrue(rows[2].cache_hit)
+        self.assertEqual(budgeted.used_simulate_calls, 1)
+        self.assertEqual(evaluator.stats.batch_requests, 1)
+        self.assertEqual(evaluator.stats.max_batch_size, 3)
+
     def test_existing_pipeline_can_use_budgeted_evaluator_without_rework(self):
         scores = {("A", "B"): 100, ("C", "D"): 90}
         evaluator = make_evaluator(scores)

@@ -20,9 +20,11 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Iterator, Sequence
 
 TEST_DIR = Path(__file__).resolve().parent
@@ -118,6 +120,12 @@ def _result_row(label: str, result: dict[str, Any]) -> dict[str, Any]:
         "relative_damage_delta": result.get("meta_minus_pure_relative"),
         "pure_runtime_s": float(pure["runtime_s"]),
         "meta_runtime_s": float(meta["runtime_s"]),
+        "pure_simulate_s": float(pure.get("simulate_s", pure["runtime_s"])),
+        "meta_simulate_s": float(meta.get("simulate_s", meta["runtime_s"])),
+        "pure_batch_requests": int(pure.get("batch_requests", 0)),
+        "meta_batch_requests": int(meta.get("batch_requests", 0)),
+        "pure_max_batch_size": int(pure.get("max_batch_size", 1)),
+        "meta_max_batch_size": int(meta.get("max_batch_size", 1)),
         "pure_stage_calls": dict(pure["stage_calls"]),
         "meta_stage_calls": dict(meta["stage_calls"]),
         "pure_allocation": list(pure.get("allocation") or ()),
@@ -171,10 +179,48 @@ def _child_command(args: argparse.Namespace, worker: Path) -> list[str]:
         args.level_mode,
         "--unknown-policy",
         args.unknown_policy,
+        "--evaluation-batch-size",
+        str(args.evaluation_batch_size),
     ]
     if args.preferred_area is not None:
         command.extend(["--preferred-area", str(args.preferred_area)])
     return command
+
+
+def _run_one(
+    args: argparse.Namespace,
+    worker: WorkerInput,
+    index: int,
+) -> tuple[int, dict[str, Any]]:
+    label = f"sample_{index:03d}"
+    completed = subprocess.run(
+        _child_command(args, worker.path),
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    if completed.returncode != 0:
+        row: dict[str, Any] = {
+            "sample": label,
+            "status": "error",
+            "error": (completed.stderr or completed.stdout or "child benchmark failed").strip(),
+        }
+    else:
+        try:
+            result = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            row = {
+                "sample": label,
+                "status": "error",
+                "error": f"child produced invalid JSON: {exc}",
+            }
+        else:
+            row = _result_row(label, result)
+    if args.include_source_labels:
+        row["source_label"] = worker.source_label
+    return index, row
 
 
 def main() -> None:
@@ -189,47 +235,59 @@ def main() -> None:
     ap.add_argument("--level-mode", choices=("fixed", "sync"), default="fixed")
     ap.add_argument("--unknown-policy", choices=("error", "moris-default"), default="error")
     ap.add_argument("--fail-fast", action="store_true")
+    ap.add_argument(
+        "--parallel",
+        type=int,
+        default=1,
+        help="independent account subprocesses to run concurrently (1-6)",
+    )
+    ap.add_argument(
+        "--evaluation-batch-size",
+        type=int,
+        default=6,
+        help="candidate evaluation round width; 6 matches Moris browser pool max",
+    )
     ap.add_argument("--include-source-labels", action="store_true")
     ap.add_argument("--output", type=Path)
     args = ap.parse_args()
 
+    if not 1 <= args.parallel <= 6:
+        raise ValueError("--parallel must be between 1 and 6")
+    if args.evaluation_batch_size <= 0:
+        raise ValueError("--evaluation-batch-size must be positive")
+    if args.fail_fast and args.parallel != 1:
+        raise ValueError("--fail-fast requires --parallel=1")
+
+    started = perf_counter()
     rows: list[dict[str, Any]] = []
     with materialize_workers(args.workers) as workers:
-        for index, worker in enumerate(workers, start=1):
-            label = f"sample_{index:03d}"
-            completed = subprocess.run(
-                _child_command(args, worker.path),
-                cwd=ROOT,
-                check=False,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-            )
-            if completed.returncode != 0:
-                row = {
-                    "sample": label,
-                    "status": "error",
-                    "error": (completed.stderr or completed.stdout or "child benchmark failed").strip(),
-                }
-                if args.include_source_labels:
-                    row["source_label"] = worker.source_label
+        indexed = tuple(enumerate(workers, start=1))
+        if args.parallel == 1:
+            for index, worker in indexed:
+                _index, row = _run_one(args, worker, index)
                 rows.append(row)
-                if args.fail_fast:
+                if args.fail_fast and row.get("status") != "ok":
                     break
-                continue
-            try:
-                result = json.loads(completed.stdout)
-            except json.JSONDecodeError as exc:
-                raise RuntimeError(f"{label}: child produced invalid JSON") from exc
-            row = _result_row(label, result)
-            if args.include_source_labels:
-                row["source_label"] = worker.source_label
-            rows.append(row)
+        else:
+            by_index: dict[int, dict[str, Any]] = {}
+            with ThreadPoolExecutor(max_workers=min(args.parallel, len(indexed))) as pool:
+                futures = {
+                    pool.submit(_run_one, args, worker, index): index
+                    for index, worker in indexed
+                }
+                for future in as_completed(futures):
+                    index, row = future.result()
+                    by_index[index] = row
+            rows = [by_index[index] for index, _worker in indexed]
+    wall_s = perf_counter() - started
 
     output = {
         "benchmark": "anonymous-bounded-transfer-set",
         "engine_commit": args.engine_commit,
         "enikk_raid": args.enikk_raid,
+        "parallel_accounts": args.parallel,
+        "evaluation_batch_size": args.evaluation_batch_size,
+        "wall_s": wall_s,
         "summary": summarize(rows),
         "accounts": rows,
     }
