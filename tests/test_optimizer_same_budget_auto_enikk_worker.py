@@ -87,11 +87,73 @@ class SameBudgetAutoEnikkWorkerTests(unittest.TestCase):
         self.assertEqual(resolved["epochs"]["B"]["knowledge"], "unknown")
         self.assertEqual(counts, {"known": 1, "unknown": 1})
 
-    def test_explicit_epochs_and_change_events_are_rejected_together(self):
+    def test_first_availability_and_later_change_share_registry_mode(self):
+        payload = meta_payload()
+        payload["first_availability"] = [
+            {
+                "character": "A",
+                "knowledge": "known",
+                "available_from": "2025-01-01",
+                "mechanism": "special-recruit",
+                "source": "official-release",
+            },
+            {
+                "character": "B",
+                "knowledge": "unknown",
+                "mechanism": "unknown",
+                "source": "registry-missing",
+            },
+        ]
+        payload["change_events"] = [
+            {
+                "character": "A",
+                "effective_on": "2026-05-01",
+                "effect": "reset",
+                "kind": "favorite-item",
+                "source": "official-favorite",
+            }
+        ]
+        resolved, counts = RUNNER._resolved_meta_payload(payload, ("A", "B"))
+
+        self.assertNotIn("first_availability", resolved)
+        self.assertNotIn("change_events", resolved)
+        self.assertEqual(resolved["epochs"]["A"]["knowledge"], "known")
+        self.assertEqual(resolved["epochs"]["A"]["valid_from"], "2026-05-01")
+        self.assertEqual(resolved["epochs"]["B"]["knowledge"], "unknown")
+        self.assertEqual(counts, {"known": 1, "unknown": 1})
+        self.assertEqual(
+            RUNNER._epoch_input_mode(payload),
+            "first_availability+change_events",
+        )
+
+    def test_first_availability_alone_is_normalized(self):
+        payload = meta_payload()
+        payload["first_availability"] = [
+            {
+                "character": "A",
+                "knowledge": "known",
+                "available_from": "2026-07-02",
+                "mechanism": "special-recruit",
+                "source": "official-release",
+            }
+        ]
+        resolved, counts = RUNNER._resolved_meta_payload(payload, ("A", "B"))
+        self.assertEqual(resolved["epochs"]["A"]["valid_from"], "2026-07-02")
+        self.assertEqual(resolved["epochs"]["B"]["knowledge"], "unknown")
+        self.assertEqual(counts, {"known": 1, "unknown": 1})
+        self.assertEqual(RUNNER._epoch_input_mode(payload), "first_availability")
+
+    def test_explicit_epochs_and_registry_evidence_are_rejected_together(self):
         payload = meta_payload()
         payload["epochs"] = {}
         payload["change_events"] = []
-        with self.assertRaisesRegex(ValueError, "either explicit epochs or change_events"):
+        with self.assertRaisesRegex(ValueError, "registry evidence"):
+            RUNNER._resolved_meta_payload(payload, ("A",))
+
+        payload = meta_payload()
+        payload["epochs"] = {}
+        payload["first_availability"] = []
+        with self.assertRaisesRegex(ValueError, "registry evidence"):
             RUNNER._resolved_meta_payload(payload, ("A",))
 
     def test_no_epoch_mode_becomes_unknown_for_every_owned_character(self):
@@ -101,6 +163,7 @@ class SameBudgetAutoEnikkWorkerTests(unittest.TestCase):
             {row["knowledge"] for row in resolved["epochs"].values()},
             {"unknown"},
         )
+        self.assertEqual(RUNNER._epoch_input_mode(meta_payload()), "none")
 
 
 if __name__ == "__main__":
