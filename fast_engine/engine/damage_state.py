@@ -135,6 +135,12 @@ class DamageTermResolver:
             burst_dmg_aoe_pct=self._sum(actor, "burst_dmg_aoe_pct", now),
             pierce_dmg_pct=self._sum(actor, "pierce_dmg_pct", now),
             armor_break_dmg_pct=self._sum(actor, "armor_break_dmg_pct", now),
+            pierce_enabled=self.effects.has_stat(
+                actor, "pierce_enabled", now=now
+            ),
+            armor_break_enabled=self.effects.has_stat(
+                actor, "armor_break_enabled", now=now
+            ),
             dot_dmg_pct=self._sum(actor, "dot_dmg_pct", now),
             projectile_explosion_dmg_pct=self._sum_aliases(
                 actor,
