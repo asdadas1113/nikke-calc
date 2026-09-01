@@ -3,7 +3,7 @@ from __future__ import annotations
 from math import inf, nextafter
 from typing import TYPE_CHECKING
 
-from .damage_policy import is_direct_damage_buff_runtime_supported
+from .damage_policy import DIRECT_DAMAGE_STATE_STATS, is_direct_damage_buff_runtime_supported
 from .damage_state import DamageTermResolver
 from .model import CompiledSquad, EnemyStaticProfile, FastScore
 from .normal_attack import compile_normal_attack_spec, expected_normal_block_damage
@@ -140,6 +140,16 @@ def _direct_normal_effect_needs_score_support(effect) -> bool:
     return effect.target_spec.mode.value == "enemy"
 
 
+def _direct_skill_state_needs_score_support(effect) -> bool:
+    stat = effect.stat or ""
+    mode = effect.target_spec.mode.value
+    # These two stats only enter outgoing DealForm when they are attached to the
+    # enemy. Ally defensive versions must not block a ranking score.
+    if stat in {"def_pct", "received_dmg_pct"}:
+        return mode == "enemy"
+    return True
+
+
 def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
     """Return mechanics that make the current static normal score unsafe.
 
@@ -181,6 +191,35 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
         if has_score_periodic and stat in _PERIODIC_GRID_INVALIDATORS:
             blockers.append(f"periodic_grid:{label}")
 
+    return tuple(dict.fromkeys(blockers))
+
+
+def static_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
+    """Return state-delivery blockers for normal + supported simple skill damage.
+
+    Unsupported *damage events* may still be omitted explicitly and reported on
+    ``FastScore.unsupported``. By contrast, an unsupported buff/debuff that could
+    change the damage of otherwise-supported hits contaminates the numeric score
+    itself, so this function fails closed instead of returning a biased subtotal.
+    """
+
+    blockers = list(static_normal_score_blockers(squad))
+    for effect in squad.effects:
+        if effect.effect_type != "buff" or _is_patternless_unreachable(effect):
+            continue
+        stat = effect.stat or ""
+        if stat not in DIRECT_DAMAGE_STATE_STATS:
+            continue
+        if not _direct_skill_state_needs_score_support(effect):
+            continue
+        if is_direct_damage_buff_runtime_supported(effect):
+            continue
+        if _is_score_safe_fixed_periodic(effect):
+            continue
+        owner = squad.members[effect.actor].name
+        blockers.append(
+            f"skill_state_delivery:{owner}:{effect.name or stat}:{stat}"
+        )
     return tuple(dict.fromkeys(blockers))
 
 
@@ -280,3 +319,64 @@ def score_static_normal_squad(
     observer = StaticNormalAttackObserver(runtime, duration=horizon)
     result = runtime.run(duration=horizon, score_observer=observer)
     return observer.finish(events_processed=result.events_processed)
+
+
+def score_static_squad(
+    squad: CompiledSquad,
+    policy: "BurstPolicy",
+    enemy: EnemyStaticProfile | None = None,
+    *,
+    duration: float | None = None,
+) -> FastScore:
+    """Score normal attacks plus every currently certified simple damage event.
+
+    Missing complex damage events are returned explicitly in ``unsupported``;
+    unsupported state delivery that could corrupt supported hit values raises
+    ``NotImplementedError`` instead of silently returning a biased subtotal.
+    """
+
+    from .burst_runtime import BurstRuntime
+    from .damage_runtime import SimpleDamageScoreSink
+
+    blockers = static_score_blockers(squad)
+    if blockers:
+        detail = ", ".join(blockers[:8])
+        if len(blockers) > 8:
+            detail += f", +{len(blockers) - 8} more"
+        raise NotImplementedError(
+            "Fast static score blocked by unsupported comparison-critical state: "
+            + detail
+        )
+
+    horizon = policy.duration if duration is None else min(float(duration), policy.duration)
+    enemy_profile = enemy or EnemyStaticProfile(duration=policy.duration)
+    sink = SimpleDamageScoreSink(squad, enemy_profile)
+    runtime = BurstRuntime(
+        squad,
+        policy,
+        enemy_profile,
+        damage_sink=sink,
+    )
+    observer = StaticNormalAttackObserver(runtime, duration=horizon)
+    result = runtime.run(duration=horizon, score_observer=observer)
+    normal = observer.finish(events_processed=result.events_processed)
+
+    totals = tuple(
+        normal.char_total[actor] + sink.char_total[actor]
+        for actor in range(len(squad.members))
+    )
+    unsupported = tuple(
+        f"skill_damage:{squad.members[effect.actor].name}:"
+        f"{effect.name or effect.stat or '?'}:{effect.stat or '?'}"
+        for effect in squad.effects
+        if effect.effect_type == "damage"
+        and not sink.supports(effect)
+        and not _is_patternless_unreachable(effect)
+    )
+    return FastScore(
+        squad_total=sum(totals),
+        char_total=totals,
+        duration=horizon,
+        events_processed=result.events_processed,
+        unsupported=unsupported,
+    )
