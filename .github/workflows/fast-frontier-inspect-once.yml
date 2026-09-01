@@ -19,7 +19,9 @@ jobs:
         with:
           python-version: '3.13'
       - name: Apply ammo charge runtime patch
-        run: python fast_engine/research/_apply_ammo_charge_patch_once.py
+        run: |
+          python fast_engine/research/_apply_ammo_charge_patch_once.py
+          python fast_engine/research/_fix_ammo_charge_old_assertion_once.py
       - name: Targeted Fast regressions
         run: |
           python -m unittest \
@@ -41,7 +43,8 @@ jobs:
             fast_engine/engine/dispatcher.py \
             fast_engine/engine/dynamic_weapon.py \
             fast_engine/engine/score.py \
-            fast_engine/tests/test_damage_dynamic_ammo_charge.py
+            fast_engine/tests/test_damage_dynamic_ammo_charge.py \
+            fast_engine/tests/test_damage_helm_bullet_lifetime.py
           git diff --cached --check
           git commit -m 'impl: dynamic ammo charge runtime'
           git push origin HEAD:fast-engine-phase2-20260901
