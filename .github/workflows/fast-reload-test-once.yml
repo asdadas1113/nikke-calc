@@ -1,0 +1,17 @@
+name: Fast reload test once
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Live reload scoring tests
+        run: python -m unittest fast_engine.tests.test_damage_dynamic_reload_scoring
