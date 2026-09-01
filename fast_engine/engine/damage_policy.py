@@ -92,6 +92,8 @@ _SAFE_TARGETS = frozenset({
 
 _SAFE_EVENT_KEYS = frozenset({
     "battle_start",
+    "event:enemy_spawn",
+    "event:target_spawn",
     "burst_cast",
     "full_burst_start",
     "full_burst_end",
