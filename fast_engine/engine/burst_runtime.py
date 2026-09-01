@@ -372,6 +372,11 @@ class BurstRuntime:
                         event.time,
                         self.scheduler,
                     )
+                # Moris applies all full_burst_start buffs first, reconciles
+                # persistent burst cooldown, then evaluates queued B3 bonus damage
+                # under full-burst state. The score sink mirrors that exact point.
+                if self.damage_sink is not None:
+                    self.damage_sink.flush_pending_burst(now=event.time)
             elif event.kind is EventKind.FULL_BURST_END:
                 fb_ends.append(event.time)
             self.weapons.sync(event.time)
