@@ -79,6 +79,9 @@ jobs:
       - name: Fast — structural performance
         if: ${{ !cancelled() }}
         run: python -m unittest fast_engine.tests.test_performance_contract
+      - name: Fast — public ranking probe
+        if: ${{ !cancelled() }}
+        run: python -m fast_engine.research.public_ranking_probe
 
       # 아래는 Fast가 모두 초록일 때만 기존 정본 회귀를 돈다.
       - name: 엔진 단위 테스트
