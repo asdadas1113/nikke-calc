@@ -161,6 +161,15 @@ class ShotBlockCursor:
         self.shot_offset = 0
 
     def consume_until(self, time: float, *, inclusive: bool) -> int:
+        """Consume shots ``<= time`` or strictly ``< time``.
+
+        The exclusive path deliberately uses a ceil formulation instead of
+        subtracting epsilon and then feeding that value through the inclusive
+        floor formula.  The latter can add epsilon twice and accidentally pull
+        an exactly-equal shot across the boundary (e.g. t=3.0 into ``<3.0``),
+        which would make hit-triggered buffs retroactively affect their own shot.
+        """
+
         total = 0
         eps = 1e-9
         while self.block_index < len(self.blocks):
@@ -177,14 +186,24 @@ class ShotBlockCursor:
                 if not due:
                     break
                 take = remaining
-            else:
-                limit = time + eps if inclusive else time - eps
-                if first > limit:
+            elif inclusive:
+                if first > time + eps:
                     break
+                relative = (time - first) / block.interval
                 take = min(
                     remaining,
-                    int(math.floor((limit - first) / block.interval + eps)) + 1,
+                    max(0, int(math.floor(relative + eps)) + 1),
                 )
+            else:
+                if first >= time - eps:
+                    break
+                relative = (time - first) / block.interval
+                # Number of integer offsets i >= 0 satisfying i < relative.
+                take = min(
+                    remaining,
+                    max(0, int(math.ceil(relative - eps))),
+                )
+
             if take <= 0:
                 break
             total += take
