@@ -152,16 +152,23 @@ class DynamicMultiSignalTests(unittest.TestCase):
             effect_filter=lambda _effect: True,
         )
         self.assertEqual(runtime.actors, (0,))
+        self.assertTrue(runtime.emits_every_charge_shot(0))
         runtime.start(0.0)
 
-        self.assertAlmostEqual(scheduler.peek_time(), 1.0)
-        first = runtime.handle_boundary(scheduler.pop())
-        self.assertEqual(
-            [(row.event_key, row.count_increment) for row in first.signals],
-            [("full_charge_hit", 1)],
-        )
-        runtime.sync(1.0)
-        self.assertAlmostEqual(scheduler.peek_time(), 2.0)
+        flags: list[bool] = []
+        for shot_time in range(1, 7):
+            self.assertAlmostEqual(scheduler.peek_time(), float(shot_time))
+            event = scheduler.pop()
+            boundary = runtime.handle_boundary(event)
+            self.assertEqual(
+                [(row.event_key, row.count_increment) for row in boundary.signals],
+                [("full_charge_hit", 1)],
+            )
+            flags.append(boundary.is_last_bullet)
+            runtime.sync(float(shot_time))
+
+        # Magazine size is six: only the sixth post-shot boundary is last_bullet.
+        self.assertEqual(flags, [False, False, False, False, False, True])
 
     def test_hit_count_only_charge_actor_enters_dynamic_runtime(self):
         hit_only = _effect(0, "hit_count:3", "hit_count", 3)
@@ -198,6 +205,7 @@ class DynamicMultiSignalTests(unittest.TestCase):
             effect_filter=lambda _effect: True,
         )
         self.assertEqual(runtime.actors, (0,))
+        self.assertFalse(runtime.emits_every_charge_shot(0))
         runtime.start(0.0)
         self.assertAlmostEqual(scheduler.peek_time(), 3.0)
         event = scheduler.pop()
