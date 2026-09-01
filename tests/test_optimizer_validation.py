@@ -4,7 +4,12 @@ import unittest
 
 from optimizer.candidates import select_diverse
 from optimizer.constraints import ConstraintSet
-from optimizer.validation import enumerate_legal_teams, run_exhaustive_validation
+from optimizer.validation import (
+    RankingObservation,
+    analyze_fast_moris_ranking,
+    enumerate_legal_teams,
+    run_exhaustive_validation,
+)
 
 
 class ExhaustiveValidationTest(unittest.TestCase):
@@ -94,6 +99,116 @@ class ExhaustiveValidationTest(unittest.TestCase):
                 ],
                 team_count=2,
                 top_n=1,
+            )
+
+
+class FastMorisRankingDiagnosticsTest(unittest.TestCase):
+    def test_separates_blocked_top_team_from_scored_rank_miss(self):
+        observations = [
+            RankingObservation(
+                ("A",),
+                moris_score=100,
+                fast_score=90,
+                groups=("weapon:AR",),
+            ),
+            RankingObservation(
+                ("B",),
+                moris_score=95,
+                fast_score=None,
+                blockers=("cadence:ammo_charge_flat",),
+                groups=("mechanic:ammo",),
+            ),
+            RankingObservation(
+                ("C",),
+                moris_score=90,
+                fast_score=95,
+                unsupported=("skill_damage:complex",),
+                groups=("weapon:MG",),
+            ),
+            RankingObservation(("D",), moris_score=80, fast_score=89),
+            RankingObservation(("E",), moris_score=70, fast_score=88),
+        ]
+
+        metrics = analyze_fast_moris_ranking(
+            observations,
+            top_n=3,
+            top_k=2,
+        )
+
+        self.assertEqual(metrics.candidate_count, 5)
+        self.assertEqual(metrics.fast_scored_count, 4)
+        self.assertEqual(metrics.blocked_count, 1)
+        self.assertEqual(metrics.top_n_recalled, 2)
+        self.assertAlmostEqual(metrics.top_n_recall, 2 / 3)
+        self.assertEqual(metrics.top_n_blocked, 1)
+        self.assertEqual(metrics.top_n_ranked_out, 0)
+        self.assertAlmostEqual(metrics.catastrophic_false_negative_rate, 1 / 3)
+        self.assertEqual(metrics.best_missed_true_rank, 2)
+        self.assertEqual(metrics.best_missed_team, ("B",))
+        self.assertEqual(metrics.comparable_pairs, 6)
+        self.assertAlmostEqual(metrics.pairwise_accuracy, 5 / 6)
+        self.assertEqual(
+            metrics.blocker_counts,
+            (("cadence:ammo_charge_flat", 1),),
+        )
+        self.assertEqual(
+            metrics.unsupported_counts,
+            (("skill_damage:complex", 1),),
+        )
+
+        by_group = {row.group: row for row in metrics.groups}
+        self.assertEqual(by_group["mechanic:ammo"].blocked_count, 1)
+        self.assertEqual(by_group["mechanic:ammo"].top_n_count, 1)
+        self.assertEqual(by_group["mechanic:ammo"].top_n_recall, 0.0)
+        # C is third by Moris but first by Fast among supported rows: negative
+        # percentile error means this group is being promoted, not suppressed.
+        self.assertLess(
+            by_group["weapon:MG"].mean_rank_percentile_error,
+            0.0,
+        )
+
+    def test_scored_top_n_miss_is_not_misclassified_as_blocked(self):
+        metrics = analyze_fast_moris_ranking(
+            [
+                RankingObservation(("A",), 100, 100),
+                RankingObservation(("B",), 90, 1),
+                RankingObservation(("C",), 80, 99),
+            ],
+            top_n=2,
+            top_k=2,
+        )
+
+        self.assertEqual(metrics.top_n_recalled, 1)
+        self.assertEqual(metrics.top_n_blocked, 0)
+        self.assertEqual(metrics.top_n_ranked_out, 1)
+        self.assertEqual(metrics.best_missed_true_rank, 2)
+        self.assertEqual(metrics.best_missed_team, ("B",))
+
+    def test_fast_pairwise_tie_gets_half_credit_and_moris_tie_is_ignored(self):
+        metrics = analyze_fast_moris_ranking(
+            [
+                RankingObservation(("A",), 100, 50),
+                RankingObservation(("B",), 90, 50),
+                RankingObservation(("C",), 90, 40),
+            ],
+            top_n=2,
+            top_k=2,
+        )
+
+        # A/B is comparable and tied by Fast => 0.5; A/C is concordant => 1.0;
+        # B/C is a Moris tie and contributes no pair.
+        self.assertEqual(metrics.comparable_pairs, 2)
+        self.assertAlmostEqual(metrics.pairwise_accuracy, 0.75)
+
+    def test_duplicate_candidate_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "duplicate ranking candidate"):
+            analyze_fast_moris_ranking(
+                [
+                    RankingObservation(("A",), 10, 9),
+                    RankingObservation(("A",), 8, 7),
+                ],
+                top_n=1,
+                top_k=1,
             )
 
 
