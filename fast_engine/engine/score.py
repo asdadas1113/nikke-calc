@@ -18,7 +18,7 @@ from .shot_blocks import (
     compile_static_shot_blocks,
     static_bullet_lifetime_cadence_safe,
 )
-from .target_scope import possible_ally_targets
+from .target_scope import possible_ally_targets, target_scope_is_static
 from .triggers import TriggerMode
 from .weapon import StaticCadenceModifiers
 
@@ -341,6 +341,10 @@ def _direct_damage_buff_score_supported(squad: CompiledSquad, effect) -> bool:
     if not is_direct_damage_buff_runtime_supported(effect):
         return False
     if effect.parameters.get("duration_bullets") is None:
+        return True
+    if not target_scope_is_static(effect.target_spec):
+        # The target cohort is selected at activation time. The dispatcher
+        # validates every resolved recipient atomically before mutating state.
         return True
     targets = _possible_ally_targets(squad, effect)
     return bool(targets) and all(
