@@ -11,7 +11,7 @@ from .model import CompiledSquad, EnemyStaticProfile
 from .scheduler import EventKind, EventScheduler
 from .state import StateStore
 from .triggers import TriggerMode
-from .weapon import simulate_static_weapon_trigger_boundaries
+from .weapon_events import simulate_weapon_trigger_boundaries
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,7 +196,7 @@ class BurstRuntime:
         self.weapons.start(0.0)
         dynamic_actors = set(self.weapons.actors)
         from .burst import BurstSignal
-        for boundary in simulate_static_weapon_trigger_boundaries(
+        for boundary in simulate_weapon_trigger_boundaries(
             self.squad,
             duration=horizon,
             effect_filter=self.dispatcher.is_executable_effect,
