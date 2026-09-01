@@ -10,12 +10,16 @@ if TYPE_CHECKING:
     from .model import CompiledEffect, CompiledSquad
 
 
+_LAST_BULLET_EVENT_KEYS = frozenset({"last_bullet_fire", "last_bullet"})
+
+
 @dataclass(frozen=True, slots=True)
 class LastBulletBoundary:
-    """One exact last-bullet-fire boundary from the static cadence model."""
+    """One magazine-ending boundary for one exact Moris last-bullet signal."""
 
     time: float
     actor: int
+    event_key: str
 
 
 class _LastBulletCadence(WeaponCadenceMachine):
@@ -144,18 +148,33 @@ def simulate_static_last_bullet_boundaries(
     duration: float,
     effect_filter: Callable[["CompiledEffect"], bool],
 ) -> tuple[LastBulletBoundary, ...]:
-    """Return only magazine-ending shot boundaries for interested static actors."""
+    """Return only magazine-ending boundaries observed by executable effects.
 
-    interested: set[int] = set()
+    ``last_bullet_fire`` and ``last_bullet`` share the physical magazine-ending
+    timestamp but remain distinct logical signals. Moris emits the former before
+    the final shot and the latter after its damage/hit notifications; callers must
+    preserve that semantic distinction instead of aliasing one name to the other.
+    """
+
+    interested: dict[int, set[str]] = {}
     for effect in squad.effects:
         if not effect_filter(effect):
             continue
-        if any(rule.event_key == "last_bullet_fire" for rule in effect.triggers):
-            interested.add(effect.actor)
+        keys = {
+            rule.event_key
+            for rule in effect.triggers
+            if rule.event_key in _LAST_BULLET_EVENT_KEYS
+        }
+        if keys:
+            interested.setdefault(effect.actor, set()).update(keys)
 
     out: list[LastBulletBoundary] = []
     for actor in sorted(interested):
         machine = _LastBulletCadence(actor, squad.members[actor], duration=duration)
-        out.extend(LastBulletBoundary(t, actor) for t in machine.boundaries())
-    out.sort(key=lambda row: (row.time, row.actor))
+        for t in machine.boundaries():
+            out.extend(
+                LastBulletBoundary(t, actor, event_key)
+                for event_key in sorted(interested[actor])
+            )
+    out.sort(key=lambda row: (row.time, row.actor, row.event_key))
     return tuple(out)
