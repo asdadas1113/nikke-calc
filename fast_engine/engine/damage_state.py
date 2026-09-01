@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .damage import DamageTerms
+from .damage_policy import is_static_element_override_score_supported
 from .effects import ActiveEffectStore
 from .model import CompiledSquad, EnemyStaticProfile
 from .state import ENEMY, StateDomain, StateStore
@@ -23,7 +24,14 @@ class DamageTermResolver:
     in yet; adding one requires explicitly widening this dependency token.
     """
 
-    __slots__ = ("squad", "effects", "state", "enemy", "_cache")
+    __slots__ = (
+        "squad",
+        "effects",
+        "state",
+        "enemy",
+        "_cache",
+        "_static_element_override_codes",
+    )
 
     def __init__(
         self,
@@ -37,6 +45,20 @@ class DamageTermResolver:
         self.state = state
         self.enemy = enemy
         self._cache: dict[int, tuple[tuple[int, ...], DamageTerms]] = {}
+
+        # Moris keeps element_code_override separate from the roster code and
+        # simply ORs it into the element-advantage predicate while active. Only
+        # immutable battle-start/self/irremovable variants are folded here, so
+        # this table never needs a runtime dependency token.
+        override_codes: list[set[str]] = [set() for _ in squad.members]
+        for effect in squad.effects:
+            if is_static_element_override_score_supported(effect):
+                override_codes[effect.actor].add(
+                    str(effect.parameters["target_code"])
+                )
+        self._static_element_override_codes = tuple(
+            frozenset(codes) for codes in override_codes
+        )
 
     def _token(self, actor: int) -> tuple[int, ...]:
         return self.state.dependency_token(
@@ -81,6 +103,15 @@ class DamageTermResolver:
         )
 
         element = self.squad.members[actor].element
+        base_element_match = (
+            bool(element)
+            and bool(self.enemy.element)
+            and _CODE_ADVANTAGE.get(str(element)) == self.enemy.element
+        )
+        override_element_match = (
+            bool(self.enemy.element)
+            and str(self.enemy.element) in self._static_element_override_codes[actor]
+        )
         terms = DamageTerms(
             atk_pct=self._sum(actor, "atk_pct", now),
             atk_flat=(
@@ -126,11 +157,7 @@ class DamageTermResolver:
             element_bonus_pct=self._sum_aliases(
                 actor, ("element_bonus", "element_bonus_pct"), now
             ),
-            element_match=(
-                bool(element)
-                and bool(self.enemy.element)
-                and _CODE_ADVANTAGE.get(str(element)) == self.enemy.element
-            ),
+            element_match=base_element_match or override_element_match,
         )
         self._cache[actor] = (token, terms)
         return terms
