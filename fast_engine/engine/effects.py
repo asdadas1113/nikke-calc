@@ -35,6 +35,7 @@ class EffectExpiryToken:
     target: int
     cohort: tuple[int, ...]
     generation: int
+    post_shot: bool = False
 
 
 class ActiveEffectStore:
@@ -171,9 +172,15 @@ class ActiveEffectStore:
             consume_at = next_static_shot_after(self.squad, target, now)
             scheduler.schedule(
                 consume_at,
-                EventKind.BULLET_EXPIRE,
+                EventKind.STATE_EXPIRE,
                 actor=target,
-                payload=EffectExpiryToken(effect.effect_id, target, cohort, generation),
+                payload=EffectExpiryToken(
+                    effect.effect_id,
+                    target,
+                    cohort,
+                    generation,
+                    post_shot=True,
+                ),
             )
         return active
 
@@ -236,7 +243,7 @@ class ActiveEffectStore:
         active = self._active.get(key)
         if active is None or active.generation != token.generation:
             return None
-        if event.kind is not EventKind.BULLET_EXPIRE:
+        if not token.post_shot:
             if active.expires_at == inf or event.time < active.expires_at - _EPS:
                 return None
         effect = self._effects[token.effect_id]
