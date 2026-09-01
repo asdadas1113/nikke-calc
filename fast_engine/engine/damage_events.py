@@ -42,17 +42,12 @@ _UNSAFE_DYNAMIC_PARAMETER_KEYS = frozenset({
 })
 
 
-def compile_simple_damage_event(
+def _compile_damage_event(
     effect: CompiledEffect,
     character: CompiledCharacter,
+    *,
+    allow_pending_b3_bonus: bool,
 ) -> DamageEventSpec | None:
-    """Lower the first fail-closed subset of Moris damage effects.
-
-    Returns ``None`` for mechanics whose coefficient/hit count/timing depends on
-    live state. Callers must keep those effects explicit as unsupported; never
-    reinterpret them as zero damage.
-    """
-
     if effect.effect_type != "damage" or effect.value is None:
         return None
     if effect.tick_interval is not None:
@@ -88,14 +83,12 @@ def compile_simple_damage_event(
         if hit_count <= 0:
             return None
 
-    # Moris delays B3 burst-cast bonus_damage until full-burst entry so that it
-    # receives full-burst state while preserving source-order buff exclusions.
-    # That is a distinct timing primitive, not a simple immediate damage event.
-    if (
+    is_pending_b3_bonus = (
         base_stat == "bonus_damage"
         and character.burst_stage == "3"
         and any(rule.raw == "burst_cast" for rule in effect.triggers)
-    ):
+    )
+    if is_pending_b3_bonus and not allow_pending_b3_bonus:
         return None
 
     normal_formula = params.get("damage_formula") == "normal_attack"
@@ -127,6 +120,50 @@ def compile_simple_damage_event(
         hit_count=hit_count,
         hit=hit,
         normal_formula=normal_formula,
+    )
+
+
+def compile_simple_damage_event(
+    effect: CompiledEffect,
+    character: CompiledCharacter,
+) -> DamageEventSpec | None:
+    """Lower immediate damage whose coefficient/hit count is compile-time fixed.
+
+    B3 ``burst_cast`` bonus damage deliberately stays out of this lane because
+    Moris delays it until full-burst entry. Use
+    :func:`compile_pending_b3_bonus_damage_event` for that distinct primitive.
+    """
+
+    return _compile_damage_event(
+        effect,
+        character,
+        allow_pending_b3_bonus=False,
+    )
+
+
+def compile_pending_b3_bonus_damage_event(
+    effect: CompiledEffect,
+    character: CompiledCharacter,
+) -> DamageEventSpec | None:
+    """Lower the fixed-coefficient subset of Moris' delayed B3 bonus damage.
+
+    This function only establishes the damage shape. Runtime still has to prove
+    source-order safety before accepting it: later same-caster ``burst_cast``
+    buffs are excluded by Moris from the delayed hit and therefore remain a
+    fail-closed blocker in ``SimpleDamageScoreSink``.
+    """
+
+    stat = effect.stat or ""
+    if stat.split(":", 1)[0] != "bonus_damage":
+        return None
+    if character.burst_stage != "3":
+        return None
+    if not any(rule.raw == "burst_cast" for rule in effect.triggers):
+        return None
+    return _compile_damage_event(
+        effect,
+        character,
+        allow_pending_b3_bonus=True,
     )
 
 
