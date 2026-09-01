@@ -22,14 +22,14 @@ from fast_engine.engine.targets import compile_target
 from fast_engine.engine.triggers import TriggerIndex, TriggerMode, TriggerRule
 
 
-def _ready_capability() -> EffectCapability:
+def _ready_capability(*, stat: str = "charge_speed_pct") -> EffectCapability:
     return EffectCapability(
         character="synthetic-charge",
         index=0,
         source="synthetic",
         name="live charge speed",
         effect_type="buff",
-        stat="charge_speed_pct",
+        stat=stat,
         category=EffectCategory.CADENCE_TIMELINE,
         timing_families=("burst",),
         condition_families=(),
@@ -40,7 +40,7 @@ def _ready_capability() -> EffectCapability:
     )
 
 
-def _charge_speed_effect() -> CompiledEffect:
+def _charge_speed_effect(*, stat: str = "charge_speed_pct") -> CompiledEffect:
     return CompiledEffect(
         effect_id=0,
         actor=0,
@@ -49,7 +49,7 @@ def _charge_speed_effect() -> CompiledEffect:
         source_tag="skill",
         name="live charge speed",
         effect_type="buff",
-        stat="charge_speed_pct",
+        stat=stat,
         polarity="beneficial",
         target="self",
         target_spec=compile_target(
@@ -71,7 +71,7 @@ def _charge_speed_effect() -> CompiledEffect:
         max_trigger=None,
         tick_interval=None,
         parameters={},
-        capability=_ready_capability(),
+        capability=_ready_capability(stat=stat),
     )
 
 
@@ -114,6 +114,51 @@ def _squad(effect: CompiledEffect) -> CompiledSquad:
     )
 
 
+def _run_live_speed_case(effect: CompiledEffect) -> tuple[float, float]:
+    squad = _squad(effect)
+    enemy = EnemyStaticProfile(
+        defense=0.0,
+        element=None,
+        core_uptime=0.0,
+        core_px=0.0,
+        duration=4.0,
+    )
+    runtime = BurstRuntime(
+        squad,
+        BurstPolicy(duration=4.0, first_burst_time=10.0),
+        enemy,
+    )
+    # Activate the finite state directly so this test isolates cadence
+    # replanning rather than burst-machine reachability. The effect expires
+    # at 1.5 s: 50% speed produces shots at 0.5/1.0, then the in-progress
+    # third charge is replanned to 2.0 and normal shots continue at 3.0.
+    runtime.dispatcher.effects.activate(
+        effect,
+        0,
+        0.0,
+        runtime.scheduler,
+    )
+    observer = StaticNormalAttackObserver(runtime, duration=4.0)
+    if observer.dynamic_charge_actors != (0,):
+        raise AssertionError(observer.dynamic_charge_actors)
+
+    result = runtime.run(duration=4.0, score_observer=observer)
+    score = observer.finish(events_processed=result.events_processed)
+
+    terms = observer.resolver.resolve(0, now=0.25)
+    per_shot = expected_normal_block_damage(
+        observer.specs[0],
+        shot_count=1,
+        base_atk=squad.members[0].base_atk,
+        enemy_def=enemy.defense,
+        terms=terms,
+        core_prob=0.0,
+        is_full_burst=False,
+        is_optimal_range=False,
+    )
+    return score.char_total[0], per_shot
+
+
 class DynamicChargeScoringTests(unittest.TestCase):
     def test_live_charge_speed_uses_runtime_shots_without_static_double_count(self):
         effect = _charge_speed_effect()
@@ -122,47 +167,23 @@ class DynamicChargeScoringTests(unittest.TestCase):
             "cadence:synthetic-charge:live charge speed:charge_speed_pct",
             static_normal_score_blockers(squad),
         )
+        total, per_shot = _run_live_speed_case(effect)
+        self.assertAlmostEqual(total, per_shot * 4.0, places=6)
 
-        enemy = EnemyStaticProfile(
-            defense=0.0,
-            element=None,
-            core_uptime=0.0,
-            core_px=0.0,
-            duration=4.0,
+    def test_live_caster_based_charge_speed_uses_same_dynamic_score_bridge(self):
+        effect = _charge_speed_effect(stat="charge_speed_caster_based_pct")
+        squad = _squad(effect)
+        self.assertNotIn(
+            "cadence:synthetic-charge:live charge speed:charge_speed_caster_based_pct",
+            static_normal_score_blockers(squad),
         )
-        runtime = BurstRuntime(
-            squad,
-            BurstPolicy(duration=4.0, first_burst_time=10.0),
-            enemy,
-        )
-        # Activate the finite state directly so this test isolates cadence
-        # replanning rather than burst-machine reachability. The effect expires
-        # at 1.5 s: 50% speed produces shots at 0.5/1.0, then the in-progress
-        # third charge is replanned to 2.0 and normal shots continue at 3.0.
-        runtime.dispatcher.effects.activate(
-            effect,
-            0,
-            0.0,
-            runtime.scheduler,
-        )
-        observer = StaticNormalAttackObserver(runtime, duration=4.0)
-        self.assertEqual(observer.dynamic_charge_actors, (0,))
-
-        result = runtime.run(duration=4.0, score_observer=observer)
-        score = observer.finish(events_processed=result.events_processed)
-
-        terms = observer.resolver.resolve(0, now=0.25)
-        per_shot = expected_normal_block_damage(
-            observer.specs[0],
-            shot_count=1,
-            base_atk=squad.members[0].base_atk,
-            enemy_def=enemy.defense,
-            terms=terms,
-            core_prob=0.0,
-            is_full_burst=False,
-            is_optimal_range=False,
-        )
-        self.assertAlmostEqual(score.char_total[0], per_shot * 4.0, places=6)
+        # Self-targeting makes caster and target base charge time equal, so 50%
+        # caster-based speed is numerically 50% target charge speed here. This
+        # specifically locks the caster-based stat routing into the live cadence
+        # scorer while the pre-existing ratio arithmetic remains tested by the
+        # weapon runtime itself.
+        total, per_shot = _run_live_speed_case(effect)
+        self.assertAlmostEqual(total, per_shot * 4.0, places=6)
 
     def test_uncertified_charge_speed_delivery_remains_fail_closed(self):
         effect = _charge_speed_effect()
