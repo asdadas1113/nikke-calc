@@ -8,7 +8,8 @@ from fast_engine.engine.burst import BurstSignal, compile_burst_policy
 from fast_engine.engine.burst_runtime import BurstRuntime
 from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.conditions import SignalContext
-from fast_engine.engine.model import CompiledSquad
+from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
+from fast_engine.engine.model import CompiledSquad, EnemyStaticProfile
 from fast_engine.engine.targets import TargetMode
 from fast_engine.engine.triggers import TriggerIndex
 
@@ -126,13 +127,21 @@ class GaugeRuntimeTests(unittest.TestCase):
             poisoned,
             {"duration": 10.0, "first_burst_time": 3.0, "rng_mode": "expected"},
         )
-        runtime = BurstRuntime(poisoned, policy)
+        enemy = EnemyStaticProfile(duration=10.0)
+        sink = SimpleDamageScoreSink(poisoned, enemy)
+        runtime = BurstRuntime(poisoned, policy, enemy, damage_sink=sink)
         original_charge = next(
             e for e in poisoned.effects if e.actor == 4 and e.name == "바디 컨텍"
+        )
+        body_contact_damage = next(
+            e for e in poisoned.effects if e.actor == 4 and e.name == "바디 컨텍 3"
         )
         self.assertIn((4, "포획 사슬"), runtime.dispatcher._unsafe_gauge_families)
         self.assertFalse(runtime.dispatcher.is_runtime_executable_effect(original_charge))
         self.assertFalse(runtime.dispatcher.is_runtime_executable_effect(bad))
+        self.assertIn(body_contact_damage.effect_id, sink.stack_specs)
+        self.assertFalse(sink.supports(body_contact_damage))
+        self.assertFalse(runtime.dispatcher.is_runtime_executable_effect(body_contact_damage))
 
 
 if __name__ == "__main__":
