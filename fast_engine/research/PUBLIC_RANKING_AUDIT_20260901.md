@@ -11,6 +11,73 @@ Do not interpret the result as "Fast ranks all teams incorrectly". The current
 result is a **coverage failure only**; there is no certified Fast ranking in this
 corpus yet.
 
+## Post-weapon-mode-toggle rerun
+
+The standardized public audit was rerun once after adding score-state support for
+`pierce_enabled` / `armor_break_enabled` where their existing Fast delivery path
+has correct shot ordering.
+
+Engine code checkpoint before the one-shot audit workflow:
+
+`3d394c9d20654bf71267e7e8754a7ba855543710`
+
+One-shot audit commit:
+
+`c368817a0eb05ca299f50d853ecf84f0fd21f635`
+
+GitHub Actions run:
+
+`33544904263`
+
+Measured result:
+
+- public standardized squads: **24**
+- Fast certified numeric scores: **0**
+- coverage gaps / fail-closed squads: **24**
+- Moris simulation wall time: **60.330 s**
+- Fast scoring wall time: **0.000 s** because every row was rejected before
+  certified scoring
+- Moris Top-10: **10 blocked, 0 scored-and-ranked-out**
+- `catastrophic_false_negative_rate = 0.0`
+- `top_n_coverage_gap_rate = 1.0`
+- pairwise ranking accuracy: **not measurable** (`0` comparable pairs)
+
+Blocker families moved from the post-element checkpoint as follows:
+
+| blocker family | post-element | post-toggle | delta |
+|---|---:|---:|---:|
+| cadence / shot-shape | 109 | 109 | 0 |
+| skill state delivery | 103 | 103 | 0 |
+| normal-attack state delivery | 86 | 97 | +11 |
+| unresolved normal-damage state | 29 | 8 | -21 |
+| manual control | 9 | 9 | 0 |
+| **total** | **336** | **326** | **-10** |
+
+This split is intentional rather than a regression. The two boolean states are no
+longer classified as intrinsically unresolved damage semantics. Effects whose
+timing/condition path is not yet certified move into `normal_delivery`, while
+shapes that Fast can already deliver with correct ordering disappear from the
+blocker inventory. Net comparison-critical blockers therefore fell by **10**.
+
+The audit also exposed an important same-shot boundary distinction that must stay
+fail-closed:
+
+- Moris raw `full_charge` fires **before** that charge shot's damage lookup;
+- Moris `full_charge_hit` fires **after** the shot has dealt damage;
+- therefore Snow White : Heavy Arms `어나더 화이트 관통특화` cannot be aliased
+  to Fast's currently certified post-shot charge boundary without losing the
+  first pierced shot of each activation;
+- HP-conditioned examples such as Alice `건강한 당근` likewise remain blocked
+  until their condition model exists.
+
+Conversely, ordinary lifecycle/burst-delivered weapon-mode states such as the
+Takina / Chisato `armor_break_enabled` effects can use the existing state runtime
+without changing shot cadence.
+
+The candidate generator remains fully bypassed, so the conclusion is still:
+
+`candidate generation bypassed -> Fast coverage gap -> no ranking diagnosis yet`
+
 ## Post-element-override rerun
 
 The standardized public audit was rerun once after the immutable
@@ -173,8 +240,8 @@ CI commit: `782026020dd74647c5fdd5527977a6656cb8c29d`
 
 At that historical checkpoint the ranking diagnostic still conflated blocked
 Top-N rows with catastrophic scored false negatives. That metric has since been
-split. The post-spawn and post-element reruns above confirm that blocked Top-N rows
-contribute to `top_n_coverage_gap_rate`, while
+split. The post-spawn, post-element, and post-toggle reruns above confirm that
+blocked Top-N rows contribute to `top_n_coverage_gap_rate`, while
 `catastrophic_false_negative_rate` counts only certified rows that Fast actually
 ranks outside the shortlist.
 
@@ -216,9 +283,12 @@ damage is already supported.
   coverage blocker.
 - Immutable element-code override support removed its four intended unresolved
   normal-state blockers.
+- Weapon-mode toggle semantics can be represented in Fast without per-shot
+  simulation, but trigger ordering must still be certified separately; the
+  post-toggle audit removed 10 comparison-critical blockers net.
 - Fail-closed behavior is working as designed: unsupported comparison-critical
   states are not silently turned into zero damage.
-- Coverage gaps and true scored ranking misses are now separate diagnostics.
+- Coverage gaps and true scored ranking misses are separate diagnostics.
 
 ### What this result does not support
 
@@ -247,11 +317,13 @@ Do not relax blockers merely to obtain a prettier ranking number.
 4. Treat the dynamic cadence family as the next major coverage pressure point,
    but decompose it before implementation rather than opening all cadence states
    at once.
-5. Re-run this fixed standardized corpus after each meaningful coverage expansion.
-6. Once a non-trivial certified subset exists, report pairwise ordering and
+5. Preserve pre-shot vs post-shot weapon trigger ordering explicitly; raw
+   `full_charge` is not interchangeable with `full_charge_hit`.
+6. Re-run this fixed standardized corpus after each meaningful coverage expansion.
+7. Once a non-trivial certified subset exists, report pairwise ordering and
    Top-N-in-Top-K **only within that supported subset**, while continuing to report
    blocked Moris Top-N rows separately.
-7. Before production pruning, build a larger optimizer-independent stratified
+8. Before production pruning, build a larger optimizer-independent stratified
    corpus. Only after that attach the current candidate generator and decompose
    end-to-end loss as:
 
