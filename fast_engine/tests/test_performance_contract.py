@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import statistics
+import time
 import unittest
 
-from fast_engine.engine.model import CompiledCharacter, CompiledEffect, CompiledSquad
+from context.spec import build_squad
+from fast_engine.engine.burst import compile_burst_policy
+from fast_engine.engine.compiler import compile_moris_squad
+from fast_engine.engine.model import CompiledCharacter, CompiledEffect, CompiledSquad, EnemyStaticProfile
+from fast_engine.engine.score import score_static_normal_squad, static_normal_score_blockers
 from fast_engine.engine.triggers import TriggerIndex, TriggerMode, TriggerRule
 from fast_engine.engine.weapon import simulate_static_weapon_cadence
 from fast_engine.engine.weapon_events import simulate_weapon_trigger_boundaries
@@ -96,6 +102,67 @@ class FastBoundaryCompressionContractTests(unittest.TestCase):
         # Structural throughput contract: global events scale with meaningful
         # trigger crossings, not raw shots/hits.
         self.assertLess(len(rows), cadence.hit_events / 50)
+
+
+class FastStaticScoreThroughputContractTests(unittest.TestCase):
+    """Wall-clock guard for the score-only path after squad compilation.
+
+    The optimizer will compile each candidate once and then score it. Moris input
+    assembly/compile cost is deliberately outside this gate; the measured block
+    is the 180-second Fast combat ranking runtime itself.
+    """
+
+    NAMES = ["라피", "폴리", "프로덕트 12", "델타", "아니스"]
+    DURATION = 180.0
+
+    @classmethod
+    def setUpClass(cls):
+        moris_squad = build_squad(cls.NAMES)
+        cls.squad = compile_moris_squad(moris_squad)
+        cls.policy = compile_burst_policy(
+            moris_squad,
+            cls.squad,
+            {"duration": cls.DURATION, "rng_mode": "expected"},
+        )
+        cls.enemy = EnemyStaticProfile(duration=cls.DURATION)
+        blockers = static_normal_score_blockers(cls.squad)
+        if blockers:
+            raise AssertionError("performance fixture became score-unsafe: " + ", ".join(blockers))
+
+    def test_180s_five_person_score_runtime_stays_below_one_second(self):
+        # Warm the interpreter/import/cache path. Every timed call still creates
+        # a fresh runtime, scheduler, effect store, shot blocks and score result.
+        warm = score_static_normal_squad(
+            self.squad,
+            self.policy,
+            self.enemy,
+            duration=self.DURATION,
+        )
+        self.assertGreater(warm.squad_total, 0.0)
+
+        samples: list[float] = []
+        last = warm
+        for _ in range(3):
+            start = time.perf_counter()
+            last = score_static_normal_squad(
+                self.squad,
+                self.policy,
+                self.enemy,
+                duration=self.DURATION,
+            )
+            samples.append(time.perf_counter() - start)
+
+        median = statistics.median(samples)
+        print(
+            "Fast static 180s score: "
+            f"median={median * 1000:.2f}ms, "
+            f"samples={[round(v * 1000, 2) for v in samples]}, "
+            f"events={last.events_processed}"
+        )
+        # Architecture milestone, not a speed target. We expect substantial
+        # headroom; if this gate is approached, optimize before adding breadth.
+        self.assertLess(median, 1.0)
+        self.assertLess(last.events_processed, 1000)
 
 
 if __name__ == "__main__":
