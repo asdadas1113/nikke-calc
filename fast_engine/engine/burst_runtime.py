@@ -355,6 +355,10 @@ class BurstRuntime:
 
     def start(self, *, duration: float | None = None) -> None:
         self._broadcast(0.0, "battle_start")
+        # Moris finishes every ally battle_start notification before emitting
+        # one static enemy/target spawn notification per ally at the same t=0.
+        self._broadcast(0.0, "event:enemy_spawn")
+        self._broadcast(0.0, "event:target_spawn")
         self.machine.start(self.scheduler)
         horizon = (
             self.policy.duration
