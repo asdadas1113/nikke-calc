@@ -30,15 +30,17 @@ class SchedulerTests(unittest.TestCase):
 
     def test_equal_time_events_follow_moris_frame_phases(self):
         q = EventScheduler()
-        # Deliberately enqueue in the opposite order. Moris runs BuffManager.tick
-        # (expiry then every:N) before burst controller and weapon actors.
+        # Deliberately enqueue in the opposite order. Moris BuffManager.tick runs
+        # periodic damage first, then expiry, then every:N; burst and weapon
+        # processing follow afterwards in the frame loop.
         q.schedule(20.0, EventKind.WEAPON_BOUNDARY, payload="weapon")
         q.schedule(20.0, EventKind.FULL_BURST_START, payload="burst")
         q.schedule(20.0, EventKind.PERIODIC_TICK, payload="periodic")
         q.schedule(20.0, EventKind.STATE_EXPIRE, payload="expiry")
+        q.schedule(20.0, EventKind.DAMAGE_TICK, payload="dot")
         self.assertEqual(
-            [q.pop().payload for _ in range(4)],
-            ["expiry", "periodic", "burst", "weapon"],
+            [q.pop().payload for _ in range(5)],
+            ["dot", "expiry", "periodic", "burst", "weapon"],
         )
 
     def test_equal_time_same_phase_remains_stable(self):
