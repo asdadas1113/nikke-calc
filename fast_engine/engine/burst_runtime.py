@@ -44,11 +44,13 @@ class BurstRuntime:
 
     _STATIC_LAST_BULLET_INVALIDATORS = frozenset({
         "reload_speed_pct",
+        "reload_time_fixed",
         "max_ammo_pct",
         "max_ammo_flat",
     })
     _STATIC_CORE_CADENCE_INVALIDATORS = frozenset({
         "reload_speed_pct",
+        "reload_time_fixed",
         "max_ammo_pct",
         "max_ammo_flat",
         "max_ammo_infinite",
@@ -172,7 +174,7 @@ class BurstRuntime:
         physical hit/pellet and emits a logical core-hit event at each integer
         crossing. Fast collapses those events to only modulo thresholds that any
         executable effect observes. Live accuracy/cadence changes and dynamic
-        charge actors fail closed so no stale future core boundary is retained.
+        weapon actors fail closed so no stale future core boundary is retained.
         """
 
         interested = {
@@ -190,7 +192,7 @@ class BurstRuntime:
                 self.squad.members[actor].name for actor in sorted(unsupported)
             )
             raise NotImplementedError(
-                "Fast dynamic charge + core_hit_count boundary not certified: " + names
+                "Fast dynamic weapon + core_hit_count boundary not certified: " + names
             )
 
         invalidators: list[tuple[int, str]] = []
@@ -273,11 +275,10 @@ class BurstRuntime:
         never aliased into post-shot semantics.
 
         Static actors are safe only while their reload/max-ammo cadence cannot be
-        changed by live effects. A dynamic charge actor is safe for post-shot
-        ``last_bullet`` only when its runtime already materializes every physical
-        charge shot; then magazine-end state is observed directly with no added
-        per-shot scheduling. Dynamic pre-shot ``last_bullet_fire`` still fails
-        closed because phase-30 weapon boundaries occur after score consumption.
+        changed by live effects. A dynamic actor is safe for post-shot
+        ``last_bullet`` only when its runtime explicitly certifies exact magazine
+        ends. Dynamic pre-shot ``last_bullet_fire`` remains fail-closed because
+        phase-30 weapon boundaries occur after score consumption.
         """
         interested = {
             effect.actor
@@ -301,12 +302,12 @@ class BurstRuntime:
             actor
             for actor in interested & dynamic_actors
             if actor in pre_shot_interested
-            or not self.weapons.emits_every_charge_shot(actor)
+            or not self.weapons.supports_dynamic_last_bullet(actor)
         }
         if unsupported:
             names = ", ".join(self.squad.members[actor].name for actor in sorted(unsupported))
             raise NotImplementedError(
-                "Fast dynamic charge + last-bullet boundary not certified: " + names
+                "Fast dynamic weapon + last-bullet boundary not certified: " + names
             )
 
         static_interested = interested - dynamic_actors
@@ -372,7 +373,7 @@ class BurstRuntime:
             else min(float(duration), self.policy.duration)
         )
         self.weapons.start(0.0)
-        dynamic_actors = set(self.weapons.actors)
+        dynamic_actors = set(self.weapons.all_dynamic_actors)
         # Core-hit notifications happen inside Moris' physical-hit loop before
         # shot-level hit_count/on_attack notifications. Schedule core boundaries
         # first so equal-time stable ordering preserves that relation for static actors.
@@ -465,7 +466,7 @@ class BurstRuntime:
                             ),
                             context=SignalContext(),
                         )
-                    if self.weapons.emits_each_charge_hit:
+                    if self.weapons.emits_squad_body_hit(boundary.actor):
                         self.dispatcher.dispatch_team_hit(
                             "squad_body_hit",
                             time=event.time,
