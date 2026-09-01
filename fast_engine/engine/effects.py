@@ -46,11 +46,18 @@ class ActiveEffectStore:
     whole activation cohort rather than only (effect_id, target). Damage effects
     that are observable as named DoT states reuse this table as well; ordinary
     score-only damage never enters it.
+
+    ``duration_bullets`` normally uses one precomputed post-shot expiry at the
+    recipient's Nth static shot. Selected dynamic rapid actors instead register
+    themselves here and own a live remaining-bullet counter. That keeps the
+    existing zero-overhead static path unchanged while letting cover/reload
+    cadence move the actual consuming shot without stale expiry timestamps.
     """
 
     __slots__ = (
         "squad", "state", "_effects", "_active", "_by_target_stat",
-        "_by_target_name", "_generation",
+        "_by_target_name", "_generation", "_dynamic_bullet_targets",
+        "_bullet_remaining",
     )
 
     def __init__(self, squad: "CompiledSquad", state: StateStore) -> None:
@@ -61,6 +68,75 @@ class ActiveEffectStore:
         self._by_target_stat: dict[tuple[int, str], set[ActiveKey]] = {}
         self._by_target_name: dict[tuple[int, str], set[ActiveKey]] = {}
         self._generation = 0
+        self._dynamic_bullet_targets: frozenset[int] = frozenset()
+        self._bullet_remaining: dict[ActiveKey, int] = {}
+
+    def enable_dynamic_bullet_lifetime_targets(self, actors: Iterable[int]) -> None:
+        """Register actors whose physical shots consume bullet lifetimes live."""
+
+        selected = frozenset(int(actor) for actor in actors)
+        if any(actor < 0 or actor >= len(self.squad.members) for actor in selected):
+            raise IndexError("dynamic bullet-lifetime actor out of range")
+        self._dynamic_bullet_targets = selected
+
+    def dynamic_bullet_lifetime_supported(self, target: int) -> bool:
+        return int(target) in self._dynamic_bullet_targets
+
+    def dynamic_bullet_signature(self, target: int, *, now: float) -> tuple[tuple[int, int, int], ...]:
+        """Return a cheap generation/remaining signature for weapon replanning."""
+
+        rows: list[tuple[int, int, int]] = []
+        for key, remaining in self._bullet_remaining.items():
+            if key[1] != target:
+                continue
+            active = self._active.get(key)
+            if active is None or not active.active(now):
+                continue
+            rows.append((active.effect_id, active.generation, int(remaining)))
+        return tuple(sorted(rows))
+
+    def has_dynamic_bullet_lifetime(self, target: int, *, now: float) -> bool:
+        return bool(self.dynamic_bullet_signature(target, now=now))
+
+    def consume_dynamic_bullet(
+        self,
+        target: int,
+        *,
+        now: float,
+        count: int = 1,
+    ) -> tuple[int, ...]:
+        """Consume recipient-shot lifetimes after the shot's post-hit signals.
+
+        Moris decrements every active bullet-lifetime buff once per recipient
+        shot. The consuming shot still sees the buff; removal happens only after
+        damage and hit/on-attack notifications. BurstRuntime calls this at that
+        exact post-shot point for dynamic rapid actors.
+        """
+
+        if count <= 0 or target not in self._dynamic_bullet_targets:
+            return ()
+        removed: list[int] = []
+        changed = False
+        for key in tuple(self._bullet_remaining):
+            if key[1] != target:
+                continue
+            active = self._active.get(key)
+            if active is None or not active.active(now):
+                self._bullet_remaining.pop(key, None)
+                continue
+            remaining = self._bullet_remaining[key] - int(count)
+            changed = True
+            if remaining > 0:
+                self._bullet_remaining[key] = remaining
+                continue
+            self._bullet_remaining.pop(key, None)
+            effect = self._effects[active.effect_id]
+            self._active.pop(key, None)
+            self._index_remove(effect, key)
+            removed.append(active.effect_id)
+        if changed:
+            self.state.touch(target, StateDomain.EFFECT)
+        return tuple(removed)
 
     def _next_generation(self) -> int:
         self._generation += 1
@@ -160,26 +236,34 @@ class ActiveEffectStore:
                 raise NotImplementedError(
                     "Fast duration_bullets enemy-target lifetime not certified"
                 )
-            # Moris decrements once per recipient shot and removes the state only
-            # after the consuming shot has been damaged. Locate the Nth static
-            # shot without scheduling per-shot events; one post-shot expiry is
-            # enough. Reactivation gets a new generation, invalidating the old
-            # expiry and thereby resetting the lifetime to N shots.
-            consume_at = float(now)
-            for _ in range(int(bullets)):
-                consume_at = next_static_shot_after(self.squad, target, consume_at)
-            scheduler.schedule(
-                consume_at,
-                EventKind.STATE_EXPIRE,
-                actor=target,
-                payload=EffectExpiryToken(
-                    effect.effect_id,
-                    target,
-                    cohort,
-                    generation,
-                    post_shot=True,
-                ),
-            )
+            if target in self._dynamic_bullet_targets:
+                # Reactivation gets a new generation and resets the remaining
+                # lifetime just like Moris' bullet-duration refresh semantics.
+                self._bullet_remaining[key] = int(bullets)
+            else:
+                # Moris decrements once per recipient shot and removes the state
+                # only after the consuming shot has been damaged. Locate the Nth
+                # static shot without scheduling per-shot events; one post-shot
+                # expiry is enough. Reactivation gets a new generation,
+                # invalidating the old expiry and resetting the lifetime.
+                self._bullet_remaining.pop(key, None)
+                consume_at = float(now)
+                for _ in range(int(bullets)):
+                    consume_at = next_static_shot_after(self.squad, target, consume_at)
+                scheduler.schedule(
+                    consume_at,
+                    EventKind.STATE_EXPIRE,
+                    actor=target,
+                    payload=EffectExpiryToken(
+                        effect.effect_id,
+                        target,
+                        cohort,
+                        generation,
+                        post_shot=True,
+                    ),
+                )
+        else:
+            self._bullet_remaining.pop(key, None)
         return active
 
     def activate_group(
@@ -245,6 +329,7 @@ class ActiveEffectStore:
                 return None
         effect = self._effects[token.effect_id]
         del self._active[key]
+        self._bullet_remaining.pop(key, None)
         self._index_remove(effect, key)
         self.state.touch(token.target, StateDomain.EFFECT)
         return effect
@@ -309,6 +394,7 @@ class ActiveEffectStore:
             active = self._active.pop(key, None)
             if active is None:
                 continue
+            self._bullet_remaining.pop(key, None)
             effect = self._effects[active.effect_id]
             self._index_remove(effect, key)
             removed.append(active.effect_id)
