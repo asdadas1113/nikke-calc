@@ -251,7 +251,9 @@ class StaticNormalAttackObserver:
             )
 
     def finish(self, *, events_processed: int) -> FastScore:
-        self.consume_until(self.duration, inclusive=True)
+        # Combat is [0, duration): a shot exactly at the nominal horizon is not
+        # damage-bearing, matching the final Moris frame immediately before it.
+        self.consume_until(self.duration, inclusive=False)
         totals = tuple(self.char_total)
         return FastScore(
             squad_total=sum(totals),
