@@ -84,6 +84,21 @@ class TriggerDispatcher:
         )
 
     @staticmethod
+    def _periodic_timing_is_only_blocker(effect: "CompiledEffect") -> bool:
+        """Allow fixed-grid periodic execution without widening capability yet.
+
+        Capability remains conservative until Moris parity is rerun. This bridge
+        only bypasses PLANNED when every blocker is exactly periodic timing;
+        stat/target/condition/category blockers still fail closed.
+        """
+        blockers = effect.capability.blockers
+        return (
+            effect.capability.disposition is CapabilityDisposition.PLANNED
+            and bool(blockers)
+            and all(blocker == "timing:periodic" for blocker in blockers)
+        )
+
+    @staticmethod
     def is_executable_effect(effect: "CompiledEffect") -> bool:
         stat = effect.stat or ""
         if stat in TriggerDispatcher._AUXILIARY_STATS:
@@ -92,9 +107,16 @@ class TriggerDispatcher:
                 and effect.target_spec.runtime_supported
                 and all(rule.is_runtime_supported for rule in effect.condition_rules)
             )
-        if effect.capability.disposition is not CapabilityDisposition.READY:
+        capability_ok = (
+            effect.capability.disposition is CapabilityDisposition.READY
+            or TriggerDispatcher._periodic_timing_is_only_blocker(effect)
+        )
+        if not capability_ok:
             return False
-        return stat in TriggerDispatcher._EXECUTABLE_STATS or stat.startswith("burst_stage_override:")
+        return (
+            stat in TriggerDispatcher._EXECUTABLE_STATS
+            or stat.startswith("burst_stage_override:")
+        )
 
     _is_executable = is_executable_effect
 
@@ -155,15 +177,27 @@ class TriggerDispatcher:
         return False
 
     def _activate(
-        self, effect: "CompiledEffect", *, now: float, context: SignalContext,
-        conditions_prechecked: bool = False, target_owner_actor: int | None = None,
+        self,
+        effect: "CompiledEffect",
+        *,
+        now: float,
+        context: SignalContext,
+        conditions_prechecked: bool = False,
+        target_owner_actor: int | None = None,
     ) -> bool:
         if not self.can_activate_effect(effect):
             return False
-        if effect.max_trigger is not None and self._activation_counts[effect.effect_id] >= effect.max_trigger:
+        if (
+            effect.max_trigger is not None
+            and self._activation_counts[effect.effect_id] >= effect.max_trigger
+        ):
             return False
 
-        named_target = effect.target_spec.count if effect.target_spec.mode.value == "named_actor" else None
+        named_target = (
+            effect.target_spec.count
+            if effect.target_spec.mode.value == "named_actor"
+            else None
+        )
         if not conditions_prechecked and not self.conditions.evaluate_all(
             effect.condition_rules,
             effect_id=effect.effect_id,
@@ -194,7 +228,9 @@ class TriggerDispatcher:
             if stat.startswith("burst_stage_override:"):
                 suffix = stat.split(":", 1)[1]
                 if suffix.startswith("reenter"):
-                    self.burst.set_reenter_stage(effect.actor, suffix.removeprefix("reenter"))
+                    self.burst.set_reenter_stage(
+                        effect.actor, suffix.removeprefix("reenter")
+                    )
                 else:
                     self.burst.set_stage_override(effect.actor, suffix)
         else:
@@ -203,7 +239,12 @@ class TriggerDispatcher:
         self._activation_counts[effect.effect_id] += 1
         return True
 
-    def dispatch(self, signal: "BurstSignal", *, context: SignalContext = SignalContext()) -> DispatchResult:
+    def dispatch(
+        self,
+        signal: "BurstSignal",
+        *,
+        context: SignalContext = SignalContext(),
+    ) -> DispatchResult:
         owner = signal.owner_actor
         event_key = signal.event_key
         counter_key = (owner, event_key)
@@ -217,15 +258,25 @@ class TriggerDispatcher:
             effect = self._effect_table[indexed.effect_id]
             if effect.effect_id in seen_effects:
                 continue
-            if not self._rule_matches(effect, indexed.rule_index, event_key=event_key,
-                                      event_count=event_count, context=context, now=signal.time):
+            if not self._rule_matches(
+                effect,
+                indexed.rule_index,
+                event_key=event_key,
+                event_count=event_count,
+                context=context,
+                now=signal.time,
+            ):
                 continue
             seen_effects.add(effect.effect_id)
             if self.can_activate_effect(effect):
                 if self._activate(
-                    effect, now=signal.time, context=context,
-                    conditions_prechecked=effect.triggers[indexed.rule_index].mode in {
-                        TriggerMode.CONDITIONAL_AT_LEAST, TriggerMode.CONDITIONAL_MODULO
+                    effect,
+                    now=signal.time,
+                    context=context,
+                    conditions_prechecked=effect.triggers[indexed.rule_index].mode
+                    in {
+                        TriggerMode.CONDITIONAL_AT_LEAST,
+                        TriggerMode.CONDITIONAL_MODULO,
                     },
                 ):
                     activated.append(effect.effect_id)
@@ -233,9 +284,35 @@ class TriggerDispatcher:
                 skipped.append(effect.effect_id)
         return DispatchResult(tuple(activated), tuple(skipped))
 
+    def dispatch_periodic(
+        self,
+        effect_id: int,
+        rule_index: int,
+        *,
+        time: float,
+        context: SignalContext = SignalContext(),
+    ) -> DispatchResult:
+        """Activate one precompiled every:N rule at its scheduler boundary."""
+        effect = self._effect_table[effect_id]
+        rule = effect.triggers[rule_index]
+        if rule.mode is not TriggerMode.PERIODIC or rule.interval is None:
+            raise ValueError(
+                f"not a periodic trigger: effect={effect_id}, rule={rule_index}"
+            )
+        if not self.can_activate_effect(effect):
+            return DispatchResult((), (effect.effect_id,))
+        if self._activate(effect, now=time, context=context):
+            return DispatchResult((effect.effect_id,), ())
+        return DispatchResult((), ())
+
     def dispatch_team_hit(
-        self, event_key: str, *, time: float, attacker: int,
-        context: SignalContext = SignalContext(), count_increment: int = 1,
+        self,
+        event_key: str,
+        *,
+        time: float,
+        attacker: int,
+        context: SignalContext = SignalContext(),
+        count_increment: int = 1,
     ) -> DispatchResult:
         """Moris-style squad part/body hit broadcast.
 
@@ -255,16 +332,25 @@ class TriggerDispatcher:
             if effect.effect_id in seen_effects:
                 continue
             if not self._rule_matches(
-                effect, indexed.rule_index, event_key=event_key, event_count=event_count,
-                context=context, now=time,
+                effect,
+                indexed.rule_index,
+                event_key=event_key,
+                event_count=event_count,
+                context=context,
+                now=time,
             ):
                 continue
             seen_effects.add(effect.effect_id)
             if self.can_activate_effect(effect):
                 if self._activate(
-                    effect, now=time, context=context, target_owner_actor=attacker,
-                    conditions_prechecked=effect.triggers[indexed.rule_index].mode in {
-                        TriggerMode.CONDITIONAL_AT_LEAST, TriggerMode.CONDITIONAL_MODULO
+                    effect,
+                    now=time,
+                    context=context,
+                    target_owner_actor=attacker,
+                    conditions_prechecked=effect.triggers[indexed.rule_index].mode
+                    in {
+                        TriggerMode.CONDITIONAL_AT_LEAST,
+                        TriggerMode.CONDITIONAL_MODULO,
                     },
                 ):
                     activated.append(effect.effect_id)
@@ -282,7 +368,10 @@ class TriggerDispatcher:
             caster = effect.actor
             if caster in seen_casters:
                 continue
-            if any(rule.raw == "burst_cast" for rule in effect.triggers) and caster != b3_actor:
+            if (
+                any(rule.raw == "burst_cast" for rule in effect.triggers)
+                and caster != b3_actor
+            ):
                 continue
             total += float(effect.value or 0.0) * active.stacks
             seen_casters.add(caster)
@@ -296,7 +385,9 @@ class TriggerDispatcher:
         if stat.startswith("burst_stage_override:"):
             stage = None
             reenter = None
-            for effect, _active in self.effects.iter_stat_prefix("burst_stage_override:", now=event.time):
+            for effect, _active in self.effects.iter_stat_prefix(
+                "burst_stage_override:", now=event.time
+            ):
                 if effect.actor != expired.actor:
                     continue
                 suffix = (effect.stat or "").split(":", 1)[1]

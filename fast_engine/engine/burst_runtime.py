@@ -8,6 +8,7 @@ from .dispatcher import TriggerDispatcher
 from .model import CompiledSquad, EnemyStaticProfile
 from .scheduler import EventKind, EventScheduler
 from .state import StateStore
+from .triggers import TriggerMode
 from .weapon import DynamicChargeCadenceRuntime, simulate_static_weapon_trigger_boundaries
 
 
@@ -19,22 +20,43 @@ class BurstRuntimeResult:
     events_processed: int
 
 
+@dataclass(frozen=True, slots=True)
+class PeriodicTickToken:
+    effect_id: int
+    rule_index: int
+    interval: float
+
+
 class BurstRuntime:
     """Current vertical slice: generic Fast trigger dispatch + burst scheduler."""
 
-    __slots__ = ("squad", "enemy", "policy", "scheduler", "state", "machine", "dispatcher", "weapons")
+    __slots__ = (
+        "squad", "enemy", "policy", "scheduler", "state", "machine",
+        "dispatcher", "weapons",
+    )
 
-    def __init__(self, squad: CompiledSquad, policy: BurstPolicy, enemy: EnemyStaticProfile | None = None) -> None:
+    def __init__(
+        self,
+        squad: CompiledSquad,
+        policy: BurstPolicy,
+        enemy: EnemyStaticProfile | None = None,
+    ) -> None:
         self.squad = squad
         self.enemy = enemy or EnemyStaticProfile(duration=policy.duration)
         self.policy = policy
         self.scheduler = EventScheduler()
         self.state = StateStore.from_compiled_squad(squad)
         self.machine = BurstMachine(squad, policy)
-        self.dispatcher = TriggerDispatcher(squad, self.state, self.enemy, self.machine, self.scheduler)
+        self.dispatcher = TriggerDispatcher(
+            squad, self.state, self.enemy, self.machine, self.scheduler
+        )
         self.weapons = DynamicChargeCadenceRuntime(
-            squad, self.dispatcher.effects, self.state, self.scheduler,
-            duration=policy.duration, effect_filter=self.dispatcher.is_executable_effect,
+            squad,
+            self.dispatcher.effects,
+            self.state,
+            self.scheduler,
+            duration=policy.duration,
+            effect_filter=self.dispatcher.is_executable_effect,
         )
 
     def _broadcast(self, time: float, event_key: str) -> None:
@@ -42,10 +64,36 @@ class BurstRuntime:
         for owner in range(len(self.squad.members)):
             self.dispatcher.dispatch(BurstSignal(time, event_key, owner, owner))
 
+    def _schedule_initial_periodics(self, horizon: float) -> None:
+        effect_table = tuple(self.squad.effects)
+        for indexed in self.squad.trigger_index.periodic:
+            effect = effect_table[indexed.effect_id]
+            if not self.dispatcher.can_activate_effect(effect):
+                continue
+            rule = effect.triggers[indexed.rule_index]
+            if rule.mode is not TriggerMode.PERIODIC or rule.interval is None:
+                continue
+            interval = float(rule.interval)
+            if interval <= 0.0 or interval > horizon + 1e-9:
+                continue
+            # Moris initializes every:Ns at t=interval, not battle_start.
+            self.scheduler.schedule(
+                interval,
+                EventKind.PERIODIC_TICK,
+                actor=effect.actor,
+                payload=PeriodicTickToken(
+                    effect.effect_id, indexed.rule_index, interval
+                ),
+            )
+
     def start(self, *, duration: float | None = None) -> None:
         self._broadcast(0.0, "battle_start")
         self.machine.start(self.scheduler)
-        horizon = self.policy.duration if duration is None else min(float(duration), self.policy.duration)
+        horizon = (
+            self.policy.duration
+            if duration is None
+            else min(float(duration), self.policy.duration)
+        )
         self.weapons.start(0.0)
         dynamic_actors = set(self.weapons.actors)
         from .burst import BurstSignal
@@ -68,9 +116,14 @@ class BurstRuntime:
                     count_increment=boundary.count_increment,
                 ),
             )
+        self._schedule_initial_periodics(horizon)
 
     def run(self, *, duration: float | None = None) -> BurstRuntimeResult:
-        horizon = self.policy.duration if duration is None else min(float(duration), self.policy.duration)
+        horizon = (
+            self.policy.duration
+            if duration is None
+            else min(float(duration), self.policy.duration)
+        )
         self.start(duration=horizon)
         fb_starts: list[float] = []
         casts: list[tuple[float, int, str]] = []
@@ -86,17 +139,22 @@ class BurstRuntime:
                     from .burst import BurstSignal
                     actor, event_key, count_increment = boundary
                     self.dispatcher.dispatch(
-                        BurstSignal(event.time, event_key, actor, actor, count_increment=count_increment),
+                        BurstSignal(
+                            event.time,
+                            event_key,
+                            actor,
+                            actor,
+                            count_increment=count_increment,
+                        ),
                         context=SignalContext(),
                     )
-                    # Moris notifies full_charge_hit before the squad body/part
-                    # hit broadcast. The patternless initial Fast target is a
-                    # body target, so dynamic charge-shot boundaries can feed
-                    # auxiliary target-ranking state without a frame loop.
                     if self.weapons.emits_each_charge_hit:
                         self.dispatcher.dispatch_team_hit(
-                            "squad_body_hit", time=event.time, attacker=actor,
-                            context=SignalContext(), count_increment=1,
+                            "squad_body_hit",
+                            time=event.time,
+                            attacker=actor,
+                            context=SignalContext(),
+                            count_increment=1,
                         )
                     self.weapons.sync(event.time)
                 continue
@@ -107,6 +165,28 @@ class BurstRuntime:
                 self.dispatcher.handle_expiry(event)
                 self.weapons.sync(event.time)
                 continue
+
+            if event.kind is EventKind.PERIODIC_TICK:
+                token = event.payload
+                if not isinstance(token, PeriodicTickToken):
+                    continue
+                self.dispatcher.dispatch_periodic(
+                    token.effect_id,
+                    token.rule_index,
+                    time=event.time,
+                    context=SignalContext(),
+                )
+                next_t = event.time + token.interval
+                if next_t <= horizon + 1e-9:
+                    self.scheduler.schedule(
+                        next_t,
+                        EventKind.PERIODIC_TICK,
+                        actor=event.actor,
+                        payload=token,
+                    )
+                self.weapons.sync(event.time)
+                continue
+
             if event.kind is EventKind.TRIGGER_BOUNDARY:
                 self.dispatcher.dispatch(event.payload, context=SignalContext())
                 self.weapons.sync(event.time)
@@ -114,7 +194,9 @@ class BurstRuntime:
 
             extension = 0.0
             if event.kind is EventKind.FULL_BURST_START:
-                extension = self.dispatcher.full_burst_extension(event.time, self.machine.full_burst_caster)
+                extension = self.dispatcher.full_burst_extension(
+                    event.time, self.machine.full_burst_caster
+                )
             signals = self.machine.handle(
                 event,
                 self.scheduler,
@@ -123,7 +205,9 @@ class BurstRuntime:
             )
             for signal in signals:
                 if signal.event_key == "burst_cast" and signal.source_actor is not None:
-                    casts.append((signal.time, signal.source_actor, signal.stage or ""))
+                    casts.append(
+                        (signal.time, signal.source_actor, signal.stage or "")
+                    )
                 self.dispatcher.dispatch(signal, context=SignalContext())
             if event.kind is EventKind.FULL_BURST_START:
                 fb_starts.append(event.time)
@@ -137,4 +221,7 @@ class BurstRuntime:
             elif event.kind is EventKind.FULL_BURST_END:
                 fb_ends.append(event.time)
             self.weapons.sync(event.time)
-        return BurstRuntimeResult(tuple(fb_starts), tuple(fb_ends), tuple(casts), processed)
+
+        return BurstRuntimeResult(
+            tuple(fb_starts), tuple(fb_ends), tuple(casts), processed
+        )
