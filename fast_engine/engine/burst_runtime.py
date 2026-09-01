@@ -92,9 +92,11 @@ class BurstRuntime:
             if rule.mode is not TriggerMode.PERIODIC or rule.interval is None:
                 continue
             interval = float(rule.interval)
-            if interval <= 0.0 or interval > horizon + 1e-9:
+            if interval <= 0.0 or interval >= horizon:
                 continue
             # Moris initializes every:Ns at t=interval, not battle_start.
+            # The combat scoring window is [0, horizon), so a tick exactly at the
+            # nominal end time is not a damage-bearing combat event.
             self.scheduler.schedule(
                 interval,
                 EventKind.PERIODIC_TICK,
@@ -243,6 +245,11 @@ class BurstRuntime:
         phase-30+ events consume the shot first and only then dispatch hit-based
         effects. This prevents a hit-triggered buff from retroactively boosting
         the shot that created it.
+
+        The combat interval is half-open: ``[0, horizon)``. Moris' 60 Hz loop
+        likewise has its final processed frame immediately before the nominal
+        duration (for 180s, 179.9833...), so an event scheduled exactly at
+        ``horizon`` must not contribute damage or trigger state for ranking.
         """
 
         horizon = (
@@ -270,7 +277,7 @@ class BurstRuntime:
             if next_time is None or next_time > time + 1e-9:
                 score_observer.consume_until(time, inclusive=True)
 
-        while self.scheduler and (self.scheduler.peek_time() or 0.0) <= horizon + 1e-9:
+        while self.scheduler and (self.scheduler.peek_time() or 0.0) < horizon:
             event = self.scheduler.pop()
             processed += 1
             score_before_event(event)
@@ -322,7 +329,7 @@ class BurstRuntime:
                     context=SignalContext(),
                 )
                 next_t = event.time + token.interval
-                if next_t <= horizon + 1e-9:
+                if next_t < horizon:
                     self.scheduler.schedule(
                         next_t,
                         EventKind.PERIODIC_TICK,
@@ -371,7 +378,7 @@ class BurstRuntime:
             score_end_of_time(event.time)
 
         if score_observer is not None:
-            score_observer.consume_until(horizon, inclusive=True)
+            score_observer.consume_until(horizon, inclusive=False)
 
         return BurstRuntimeResult(
             tuple(fb_starts), tuple(fb_ends), tuple(casts), processed
