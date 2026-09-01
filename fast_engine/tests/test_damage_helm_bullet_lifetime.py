@@ -113,7 +113,7 @@ class HelmTenShotLifetimeTests(unittest.TestCase):
             "skill_state_delivery:미란다:웨이크업! 4:crit_rate",
             blockers,
         )
-        self.assertIn("control:미하라 : 본딩 체인", blockers)
+        self.assertNotIn("control:미하라 : 본딩 체인", blockers)
 
         dispatcher = TriggerDispatcher(
             compiled,
@@ -125,7 +125,7 @@ class HelmTenShotLifetimeTests(unittest.TestCase):
         self.assertTrue(dispatcher.is_runtime_executable_effect(helm))
         self.assertTrue(dispatcher.is_runtime_executable_effect(miranda))
 
-    def test_dynamic_bullet_target_fails_atomically_if_snapshot_is_unsafe(self):
+    def test_dynamic_bullet_target_fails_atomically_without_live_owner(self):
         squad = build_squad(NAMES)
         compiled = compile_moris_squad(squad)
         policy = compile_burst_policy(
@@ -155,7 +155,7 @@ class HelmTenShotLifetimeTests(unittest.TestCase):
         dispatcher.enable_strict_score_delivery()
         with self.assertRaisesRegex(
             NotImplementedError,
-            "duration_bullets resolved target cadence not static: 미하라 : 본딩 체인",
+            "duration_bullets resolved target cadence not owned: 미하라 : 본딩 체인",
         ):
             dispatcher._activate(miranda, now=3.0, context=SignalContext())
 
