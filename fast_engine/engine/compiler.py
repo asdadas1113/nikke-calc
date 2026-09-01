@@ -70,7 +70,7 @@ def _weapon_view(name: str, meta: dict[str, Any], char: dict[str, Any]) -> dict[
         "cover_during_delay": bool(delay_exc.get("cover_during_delay", False)),
         "charge_time": charge_time,
         "pellets": int(_pick("pellets", delay_exc, meta, mech, default=1)),
-        "muzzles": int(_pick("muzzles", delay_exc, meta, default=1)),
+        "muzzles": int(_pick("muzzles", delay_exc, meta, mech, default=1)),
         "is_clip": name in clip_chars,
         "damage_coeff": float(meta.get("damage_coeff") or 0.0),
         "core_dmg_mult": float(meta.get("core_dmg_mult") or 200.0),
