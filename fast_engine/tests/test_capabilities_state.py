@@ -93,8 +93,8 @@ class CapabilityManifestTests(unittest.TestCase):
             e for e in dorothy.members[0].effects
             if e.stat == "burst_cooldown_reduce" and any(r.raw == "last_bullet_fire" for r in e.triggers)
         )
-        self.assertEqual(last_bullet.capability.disposition, CapabilityDisposition.PLANNED)
-        self.assertIn("timing:weapon_hit", last_bullet.capability.blockers)
+        self.assertEqual(last_bullet.capability.disposition, CapabilityDisposition.READY)
+        self.assertEqual(last_bullet.capability.blockers, ())
 
     def test_unknown_synthetic_mechanic_fails_closed(self):
         synthetic = {
