@@ -23,7 +23,7 @@ class DamageEffectPolicyTests(unittest.TestCase):
         self.assertTrue(is_direct_damage_buff_runtime_supported(effect))
         self.assertTrue(TriggerDispatcher.is_executable_effect(effect))
 
-    def test_raw_full_charge_hit_without_every_hit_producer_fails_closed(self):
+    def test_raw_full_charge_hit_damage_state_is_executable(self):
         squad = compile_moris_squad(
             build_squad(["리버렐리오", "미카", "아니스", "라피", "폴리"])
         )
@@ -33,8 +33,27 @@ class DamageEffectPolicyTests(unittest.TestCase):
             and any(rule.raw == "full_charge_hit" for rule in e.triggers)
         )
         self.assertEqual(effect.stat, "atk_dmg_pct")
-        self.assertFalse(is_direct_damage_buff_runtime_supported(effect))
-        self.assertFalse(TriggerDispatcher.is_executable_effect(effect))
+        self.assertTrue(is_direct_damage_buff_runtime_supported(effect))
+        self.assertTrue(TriggerDispatcher.is_executable_effect(effect))
+
+    def test_literal_hit_count_still_fails_closed(self):
+        squad = compile_moris_squad(
+            build_squad(["나가", "리타", "크라운", "홍련", "앨리스"])
+        )
+        base = next(
+            e for e in squad.members[0].effects
+            if e.stat == "core_dmg_pct"
+            and any(rule.event_key == "hit_count" for rule in e.triggers)
+        )
+        raw_rule = replace(
+            next(rule for rule in base.triggers if rule.event_key == "hit_count"),
+            raw="hit_count",
+            mode=type(base.triggers[0].mode).EVENT,
+            threshold=None,
+            trigger_count_reducible=False,
+        )
+        raw = replace(base, triggers=(raw_rule,))
+        self.assertFalse(is_direct_damage_buff_runtime_supported(raw))
 
     def test_gauge_condition_stays_fail_closed(self):
         squad = compile_moris_squad(
