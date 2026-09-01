@@ -37,11 +37,46 @@ class BurstMachineTests(unittest.TestCase):
             EventKind.BURST_ACTIVATE,
             EventKind.FULL_BURST_START,
             EventKind.FULL_BURST_END,
+            EventKind.BURST_END_FINALIZE,
         ])
-        expected_times = [3.0, 3.05, 3.20, 3.35, 3.40, 13.40]
+        expected_times = [3.0, 3.05, 3.20, 3.35, 3.40, 13.40, 13.40]
         for row, expected in zip(rows, expected_times):
             self.assertAlmostEqual(row[1], expected, places=9)
         self.assertEqual([r[2] for r in rows[1:4]], ["리타", "크라운", "홍련"])
+
+    def test_full_burst_end_keeps_cast_flags_until_same_time_finalize(self):
+        _, compiled, _, q, machine = self._case(["리타", "크라운", "홍련", "앨리스", "나가"])
+        end_event = None
+        end_signals = ()
+        while q:
+            event = q.pop()
+            signals = machine.handle(event, q)
+            if event.kind is EventKind.FULL_BURST_END:
+                end_event = event
+                end_signals = signals
+                break
+
+        self.assertIsNotNone(end_event)
+        self.assertTrue(all(signal.event_key == "full_burst_end" for signal in end_signals))
+        casted_names = {
+            compiled.names[actor]
+            for actor, casted in enumerate(machine.casted)
+            if casted
+        }
+        self.assertEqual(casted_names, {"리타", "크라운", "홍련"})
+
+        finalize = q.pop()
+        self.assertEqual(finalize.kind, EventKind.BURST_END_FINALIZE)
+        self.assertAlmostEqual(finalize.time, end_event.time, places=9)
+        self.assertEqual(machine.handle(finalize, q), ())
+        self.assertFalse(any(machine.casted))
+
+        # The ordinary next-cycle token must remain current; the finalize event
+        # deliberately does not participate in generation invalidation.
+        next_ready = q.pop()
+        self.assertEqual(next_ready.kind, EventKind.BURST_READY)
+        self.assertGreater(next_ready.time, finalize.time)
+        self.assertTrue(machine.handle(next_ready, q))
 
     def test_moris_burst_pattern_is_compiled_without_character_specific_runtime_logic(self):
         names = ["리타", "크라운", "마스트 : 로망틱 메이드", "홍련", "앨리스"]
@@ -74,6 +109,9 @@ class BurstMachineTests(unittest.TestCase):
         # so the machine schedules a wait until 23.05 in the approximation baseline.
         while q and machine.cycle_count < 1:
             machine.handle(q.pop(), q)
+        ready = q.pop()
+        self.assertEqual(ready.kind, EventKind.BURST_END_FINALIZE)
+        machine.handle(ready, q)
         ready = q.pop()
         self.assertEqual(ready.kind, EventKind.BURST_READY)
         machine.handle(ready, q)
