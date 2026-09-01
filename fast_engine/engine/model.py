@@ -16,12 +16,18 @@ class EnemyStaticProfile:
 
     `duration` is the battle horizon, not a fixed simulation timestep.
     The runtime advances from event to event and may aggregate unchanged spans.
+
+    ``core_px`` is optional. Without it, the historical aggregate
+    ``core_uptime * core_hit_rate_when_open`` remains the fallback. With it,
+    Fast uses Moris' weapon-spread power model and multiplies the resulting
+    weapon/accuracy-specific open-core probability by ``core_uptime``.
     """
 
     defense: float = 31784.0
     element: str | None = None
     core_uptime: float = 0.0
     core_hit_rate_when_open: float = 1.0
+    core_px: float | None = None
     duration: float = 180.0
 
     def __post_init__(self) -> None:
@@ -29,6 +35,8 @@ class EnemyStaticProfile:
             raise ValueError("enemy defense must be >= 0")
         if self.duration <= 0:
             raise ValueError("duration must be > 0")
+        if self.core_px is not None and self.core_px < 0:
+            raise ValueError("core_px must be >= 0")
         for name, value in (
             ("core_uptime", self.core_uptime),
             ("core_hit_rate_when_open", self.core_hit_rate_when_open),
@@ -39,6 +47,34 @@ class EnemyStaticProfile:
     @property
     def effective_core_rate(self) -> float:
         return self.core_uptime * self.core_hit_rate_when_open
+
+    def core_rate_for_weapon(
+        self,
+        weapon: Mapping[str, Any],
+        *,
+        accuracy_pct: float = 0.0,
+    ) -> float:
+        """Expected core-hit probability for one physical hit.
+
+        The power model is algebraically identical to Moris `_core_hit_prob()`;
+        all weapon-specific constants are compiled into ``weapon`` once. This is
+        called only when a DamageTerms snapshot is consumed, never once per hit.
+        """
+        if self.core_px is None:
+            return self.effective_core_rate
+        if self.core_px <= 0.0 or self.core_uptime <= 0.0:
+            return 0.0
+        diameter = max(
+            float(weapon.get("core_base_diameter", 10.0))
+            - float(weapon.get("core_acc_slope", 0.0)) * float(accuracy_pct),
+            1.0,
+        )
+        ratio = float(self.core_px) / diameter
+        open_rate = min(
+            1.0,
+            ratio ** float(weapon.get("core_model_n", 2.55)),
+        )
+        return min(1.0, max(0.0, self.core_uptime * open_rate))
 
 
 @dataclass(frozen=True, slots=True)
