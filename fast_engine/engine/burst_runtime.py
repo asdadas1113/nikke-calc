@@ -264,7 +264,13 @@ class BurstRuntime:
     def _schedule_static_last_bullets(
         self, horizon: float, dynamic_actors: set[int]
     ) -> None:
-        """Expose exact magazine-ending shots without widening to every weapon hit.
+        """Expose exact magazine-ending signals without widening every weapon hit.
+
+        ``last_bullet_fire`` and ``last_bullet`` remain distinct Moris events even
+        though they share the same physical magazine-ending shot time. Direct
+        damage-state support is certified only for post-shot ``last_bullet``;
+        the pre-shot signal is preserved for existing runtime mechanics but is
+        never aliased into post-shot semantics.
 
         Static actors are safe only while their reload/max-ammo cadence cannot be
         changed by live effects. Dynamic charge actors and potentially-targeting
@@ -275,7 +281,10 @@ class BurstRuntime:
             effect.actor
             for effect in self.squad.effects
             if self.dispatcher.is_runtime_executable_effect(effect)
-            and any(rule.event_key == "last_bullet_fire" for rule in effect.triggers)
+            and any(
+                rule.event_key in {"last_bullet_fire", "last_bullet"}
+                for rule in effect.triggers
+            )
         }
         if not interested:
             return
@@ -284,7 +293,7 @@ class BurstRuntime:
         if unsupported:
             names = ", ".join(self.squad.members[actor].name for actor in sorted(unsupported))
             raise NotImplementedError(
-                "Fast dynamic charge + last_bullet_fire boundary not certified: " + names
+                "Fast dynamic charge + last-bullet boundary not certified: " + names
             )
 
         invalidators: list[tuple[int, str]] = []
@@ -305,7 +314,7 @@ class BurstRuntime:
                 for actor, name in invalidators[:8]
             )
             raise NotImplementedError(
-                "Fast static last_bullet_fire cadence can be invalidated by live weapon modifiers: "
+                "Fast static last-bullet cadence can be invalidated by live weapon modifiers: "
                 + detail
             )
 
@@ -321,7 +330,7 @@ class BurstRuntime:
                 actor=boundary.actor,
                 payload=BurstSignal(
                     boundary.time,
-                    "last_bullet_fire",
+                    boundary.event_key,
                     boundary.actor,
                     boundary.actor,
                 ),
