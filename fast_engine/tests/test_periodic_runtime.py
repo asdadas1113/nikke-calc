@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import unittest
 
+from calculator.timeline import simulate
 from context.spec import build_squad
 from fast_engine.engine.burst import compile_burst_policy
 from fast_engine.engine.burst_runtime import BurstRuntime
 from fast_engine.engine.capabilities import CapabilityDisposition
 from fast_engine.engine.compiler import compile_moris_squad
+
+FRAME = 1.0 / 60.0
 
 
 class PeriodicRuntimeTests(unittest.TestCase):
@@ -95,6 +98,32 @@ class PeriodicRuntimeTests(unittest.TestCase):
         self.assertEqual(len(favorite_cohorts), 1)
         self.assertEqual(len(next(iter(base_cohorts))), 2)
         self.assertEqual(len(next(iter(favorite_cohorts))), 3)
+
+    def test_milk_periodic_cadence_tracks_moris_burst_starts(self):
+        duration = 80.0
+        moris_squad, compiled = self._compiled(favorite_stage=3)
+        policy = compile_burst_policy(moris_squad, compiled, {"duration": duration})
+        fast = BurstRuntime(compiled, policy).run(duration=duration)
+
+        moris = simulate(
+            moris_squad,
+            config={"duration": duration, "rng_mode": "expected"},
+            verbose=True,
+        )
+        moris_starts = [
+            row.t for row in moris.log.burst_log if row.event == "full_burst 시작"
+        ]
+
+        self.assertGreaterEqual(len(fast.full_burst_starts), 5)
+        self.assertGreaterEqual(len(moris_starts), 5)
+        for cycle, (actual, expected) in enumerate(
+            zip(fast.full_burst_starts, moris_starts), start=1
+        ):
+            self.assertLessEqual(
+                abs(actual - expected),
+                FRAME + 1e-8,
+                f"cycle={cycle}, fast={actual:.9f}, moris={expected:.9f}, delta={actual-expected:+.9f}",
+            )
 
     def test_auxiliary_periodic_atk_does_not_overclaim_fast_capability(self):
         _squad, compiled = self._compiled()
