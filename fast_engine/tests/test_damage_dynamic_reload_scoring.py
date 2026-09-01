@@ -22,7 +22,12 @@ from fast_engine.engine.targets import compile_target
 from fast_engine.engine.triggers import TriggerIndex, TriggerMode, TriggerRule
 
 
-def _capability(stat: str, *, ready: bool = True) -> EffectCapability:
+def _capability(
+    stat: str,
+    *,
+    ready: bool = True,
+    category: EffectCategory = EffectCategory.CADENCE_TIMELINE,
+) -> EffectCapability:
     return EffectCapability(
         character="synthetic-reload",
         index=0,
@@ -30,7 +35,7 @@ def _capability(stat: str, *, ready: bool = True) -> EffectCapability:
         name="live reload",
         effect_type="buff",
         stat=stat,
-        category=EffectCategory.CADENCE_TIMELINE,
+        category=category,
         timing_families=("burst",),
         condition_families=(),
         target_family="ally_static",
@@ -71,8 +76,51 @@ def _reload_effect(*, duration: float = 1.5, ready: bool = True) -> CompiledEffe
     )
 
 
+def _hit_count_effect(*, reducible: bool = True) -> CompiledEffect:
+    rule = (
+        TriggerRule(
+            "hit_count:2",
+            "hit_count",
+            TriggerMode.MODULO,
+            threshold=2.0,
+            trigger_count_reducible=True,
+        )
+        if reducible
+        else TriggerRule("hit_count", "hit_count", TriggerMode.EVENT)
+    )
+    return CompiledEffect(
+        effect_id=1,
+        actor=0,
+        actor_effect_index=1,
+        source="synthetic",
+        source_tag="skill",
+        name="count atk",
+        effect_type="buff",
+        stat="atk_pct",
+        polarity="beneficial",
+        target="self",
+        target_spec=compile_target(
+            "self",
+            actor_by_name={"synthetic-reload": 0},
+        ),
+        conditions=(),
+        condition_rules=(),
+        triggers=(rule,),
+        value=100.0,
+        duration=10.0,
+        max_stack=2.0,
+        max_trigger=None,
+        tick_interval=None,
+        parameters={},
+        capability=_capability(
+            "atk_pct",
+            category=EffectCategory.HIT_FORMULA,
+        ),
+    )
+
+
 def _member(
-    effect: CompiledEffect,
+    effects: tuple[CompiledEffect, ...],
     *,
     fire_mode: str = "auto",
     weapon_type: str = "AR",
@@ -118,15 +166,22 @@ def _member(
         burst_regen_time=2.0,
         weapon_type=weapon_type,
         weapon=weapon,
-        effects=(effect,),
+        effects=effects,
         skill_levels={},
         favorite_stage=0,
     )
 
 
 def _squad(effect: CompiledEffect, **member_kwargs) -> CompiledSquad:
-    member = _member(effect, **member_kwargs)
-    return CompiledSquad((member,), TriggerIndex.from_effects((effect,), actor_count=1))
+    return _squad_many((effect,), **member_kwargs)
+
+
+def _squad_many(
+    effects: tuple[CompiledEffect, ...],
+    **member_kwargs,
+) -> CompiledSquad:
+    member = _member(effects, **member_kwargs)
+    return CompiledSquad((member,), TriggerIndex.from_effects(effects, actor_count=1))
 
 
 def _run(
@@ -217,6 +272,65 @@ class DynamicReloadScoringTests(unittest.TestCase):
         # Charge shots at 1.0, 2.0. Reload begins at 2.0 with +50%, remains a
         # one-second reload after expiry at 2.5, then shots at 4.0 and 5.0.
         self.assertAlmostEqual(total, per_shot * 4.0, places=6)
+
+    def test_reducible_hit_count_is_owned_once_by_rapid_runtime(self):
+        reload_effect = _reload_effect(duration=10.0)
+        count_effect = _hit_count_effect()
+        squad = _squad_many((reload_effect, count_effect))
+        blockers = static_normal_score_blockers(squad)
+        self.assertNotIn(
+            "cadence:synthetic-reload:live reload:reload_speed_pct",
+            blockers,
+        )
+        self.assertEqual(blockers, ())
+
+        duration = 2.25
+        enemy = EnemyStaticProfile(
+            defense=0.0,
+            element=None,
+            core_uptime=0.0,
+            core_px=0.0,
+            duration=duration,
+        )
+        runtime = BurstRuntime(
+            squad,
+            BurstPolicy(duration=duration, first_burst_time=10.0),
+            enemy,
+        )
+        runtime.dispatcher.effects.activate(
+            reload_effect, 0, 0.0, runtime.scheduler
+        )
+        observer = StaticNormalAttackObserver(runtime, duration=duration)
+        result = runtime.run(duration=duration, score_observer=observer)
+        score = observer.finish(events_processed=result.events_processed)
+
+        # Physical shots are 0.0, 0.5, 2.0. hit_count:2 fires post-shot at 0.5,
+        # so only the third shot receives +100% ATK. If the old static hit-count
+        # planner were still active for this dynamic actor, the same threshold
+        # would be dispatched twice and max_stack=2 would make the third shot 3x.
+        terms = observer.resolver.resolve(0, now=0.25)
+        base = expected_normal_block_damage(
+            observer.specs[0],
+            shot_count=1,
+            base_atk=squad.members[0].base_atk,
+            enemy_def=enemy.defense,
+            terms=replace(terms, atk_pct=0.0),
+            core_prob=0.0,
+            is_full_burst=False,
+            is_optimal_range=False,
+        )
+        self.assertAlmostEqual(score.char_total[0], base * 4.0, places=6)
+
+    def test_raw_hit_count_keeps_reload_fail_closed(self):
+        reload_effect = _reload_effect(duration=10.0)
+        raw_count = _hit_count_effect(reducible=False)
+        blockers = static_normal_score_blockers(
+            _squad_many((reload_effect, raw_count))
+        )
+        self.assertIn(
+            "cadence:synthetic-reload:live reload:reload_speed_pct",
+            blockers,
+        )
 
     def test_clip_reload_remains_fail_closed(self):
         effect = _reload_effect()
