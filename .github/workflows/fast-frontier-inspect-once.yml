@@ -13,61 +13,57 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect squad1 blocker causes
+      - name: Inspect Helm reload special threshold
         run: |
           python - <<'PY'
           from context import spec
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.engine.score import (
-              static_score_blockers,
-              _possible_ally_targets,
-              _reload_recipient_score_safe,
-              _actor_has_executable_event,
-              _actor_has_unhandled_count_event,
-              _actor_has_executable_core_count,
-              _direct_damage_buff_score_supported,
-          )
-          from fast_engine.engine.shot_blocks import static_bullet_lifetime_cadence_safe
+          from fast_engine.engine.score import _possible_ally_targets
 
           names = ['리틀 머메이드', '크라운', '라피 : 레드 후드', '미하라 : 본딩 체인', '헬름']
           squad = compile_moris_squad(spec.build_squad(names))
-          print('BLOCKERS', static_score_blockers(squad))
+          actor = 4
+          print('HELM', squad.members[actor].weapon)
 
-          interesting = {
-              ('리틀 머메이드', '세이렌 송 2', 'ammo_charge_pct'),
-              ('크라운', '원 포 올 2', 'reload_speed_pct'),
-              ('크라운', '로얄 에타이어 4', 'atk_dmg_pct'),
-              ('헬름', '이지스 캐논 3', 'charge_dmg_mag_pct'),
-          }
+          upper = 0.0
           for effect in squad.effects:
-              owner = squad.members[effect.actor].name
-              key = (owner, effect.name, effect.stat)
-              if key not in interesting:
+              if effect.stat == 'reload_speed_pct' and effect.effect_type == 'buff':
+                  targets = _possible_ally_targets(squad, effect)
+                  if actor not in targets:
+                      continue
+                  value = max(0.0, float(effect.value or 0.0))
+                  stacks = effect.max_stack
+                  if stacks is None or stacks <= 1:
+                      mult = 1.0
+                  elif stacks == -1:
+                      mult = float('inf')
+                  else:
+                      mult = float(stacks)
+                  contrib = value * mult
+                  upper += contrib
+                  print('RELOAD_SOURCE', squad.members[effect.actor].name, effect.name, {
+                      'value': effect.value,
+                      'max_stack': effect.max_stack,
+                      'duration': effect.duration,
+                      'target': effect.target,
+                      'triggers': [r.raw for r in effect.triggers],
+                      'conditions': [r.raw for r in effect.condition_rules],
+                      'contrib_upper': contrib,
+                  })
+          print('RELOAD_UPPER_BOUND', upper)
+
+          for effect in squad.members[actor].effects:
+              if not TriggerDispatcher.is_executable_effect(effect):
                   continue
-              targets = _possible_ally_targets(squad, effect)
-              print('EFFECT', key, {
-                  'id': effect.effect_id,
-                  'type': effect.effect_type,
-                  'value': effect.value,
-                  'duration': effect.duration,
-                  'target': effect.target,
-                  'target_mode': effect.target_spec.mode.value,
-                  'targets': [(a, squad.members[a].name) for a in targets],
-                  'parameters': effect.parameters,
-                  'triggers': [(r.raw, r.event_key, r.mode.value, r.threshold, r.trigger_count_reducible) for r in effect.triggers],
-                  'conditions': [(r.raw, r.mode.value, r.key, r.threshold) for r in effect.condition_rules],
-                  'runtime_executable_base': TriggerDispatcher.is_executable_effect(effect),
-                  'damage_delivery_safe': _direct_damage_buff_score_supported(squad, effect),
-              })
-              for actor in targets:
-                  member = squad.members[actor]
-                  print(' TARGET', member.name, {
-                      'weapon': member.weapon,
-                      'reload_safe': _reload_recipient_score_safe(squad, actor),
-                      'bullet_static_safe': static_bullet_lifetime_cadence_safe(squad, actor),
-                      'core_count': _actor_has_executable_core_count(squad, actor),
-                      'last_or_reload': _actor_has_executable_event(squad, actor, frozenset({'last_bullet_fire','last_bullet','on_attack','event:full_reload','full_reload','event:cover'})),
-                      'raw_counts': _actor_has_unhandled_count_event(squad, actor, frozenset({'hit_count','pellet_hit'})),
+              keys = sorted({r.event_key for r in effect.triggers})
+              if any(k in {'last_bullet_fire','last_bullet','on_attack','event:full_reload','full_reload','event:cover'} for k in keys):
+                  print('HELM_EVENT_CONSUMER', effect.name, effect.stat, {
+                      'keys': keys,
+                      'type': effect.effect_type,
+                      'value': effect.value,
+                      'duration': effect.duration,
+                      'target': effect.target,
+                      'parameters': effect.parameters,
                   })
           PY
