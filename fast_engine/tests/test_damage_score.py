@@ -94,12 +94,34 @@ class StaticNormalScoreParityTests(unittest.TestCase):
         )
         runtime.run(duration=self.DURATION)
 
+        supported_effects = [effect for effect in self.compiled.effects if sink.supports(effect)]
         supported_pairs = {
             (self.compiled.members[effect.actor].name, effect.name)
-            for effect in self.compiled.effects
-            if sink.supports(effect)
+            for effect in supported_effects
         }
         self.assertTrue(supported_pairs)
+
+        moris_by_pair = {
+            pair: sum(
+                hit.damage
+                for hit in self.moris.hits
+                if (hit.caster, hit.skill_name) == pair
+            )
+            for pair in supported_pairs
+        }
+        diagnostic_rows = [
+            {
+                "actor": self.compiled.members[effect.actor].name,
+                "name": effect.name,
+                "stat": effect.stat,
+                "timings": [rule.raw for rule in effect.triggers],
+                "value": effect.value,
+                "moris": moris_by_pair.get(
+                    (self.compiled.members[effect.actor].name, effect.name), 0.0
+                ),
+            }
+            for effect in supported_effects
+        ]
 
         moris_by_name = {
             name: sum(
@@ -125,14 +147,16 @@ class StaticNormalScoreParityTests(unittest.TestCase):
             self.assertLessEqual(
                 rel_error,
                 0.01,
-                f"skill subset {name}: Fast={estimate:,.2f}, Moris={authority:,.2f}, rel={rel_error:.4%}",
+                f"skill subset {name}: Fast={estimate:,.2f}, Moris={authority:,.2f}, "
+                f"rel={rel_error:.4%}; rows={diagnostic_rows!r}",
             )
 
         team_rel_error = abs(fast_total - moris_total) / moris_total
         self.assertLessEqual(
             team_rel_error,
             0.01,
-            f"skill subset team: Fast={fast_total:,.2f}, Moris={moris_total:,.2f}, rel={team_rel_error:.4%}",
+            f"skill subset team: Fast={fast_total:,.2f}, Moris={moris_total:,.2f}, "
+            f"rel={team_rel_error:.4%}; rows={diagnostic_rows!r}",
         )
 
 
