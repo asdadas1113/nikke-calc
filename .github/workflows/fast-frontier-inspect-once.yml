@@ -1,0 +1,54 @@
+name: Fast frontier inspect once
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Inspect nearest blockers
+        run: |
+          python - <<'PY'
+          from context import spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+
+          members = ['미란다', '브리드 : 사일런트 트랙', '헬름', '루주', '미하라 : 본딩 체인']
+          squad = compile_moris_squad(spec.build_squad(members))
+          print('BLOCKERS', static_score_blockers(squad))
+          for i, member in enumerate(squad.members):
+              print('MEMBER', i, member.name, 'weapon_type=', member.weapon_type, 'weapon=', member.weapon)
+              for effect in member.effects:
+                  if effect.name in {'웨이크업! 4', '이지스 캐논 3'} or effect.stat in {'crit_rate', 'charge_dmg_mag_pct'}:
+                      print('EFFECT', member.name, {
+                          'id': effect.effect_id,
+                          'name': effect.name,
+                          'type': effect.effect_type,
+                          'stat': effect.stat,
+                          'value': effect.value,
+                          'duration': effect.duration,
+                          'max_stack': effect.max_stack,
+                          'max_trigger': effect.max_trigger,
+                          'target': effect.target,
+                          'target_mode': effect.target_spec.mode.value,
+                          'target_arg': effect.target_spec.arg,
+                          'target_count': effect.target_spec.count,
+                          'triggers': [(r.raw, r.event_key, r.mode.value, r.threshold, r.trigger_count_reducible) for r in effect.triggers],
+                          'conditions': [(r.raw, r.mode.value, r.key, r.threshold) for r in effect.condition_rules],
+                          'parameters': effect.parameters,
+                          'capability': {
+                              'disposition': effect.capability.disposition.value,
+                              'blockers': effect.capability.blockers,
+                              'timing': effect.capability.timing_families,
+                              'conditions': effect.capability.condition_families,
+                              'target': effect.capability.target_family,
+                          },
+                      })
+          PY
