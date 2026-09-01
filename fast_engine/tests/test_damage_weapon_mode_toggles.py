@@ -71,13 +71,12 @@ class WeaponModeToggleDamageTests(unittest.TestCase):
         self.assertAlmostEqual(base, 500.0)
         self.assertAlmostEqual(broken, 1200.0)
 
-    def test_real_supported_toggle_effects_leave_normal_state_blocker_lane(self):
+    def test_real_burst_cast_toggles_leave_normal_state_blocker_lane(self):
         names = ["목단", "타키나", "치사토", "스노우 화이트 : 헤비암즈", "에이다"]
         compiled = compile_moris_squad(build_squad(names))
         wanted = {
             ("타키나", "제압 개시 2", "armor_break_enabled"),
             ("치사토", "방어 관통 사격", "armor_break_enabled"),
-            ("스노우 화이트 : 헤비암즈", "어나더 화이트 관통특화", "pierce_enabled"),
         }
         found = set()
         for effect in compiled.effects:
@@ -99,6 +98,27 @@ class WeaponModeToggleDamageTests(unittest.TestCase):
             label = f"{owner}:{name}:{stat}"
             self.assertNotIn(f"normal_state:{label}", blockers)
             self.assertNotIn(f"normal_delivery:{label}", blockers)
+
+    def test_pre_shot_full_charge_toggle_remains_fail_closed(self):
+        compiled = compile_moris_squad(
+            build_squad(["스노우 화이트 : 헤비암즈"]),
+            require_five=False,
+        )
+        effect = next(
+            effect
+            for effect in compiled.effects
+            if effect.name == "어나더 화이트 관통특화"
+            and effect.stat == "pierce_enabled"
+        )
+        # Moris emits raw full_charge before the shot's damage lookup. Fast's
+        # currently certified full_charge_hit boundary is post-shot, so aliasing
+        # these would miss the first pierced shot of every activation.
+        self.assertEqual([rule.event_key for rule in effect.triggers], ["full_charge"])
+        self.assertFalse(is_direct_damage_buff_runtime_supported(effect))
+        self.assertIn(
+            "normal_delivery:스노우 화이트 : 헤비암즈:어나더 화이트 관통특화:pierce_enabled",
+            static_normal_score_blockers(compiled),
+        )
 
     def test_active_toggle_is_resolved_by_presence_not_numeric_value(self):
         compiled = compile_moris_squad(
