@@ -11,6 +11,58 @@ Do not interpret the result as "Fast ranks all teams incorrectly". The current
 result is a **coverage failure only**; there is no certified Fast ranking in this
 corpus yet.
 
+## Post-element-override rerun
+
+The standardized public audit was rerun once after the immutable
+`element_code_override` scoring checkpoint.
+
+Engine branch baseline before the one-shot audit workflow:
+
+`8f4d6368edcb8ee754585b134e4062f7be77d3df`
+
+One-shot audit commit:
+
+`bf04e36a54a29d059c18ee2dd82568c603855403`
+
+GitHub Actions run:
+
+`33543703276`
+
+Measured result:
+
+- public standardized squads: **24**
+- Fast certified numeric scores: **0**
+- coverage gaps / fail-closed squads: **24**
+- Moris simulation wall time: **59.893 s**
+- Fast scoring wall time: **0.000 s** because every row was rejected before
+  certified scoring
+- Moris Top-10: **10 blocked, 0 scored-and-ranked-out**
+- `catastrophic_false_negative_rate = 0.0`
+- `top_n_coverage_gap_rate = 1.0`
+- pairwise ranking accuracy: **not measurable** (`0` comparable pairs)
+
+The candidate generator remains fully bypassed. Therefore the interpretation is
+unchanged:
+
+`candidate generation bypassed -> Fast coverage gap -> no ranking diagnosis yet`
+
+Rapi : Red Hood `부착형 유탄` no longer appears as
+`normal_state:*:element_code_override`. The unresolved normal-state family fell
+from **33 to 29**, exactly matching the four public rows that previously contained
+that blocker. No other blocker family moved:
+
+| blocker family | occurrences |
+|---|---:|
+| cadence / shot-shape | 109 |
+| skill state delivery | 103 |
+| normal-attack state delivery | 86 |
+| unresolved normal-damage state | 29 |
+| manual control | 9 |
+
+This checkpoint therefore expanded coverage exactly where intended but did not
+create a fully certified public squad. Ranking quality still cannot be measured
+on this corpus.
+
 ## Post-spawn-lifecycle rerun
 
 The standardized public audit was rerun once after the static
@@ -58,7 +110,7 @@ first audit's `normal_delivery=92`, `skill_state_delivery=108` to
 lifecycle checkpoint therefore removed the intended corpus blocker without
 creating a certified team by itself.
 
-Current blocker-family counts:
+Current blocker-family counts at that checkpoint:
 
 | blocker family | occurrences |
 |---|---:|
@@ -68,7 +120,7 @@ Current blocker-family counts:
 | unresolved normal-damage state | 33 |
 | manual control | 9 |
 
-Most frequent individual blockers now include:
+Most frequent individual blockers included:
 
 - Crown `원 포 올 2` reload-speed cadence state — 7 squads;
 - Crown `로얄 에타이어 4` ATK-damage delivery via `heal_received` — 7 squads;
@@ -121,9 +173,10 @@ CI commit: `782026020dd74647c5fdd5527977a6656cb8c29d`
 
 At that historical checkpoint the ranking diagnostic still conflated blocked
 Top-N rows with catastrophic scored false negatives. That metric has since been
-split. The post-spawn rerun above confirms that blocked Top-N rows now contribute
-to `top_n_coverage_gap_rate`, while `catastrophic_false_negative_rate` counts only
-certified rows that Fast actually ranks outside the shortlist.
+split. The post-spawn and post-element reruns above confirm that blocked Top-N rows
+contribute to `top_n_coverage_gap_rate`, while
+`catastrophic_false_negative_rate` counts only certified rows that Fast actually
+ranks outside the shortlist.
 
 ## Original blocker inventory
 
@@ -161,6 +214,8 @@ damage is already supported.
   coverage**, especially dynamic cadence and state-delivery paths.
 - Static spawn lifecycle support removed the intended Little Mermaid `거품`
   coverage blocker.
+- Immutable element-code override support removed its four intended unresolved
+  normal-state blockers.
 - Fail-closed behavior is working as designed: unsupported comparison-critical
   states are not silently turned into zero damage.
 - Coverage gaps and true scored ranking misses are now separate diagnostics.
