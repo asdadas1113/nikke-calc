@@ -27,9 +27,6 @@ if TYPE_CHECKING:
     from .burst_runtime import BurstRuntime
 
 
-# Any live change to one of these can invalidate precompiled shot timestamps or
-# the number of damage-bearing hits inside a shot. Permanent unconditional self
-# modifiers that compile_static_cadence_modifiers() already folds are safe.
 _CADENCE_OR_SHAPE_STATS = frozenset({
     "reload_speed_pct",
     "reload_time_fixed",
@@ -49,16 +46,12 @@ _CADENCE_OR_SHAPE_STATS = frozenset({
 })
 _STATIC_FOLDABLE = frozenset(StaticCadenceModifiers.__dataclass_fields__)
 
-# Live cadence scoring slices already backed by dynamic runtimes.
 _DYNAMIC_CHARGE_SCORE_STATS = frozenset({
     "charge_speed_pct",
     "charge_speed_caster_based_pct",
 })
 _DYNAMIC_RELOAD_SCORE_STATS = frozenset({"reload_speed_pct"})
 
-# Damage-facing states that can change ordinary weapon damage in the initial
-# static-target model. A state being representable is not enough: its
-# trigger/condition/target path must also be deliverable by the score runtime.
 _NORMAL_DIRECT_DAMAGE_STATS = frozenset({
     "atk_pct",
     "atk_flat",
@@ -157,8 +150,6 @@ def _actor_has_unhandled_count_event(
     actor: int,
     event_keys: frozenset[str],
 ) -> bool:
-    """Whether a count consumer cannot use the compressed reducible bridge."""
-
     for effect in squad.members[actor].effects:
         if not TriggerDispatcher.is_executable_effect(effect):
             continue
@@ -190,8 +181,6 @@ def _reload_recipient_score_safe(squad: CompiledSquad, actor: int) -> bool:
         return False
     if member.weapon.get("control") or member.weapon.get("is_clip"):
         return False
-    # Moris has a cover-during-delay auto-reload shortcut at reload >=100%.
-    # The compressed runtime does not model that branch yet.
     if member.weapon.get("cover_during_delay"):
         return False
 
@@ -211,19 +200,12 @@ def _reload_recipient_score_safe(squad: CompiledSquad, actor: int) -> bool:
         return False
 
     if mode == "charge":
-        # Dynamic charge owns reducible hit_count/full_charge_hit and exact
-        # post-shot last_bullet, but it does not emit pellet_hit for multi-hit
-        # charge shots and raw/non-reducible hit_count remains uncertified.
         if _actor_has_executable_event(squad, actor, frozenset({"pellet_hit"})):
             return False
         return not _actor_has_unhandled_count_event(
             squad, actor, frozenset({"hit_count"})
         )
 
-    # BurstRuntime now excludes rapid dynamic actors from the old static weapon
-    # planner. The compressed runtime may therefore own reducible hit_count and
-    # pellet_hit thresholds without duplicate/stale trigger boundaries. Raw or
-    # non-reducible count rules still fail closed.
     if _actor_has_unhandled_count_event(
         squad, actor, frozenset({"hit_count", "pellet_hit"})
     ):
@@ -231,8 +213,6 @@ def _reload_recipient_score_safe(squad: CompiledSquad, actor: int) -> bool:
     if _actor_has_executable_event(squad, actor, frozenset({"last_bullet"})):
         return False
 
-    # A global squad-body-hit consumer would need every physical rapid shot to be
-    # broadcast. That bridge is currently charge-only.
     if any(
         TriggerDispatcher.is_executable_effect(effect)
         and any(rule.event_key == "squad_body_hit" for rule in effect.triggers)
@@ -278,8 +258,6 @@ def _dynamic_charge_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
             and not _is_folded_static_self_modifier(effect)
             and _is_dynamic_charge_score_supported(squad, effect)
         ):
-            # Dynamic selectors may choose any ally. Charge-speed is harmless on
-            # non-charge weapons, so promoting all charge actors is a safe superset.
             actors.update(charge)
     actors.update(charge & set(_dynamic_reload_score_actors(squad)))
     return tuple(sorted(actors))
@@ -343,8 +321,6 @@ def _direct_damage_buff_score_supported(squad: CompiledSquad, effect) -> bool:
     if effect.parameters.get("duration_bullets") is None:
         return True
     if not target_scope_is_static(effect.target_spec):
-        # The target cohort is selected at activation time. The dispatcher
-        # validates every resolved recipient atomically before mutating state.
         return True
     targets = _possible_ally_targets(squad, effect)
     return bool(targets) and all(
@@ -354,8 +330,6 @@ def _direct_damage_buff_score_supported(squad: CompiledSquad, effect) -> bool:
 
 
 def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
-    """Return mechanics that make the current normal score unsafe."""
-
     blockers: list[str] = []
     for member in squad.members:
         if member.weapon.get("control"):
@@ -408,8 +382,6 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
 
 
 def static_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
-    """Return state-delivery blockers for normal + supported simple skill damage."""
-
     blockers = list(static_normal_score_blockers(squad))
     for effect in squad.effects:
         if effect.effect_type != "buff" or _is_patternless_unreachable(effect):
@@ -455,6 +427,7 @@ class StaticNormalAttackObserver:
                 + detail
             )
 
+        runtime.dispatcher.enable_strict_score_delivery()
         self.runtime = runtime
         self.duration = float(duration)
         self.resolver = DamageTermResolver(
@@ -511,11 +484,6 @@ class StaticNormalAttackObserver:
         self._score_shots(actor, count, eval_time=float(time))
 
     def consume_until(self, time: float, *, inclusive: bool) -> None:
-        """Consume dynamic weapon state, then all unscored static shots."""
-
-        # Rapid live-reload actors are intentionally not part of the old static
-        # shot cursor. Advance their compressed weapon machine while the current
-        # ActiveEffectStore still represents the correct side of this boundary.
         self.runtime.weapons.advance_to(time, inclusive=inclusive)
 
         eval_time = float(time) if inclusive else nextafter(float(time), -inf)
@@ -544,8 +512,6 @@ def score_static_normal_squad(
     *,
     duration: float | None = None,
 ) -> FastScore:
-    """Run the first score-only vertical slice: stateful normal attacks only."""
-
     from .burst_runtime import BurstRuntime
 
     horizon = policy.duration if duration is None else min(float(duration), policy.duration)
@@ -562,8 +528,6 @@ def score_static_squad(
     *,
     duration: float | None = None,
 ) -> FastScore:
-    """Score normal attacks plus every currently certified simple damage event."""
-
     from .burst_runtime import BurstRuntime
     from .damage_runtime import SimpleDamageScoreSink
 
