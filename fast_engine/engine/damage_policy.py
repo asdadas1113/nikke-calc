@@ -94,7 +94,6 @@ _SAFE_EVENT_KEYS = frozenset({
     "full_burst_end",
     "event:ally_burst_cast",
 })
-_COUNT_BOUNDARY_EVENT_KEYS = frozenset({"hit_count", "full_charge_hit"})
 
 
 def _target_supported(spec) -> bool:
@@ -109,10 +108,17 @@ def _timing_supported(rule) -> bool:
     # exists for all damage stats.
     if rule.mode is TriggerMode.PERIODIC:
         return False
-    if rule.event_key in _COUNT_BOUNDARY_EVENT_KEYS:
-        # Fast currently materializes only modulo threshold crossings, not every
-        # raw weapon hit. Therefore hit_count:N / full_charge_count:N are safe,
-        # while literal hit_count / full_charge_hit EVENT rules must fail closed.
+    if rule.event_key == "full_charge_hit":
+        # MultiSignalChargeCadenceRuntime now has an actor-selective producer for
+        # literal every-full-charge events, while retaining compressed MODULO
+        # boundaries for full_charge_count:N.
+        return (
+            rule.mode is TriggerMode.EVENT
+            or (rule.mode is TriggerMode.MODULO and rule.trigger_count_reducible)
+        )
+    if rule.event_key == "hit_count":
+        # Generic every-hit production is still intentionally absent. Only
+        # reducible hit_count:N crossings are certified.
         return rule.mode is TriggerMode.MODULO and rule.trigger_count_reducible
     if rule.event_key in _SAFE_EVENT_KEYS:
         return True
