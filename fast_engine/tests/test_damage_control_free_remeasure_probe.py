@@ -76,8 +76,8 @@ class ControlFreeRealSquadRemeasureProbe(unittest.TestCase):
                 else float(fast.squad_total) / float(moris.squad_total) - 1.0
             ),
             "moris_by_char": {
-                name: float(value)
-                for name, value in zip(NAMES, moris.char_total)
+                name: float(moris.char_total[name])
+                for name in NAMES
             },
             "fast_by_char": (
                 None
