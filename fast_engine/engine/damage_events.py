@@ -8,7 +8,7 @@ from .model import CompiledCharacter, CompiledEffect, EnemyStaticProfile
 
 @dataclass(frozen=True, slots=True)
 class DamageEventSpec:
-    """One compile-time scoreable damage effect without dynamic scaling/ticks.
+    """One compile-time scoreable damage effect without dynamic scaling.
 
     Several physical hits may share one spec. Fast evaluates the deterministic
     DealForm once per cache-valid state and multiplies by ``hit_count`` instead
@@ -22,6 +22,22 @@ class DamageEventSpec:
     normal_formula: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class FixedDotSpec:
+    """Finite, fixed-coefficient periodic damage timer.
+
+    The timer itself is runtime state; the damage shape stays immutable and can
+    reuse the same expected-value kernel as immediate damage. Complex DoT ramps,
+    stack scaling and infinite/removal-coupled lifetimes deliberately remain out
+    of this first slice.
+    """
+
+    damage: DamageEventSpec
+    interval: float
+    duration: float
+    immediate: bool
+
+
 _SUPPORTED_BASE_STATS = frozenset({
     "damage",
     "bonus_damage",
@@ -29,6 +45,7 @@ _SUPPORTED_BASE_STATS = frozenset({
     "pierce_damage",
     "armor_break_damage",
     "core_damage",
+    "dot_damage",
     "projectile_explosion_damage",
     "projectile_attachment_damage",
     "sequential_damage",
@@ -47,16 +64,17 @@ def _compile_damage_event(
     character: CompiledCharacter,
     *,
     allow_pending_b3_bonus: bool,
+    allow_tick_interval: bool = False,
 ) -> DamageEventSpec | None:
     if effect.effect_type != "damage" or effect.value is None:
         return None
-    if effect.tick_interval is not None:
+    if effect.tick_interval is not None and not allow_tick_interval:
         return None
 
     params = effect.parameters
     if any(key in params for key in _UNSAFE_DYNAMIC_PARAMETER_KEYS):
         return None
-    if params.get("tick_start") is not None:
+    if params.get("tick_start") is not None and not allow_tick_interval:
         return None
     if params.get("hits_parts"):
         # The initial EnemyStaticProfile does not yet carry part-presence state.
@@ -112,6 +130,7 @@ def _compile_damage_event(
         ),
         is_pierce_damage=base_stat == "pierce_damage",
         is_armor_break_damage=base_stat == "armor_break_damage",
+        is_dot=base_stat == "dot_damage",
         is_projectile_explosion=is_projectile_explosion,
         is_projectile_attachment=base_stat == "projectile_attachment_damage",
         is_sequential=base_stat == "sequential_damage",
@@ -166,6 +185,55 @@ def compile_pending_b3_bonus_damage_event(
         effect,
         character,
         allow_pending_b3_bonus=True,
+    )
+
+
+def compile_fixed_dot_damage_event(
+    effect: CompiledEffect,
+    character: CompiledCharacter,
+) -> FixedDotSpec | None:
+    """Lower the first safe periodic-damage slice.
+
+    Supported here means exactly: ``dot_damage`` with a positive fixed interval,
+    finite positive duration, one non-scaling stack, and either Moris' default
+    delayed first tick or ``tick_start: immediate``. DoT state dependencies,
+    same-target ramps, infinite/remove-coupled lifetimes and dynamic coefficient
+    scaling stay fail-closed in the runtime sink.
+    """
+
+    if effect.effect_type != "damage" or effect.tick_interval is None:
+        return None
+    stat = effect.stat or ""
+    if stat.split(":", 1)[0] != "dot_damage":
+        return None
+    interval = float(effect.tick_interval)
+    duration = effect.duration
+    if interval <= 0.0 or duration is None or float(duration) <= 0.0:
+        return None
+    if float(duration) == -1.0:
+        return None
+    if effect.max_stack not in (None, 1, 1.0):
+        return None
+
+    tick_start = effect.parameters.get("tick_start")
+    if tick_start not in (None, "immediate"):
+        return None
+    if effect.parameters.get("ramp_interval") is not None:
+        return None
+
+    damage = _compile_damage_event(
+        effect,
+        character,
+        allow_pending_b3_bonus=False,
+        allow_tick_interval=True,
+    )
+    if damage is None or not damage.hit.is_dot:
+        return None
+    return FixedDotSpec(
+        damage=damage,
+        interval=interval,
+        duration=float(duration),
+        immediate=tick_start == "immediate",
     )
 
 
