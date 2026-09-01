@@ -116,14 +116,14 @@ class PeriodicRuntimeTests(unittest.TestCase):
 
         self.assertGreaterEqual(len(fast.full_burst_starts), 5)
         self.assertGreaterEqual(len(moris_starts), 5)
-        for cycle, (actual, expected) in enumerate(
-            zip(fast.full_burst_starts, moris_starts), start=1
-        ):
-            self.assertLessEqual(
-                abs(actual - expected),
-                FRAME + 1e-8,
-                f"cycle={cycle}, fast={actual:.9f}, moris={expected:.9f}, delta={actual-expected:+.9f}",
-            )
+        pairs = list(zip(fast.full_burst_starts, moris_starts))
+        deltas = [actual - expected for actual, expected in pairs]
+        max_abs = max(abs(delta) for delta in deltas)
+        detail = ", ".join(
+            f"{cycle}:F={actual:.6f}/M={expected:.6f}/d={actual-expected:+.6f}"
+            for cycle, (actual, expected) in enumerate(pairs, start=1)
+        )
+        self.assertLessEqual(max_abs, FRAME + 1e-8, detail)
 
     def test_auxiliary_periodic_atk_does_not_overclaim_fast_capability(self):
         _squad, compiled = self._compiled()
