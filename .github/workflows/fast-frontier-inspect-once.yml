@@ -13,60 +13,61 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect first certified squad parity
+      - name: Inspect squad1 blocker causes
         run: |
           python - <<'PY'
-          from calculator.timeline import DEFAULT_ENEMY, simulate
           from context import spec
-          from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import score_static_squad, static_score_blockers
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+          from fast_engine.engine.score import (
+              static_score_blockers,
+              _possible_ally_targets,
+              _reload_recipient_score_safe,
+              _actor_has_executable_event,
+              _actor_has_unhandled_count_event,
+              _actor_has_executable_core_count,
+              _direct_damage_buff_score_supported,
+          )
+          from fast_engine.engine.shot_blocks import static_bullet_lifetime_cadence_safe
 
-          names = ['미란다', '브리드 : 사일런트 트랙', '헬름', '루주', '미하라 : 본딩 체인']
-          config = {'duration': 180.0, 'first_burst_time': 3.0, 'rng_mode': 'expected'}
+          names = ['리틀 머메이드', '크라운', '라피 : 레드 후드', '미하라 : 본딩 체인', '헬름']
+          squad = compile_moris_squad(spec.build_squad(names))
+          print('BLOCKERS', static_score_blockers(squad))
 
-          def run(label, disable_control=False):
-              squad = spec.build_squad(names)
-              if disable_control:
-                  next(c for c in squad if c['name'] == '미하라 : 본딩 체인')['control'] = {}
-              compiled = compile_moris_squad(squad)
-              policy = compile_burst_policy(squad, compiled, dict(config))
-              blockers = static_score_blockers(compiled)
-              print(label, 'BLOCKERS', blockers)
-              moris = simulate(
-                  squad,
-                  config=spec.build_config(squad, dict(config)),
-                  enemy=dict(DEFAULT_ENEMY),
-                  seed=42,
-                  verbose=False,
-              )
-              fast = score_static_squad(
-                  compiled,
-                  policy,
-                  EnemyStaticProfile(
-                      defense=float(DEFAULT_ENEMY.get('def', 31784.0)),
-                      element=DEFAULT_ENEMY.get('code'),
-                      core_uptime=0.0,
-                      core_px=float(DEFAULT_ENEMY.get('core_px', 0.0) or 0.0),
-                      duration=180.0,
-                  ),
-              )
-              print(label, 'TOTAL', {
-                  'moris': moris.squad_total,
-                  'fast': fast.squad_total,
-                  'rel': fast.squad_total / moris.squad_total - 1.0,
-                  'events': fast.events_processed,
+          interesting = {
+              ('리틀 머메이드', '세이렌 송 2', 'ammo_charge_pct'),
+              ('크라운', '원 포 올 2', 'reload_speed_pct'),
+              ('크라운', '로얄 에타이어 4', 'atk_dmg_pct'),
+              ('헬름', '이지스 캐논 3', 'charge_dmg_mag_pct'),
+          }
+          for effect in squad.effects:
+              owner = squad.members[effect.actor].name
+              key = (owner, effect.name, effect.stat)
+              if key not in interesting:
+                  continue
+              targets = _possible_ally_targets(squad, effect)
+              print('EFFECT', key, {
+                  'id': effect.effect_id,
+                  'type': effect.effect_type,
+                  'value': effect.value,
+                  'duration': effect.duration,
+                  'target': effect.target,
+                  'target_mode': effect.target_spec.mode.value,
+                  'targets': [(a, squad.members[a].name) for a in targets],
+                  'parameters': effect.parameters,
+                  'triggers': [(r.raw, r.event_key, r.mode.value, r.threshold, r.trigger_count_reducible) for r in effect.triggers],
+                  'conditions': [(r.raw, r.mode.value, r.key, r.threshold) for r in effect.condition_rules],
+                  'runtime_executable_base': TriggerDispatcher.is_executable_effect(effect),
+                  'damage_delivery_safe': _direct_damage_buff_score_supported(squad, effect),
               })
-              for i, name in enumerate(names):
-                  m = moris.char_total.get(name, 0)
-                  f = fast.char_total[i]
-                  print(label, 'CHAR', name, {
-                      'moris': m,
-                      'fast': f,
-                      'rel': None if not m else f / m - 1.0,
+              for actor in targets:
+                  member = squad.members[actor]
+                  print(' TARGET', member.name, {
+                      'weapon': member.weapon,
+                      'reload_safe': _reload_recipient_score_safe(squad, actor),
+                      'bullet_static_safe': static_bullet_lifetime_cadence_safe(squad, actor),
+                      'core_count': _actor_has_executable_core_count(squad, actor),
+                      'last_or_reload': _actor_has_executable_event(squad, actor, frozenset({'last_bullet_fire','last_bullet','on_attack','event:full_reload','full_reload','event:cover'})),
+                      'raw_counts': _actor_has_unhandled_count_event(squad, actor, frozenset({'hit_count','pellet_hit'})),
                   })
-
-          run('CONTROL_ON', disable_control=False)
-          run('CONTROL_OFF', disable_control=True)
           PY
