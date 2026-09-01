@@ -9,6 +9,7 @@ from .damage_policy import (
     is_static_element_override_score_supported,
 )
 from .damage_state import DamageTermResolver
+from .dispatcher import TriggerDispatcher
 from .model import CompiledSquad, EnemyStaticProfile, FastScore
 from .normal_attack import compile_normal_attack_spec, expected_normal_block_damage
 from .shot_blocks import (
@@ -44,6 +45,14 @@ _CADENCE_OR_SHAPE_STATS = frozenset({
     "pellet_count_fixed",
 })
 _STATIC_FOLDABLE = frozenset(StaticCadenceModifiers.__dataclass_fields__)
+
+# First live cadence scoring slice. DynamicChargeCadenceRuntime already has
+# generation-based replanning for these two state families. Other cadence axes
+# remain fail-closed until their score path is integrated deliberately.
+_DYNAMIC_CHARGE_SCORE_STATS = frozenset({
+    "charge_speed_pct",
+    "charge_speed_caster_based_pct",
+})
 
 # Damage-facing states that can change ordinary weapon damage in the initial
 # static-target model. A state being representable is not enough: its
@@ -115,6 +124,53 @@ def _is_folded_static_self_modifier(effect) -> bool:
     )
 
 
+def _charge_actor_indexes(squad: CompiledSquad) -> tuple[int, ...]:
+    return tuple(
+        actor
+        for actor, member in enumerate(squad.members)
+        if str(member.weapon.get("fire_mode") or "") == "charge"
+    )
+
+
+def _is_dynamic_charge_score_supported(squad: CompiledSquad, effect) -> bool:
+    """Whether one live charge-speed effect can use the existing cadence runtime.
+
+    The dispatcher capability gate certifies timing/condition/target delivery.
+    Bullet-count lifetimes are intentionally excluded because their expiry still
+    depends on the static next-shot helper. If a squad has no charge weapon the
+    state cannot alter ordinary shot cadence and is harmless for this score.
+    """
+
+    if (effect.stat or "") not in _DYNAMIC_CHARGE_SCORE_STATS:
+        return False
+    if not _charge_actor_indexes(squad):
+        return True
+    if effect.effect_type != "buff":
+        return False
+    if effect.parameters.get("duration_bullets") is not None:
+        return False
+    return TriggerDispatcher.is_executable_effect(effect)
+
+
+def _dynamic_charge_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
+    """Charge actors whose shots must be sourced from the live cadence runtime."""
+
+    actors = _charge_actor_indexes(squad)
+    if not actors:
+        return ()
+    for effect in squad.effects:
+        if (
+            (effect.stat or "") in _DYNAMIC_CHARGE_SCORE_STATS
+            and not _is_folded_static_self_modifier(effect)
+            and _is_dynamic_charge_score_supported(squad, effect)
+        ):
+            # Target selection may be dynamic. Promoting every charge actor is a
+            # safe superset and still only materializes charge shots, not a global
+            # frame loop or every auto/MG bullet.
+            return actors
+    return ()
+
+
 def _is_score_safe_fixed_periodic(effect) -> bool:
     return (
         (effect.stat or "") in _PERIODIC_AUX_STATS
@@ -182,7 +238,7 @@ def _direct_damage_buff_score_supported(squad: CompiledSquad, effect) -> bool:
 
 
 def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
-    """Return mechanics that make the current static normal score unsafe.
+    """Return mechanics that make the current normal score unsafe.
 
     This intentionally scans *all* compiled effects, not only effects currently
     marked executable. Unsupported mechanics are exactly where a silent ranking
@@ -211,8 +267,14 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
             continue
 
         if stat in _CADENCE_OR_SHAPE_STATS:
-            if not _is_folded_static_self_modifier(effect):
-                blockers.append(f"cadence:{label}")
+            if _is_folded_static_self_modifier(effect):
+                continue
+            if (
+                stat in _DYNAMIC_CHARGE_SCORE_STATS
+                and _is_dynamic_charge_score_supported(squad, effect)
+            ):
+                continue
+            blockers.append(f"cadence:{label}")
             continue
 
         if stat == "element_code_override":
@@ -268,15 +330,23 @@ def static_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
 
 
 class StaticNormalAttackObserver:
-    """Score normal attacks from compressed static shot blocks.
+    """Score static shot blocks plus selected live dynamic charge shots.
 
-    The observer is called at scheduler boundaries. Between boundaries combat
-    state is unchanged, so each actor performs at most one DealForm evaluation
-    and multiplies it by the number of shots consumed in that span.
+    Static actors are still consumed in compressed blocks at scheduler
+    boundaries. Charge actors exposed to a certified live charge-speed state are
+    removed from those cursors and scored one physical shot at a time through the
+    dynamic cadence runtime. This keeps dynamic work actor-selective and avoids a
+    frame loop or global per-shot expansion.
     """
 
     __slots__ = (
-        "runtime", "duration", "resolver", "specs", "cursors", "char_total",
+        "runtime",
+        "duration",
+        "resolver",
+        "specs",
+        "cursors",
+        "dynamic_charge_actors",
+        "char_total",
     )
 
     def __init__(self, runtime: "BurstRuntime", *, duration: float) -> None:
@@ -299,42 +369,61 @@ class StaticNormalAttackObserver:
             runtime.enemy,
         )
         self.specs = tuple(compile_normal_attack_spec(member) for member in runtime.squad.members)
+        self.dynamic_charge_actors = _dynamic_charge_score_actors(runtime.squad)
+        dynamic = frozenset(self.dynamic_charge_actors)
         blocks = compile_static_shot_blocks(runtime.squad, duration=self.duration)
-        self.cursors = tuple(ShotBlockCursor(rows) for rows in blocks)
+        self.cursors = tuple(
+            ShotBlockCursor(()) if actor in dynamic else ShotBlockCursor(rows)
+            for actor, rows in enumerate(blocks)
+        )
         self.char_total = [0.0] * len(runtime.squad.members)
+        if self.dynamic_charge_actors:
+            runtime.weapons.attach_score_shot_sink(
+                self.dynamic_charge_actors,
+                self._score_dynamic_charge_shot,
+            )
+
+    def _score_shots(self, actor: int, count: int, *, eval_time: float) -> None:
+        if count <= 0:
+            return
+        member = self.runtime.squad.members[actor]
+        terms = self.resolver.resolve(actor, now=eval_time)
+        core_prob = self.runtime.enemy.core_rate_for_weapon(
+            member.weapon,
+            accuracy_pct=terms.accuracy_pct,
+        )
+        self.char_total[actor] += expected_normal_block_damage(
+            self.specs[actor],
+            shot_count=count,
+            base_atk=member.base_atk,
+            enemy_def=self.runtime.enemy.defense,
+            terms=terms,
+            core_prob=core_prob,
+            is_full_burst=self.runtime.machine.phase == "full_burst",
+            is_optimal_range=False,
+        )
+
+    def _score_dynamic_charge_shot(self, actor: int, time: float) -> None:
+        # Dynamic weapon boundaries are physical shots. MultiSignalChargeCadenceRuntime
+        # invokes this callback before post-shot hit/full-charge notifications.
+        self._score_shots(actor, 1, eval_time=float(time))
 
     def consume_until(self, time: float, *, inclusive: bool) -> None:
-        """Consume all unscored shots before/through ``time`` under current state.
+        """Consume all unscored static shots before/through ``time``.
 
-        For an exclusive boundary the current ActiveEffectStore still represents
-        the interval immediately *before* the event. Resolve at the previous
-        representable float so a buff expiring exactly at ``time`` remains active
-        for shots strictly earlier than that boundary.
+        Dynamic charge actors have empty static cursors and arrive through the
+        runtime callback instead. For an exclusive boundary the current
+        ActiveEffectStore still represents the interval immediately *before* the
+        event, so resolve at the previous representable float.
         """
 
         eval_time = float(time) if inclusive else nextafter(float(time), -inf)
-        full_burst = self.runtime.machine.phase == "full_burst"
 
         for actor, cursor in enumerate(self.cursors):
             count = cursor.consume_until(time, inclusive=inclusive)
             if count <= 0:
                 continue
-            member = self.runtime.squad.members[actor]
-            terms = self.resolver.resolve(actor, now=eval_time)
-            core_prob = self.runtime.enemy.core_rate_for_weapon(
-                member.weapon,
-                accuracy_pct=terms.accuracy_pct,
-            )
-            self.char_total[actor] += expected_normal_block_damage(
-                self.specs[actor],
-                shot_count=count,
-                base_atk=member.base_atk,
-                enemy_def=self.runtime.enemy.defense,
-                terms=terms,
-                core_prob=core_prob,
-                is_full_burst=full_burst,
-                is_optimal_range=False,
-            )
+            self._score_shots(actor, count, eval_time=eval_time)
 
     def finish(self, *, events_processed: int) -> FastScore:
         # Combat is [0, duration): a shot exactly at the nominal horizon is not
