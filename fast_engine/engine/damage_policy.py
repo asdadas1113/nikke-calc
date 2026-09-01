@@ -5,9 +5,10 @@ from .core_events import is_static_expected_core_count_rule
 from .targets import TargetMode
 from .triggers import TriggerMode
 
-# Stats that DamageTermResolver can lower directly without HP/gauge/resource-derived
-# semantics. These are not automatically executable: timing/condition/target must
-# also pass the fail-closed policy below.
+# Damage-facing states that the Fast score path can lower directly without
+# HP/gauge/resource-derived semantics. This includes both numeric DealForm terms
+# and boolean normal-attack mode toggles. They are not automatically executable:
+# timing/condition/target must also pass the fail-closed policy below.
 DIRECT_DAMAGE_STATE_STATS = frozenset({
     "atk_pct",
     "atk_flat",
@@ -42,6 +43,8 @@ DIRECT_DAMAGE_STATE_STATS = frozenset({
     "element_bonus_pct",
     "def_pct",
     "personal_enemy_def_down_pct",
+    "pierce_enabled",
+    "armor_break_enabled",
 })
 
 _SAFE_CONDITIONS = frozenset({
