@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import replace
 import json
 from time import perf_counter
 import unittest
@@ -12,8 +11,8 @@ from fast_engine.engine.burst import compile_burst_policy
 from fast_engine.engine.burst_runtime import BurstRuntime
 from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
-from fast_engine.engine.model import CompiledSquad, EnemyStaticProfile
-from fast_engine.engine.score import score_static_squad, static_score_blockers
+from fast_engine.engine.model import EnemyStaticProfile
+from fast_engine.engine.score import StaticNormalAttackObserver, score_static_squad, static_score_blockers
 
 
 NAMES = [
@@ -31,16 +30,41 @@ CONFIG = {
 MIHARA_DAMAGE_NAMES = ("바디 컨텍 3", "사슬 감기", "사슬 당기기")
 
 
-def zero_damage_effect(compiled: CompiledSquad, *, actor: int, name: str) -> CompiledSquad:
-    members = list(compiled.members)
-    effects = tuple(
-        replace(effect, value=0.0)
-        if effect.actor == actor and effect.effect_type == "damage" and effect.name == name
-        else effect
-        for effect in members[actor].effects
-    )
-    members[actor] = replace(members[actor], effects=effects)
-    return CompiledSquad(tuple(members), compiled.trigger_index)
+class RecordingDamageSink(SimpleDamageScoreSink):
+    __slots__ = ("effect_rows",)
+
+    def __init__(self, squad, enemy):
+        super().__init__(squad, enemy)
+        self.effect_rows = defaultdict(list)
+
+    def _score_spec(self, effect_id: int, *, now: float, full_burst: bool) -> bool:
+        actor = self._effect_actor.get(effect_id)
+        before = None if actor is None else self.char_total[actor]
+        hit_count = None
+        multiplier = 1.0
+        if effect_id in self.stack_specs:
+            hit_count = self._stack_count_hit_count(effect_id)
+        if effect_id in self.stateful_dot_specs:
+            multiplier = self._stateful_effect_stack(effect_id, now=now)
+        fired = super()._score_spec(
+            effect_id,
+            now=now,
+            full_burst=full_burst,
+        )
+        if fired and actor is not None and before is not None:
+            damage = self.char_total[actor] - before
+            spec = self._damage_spec(effect_id)
+            self.effect_rows[effect_id].append({
+                "t": float(now),
+                "damage": float(damage),
+                "physical_hits": (
+                    int(hit_count)
+                    if hit_count is not None
+                    else (int(spec.hit_count) if spec is not None else None)
+                ),
+                "stack_multiplier": float(multiplier),
+            })
+        return fired
 
 
 class FirstCertifiedRealSquadParityProbe(unittest.TestCase):
@@ -69,90 +93,94 @@ class FirstCertifiedRealSquadParityProbe(unittest.TestCase):
             core_px=float(enemy.get("core_px", 0.0) or 0.0),
             duration=policy.duration,
         )
+
         t1 = perf_counter()
         fast = score_static_squad(compiled, policy, fast_enemy)
         fast_seconds = perf_counter() - t1
         self.assertEqual(fast.unsupported, ())
 
-        fast_by_char = {
-            name: float(value)
-            for name, value in zip(compiled.names, fast.char_total)
+        # Re-run one Fast runtime with a recording sink. This does not use the
+        # optimizer; it records score-kernel invocations only and leaves the
+        # production score path untouched.
+        recording = RecordingDamageSink(compiled, fast_enemy)
+        runtime = BurstRuntime(
+            compiled,
+            policy,
+            fast_enemy,
+            damage_sink=recording,
+        )
+        observer = StaticNormalAttackObserver(runtime, duration=policy.duration)
+        runtime_result = runtime.run(
+            duration=policy.duration,
+            score_observer=observer,
+        )
+        normal = observer.finish(events_processed=runtime_result.events_processed)
+
+        mihara_actor = compiled.names.index("미하라 : 본딩 체인")
+        fast_mihara = {
+            "normal_total": float(normal.char_total[mihara_actor]),
+            "skill_total": float(recording.char_total[mihara_actor]),
+            "combined": float(normal.char_total[mihara_actor] + recording.char_total[mihara_actor]),
+            "effects": {},
         }
-        moris_by_char = {
-            name: float(moris.char_total.get(name, 0.0))
-            for name in compiled.names
-        }
-        char_rows = {}
-        for name in compiled.names:
-            m = moris_by_char[name]
-            f = fast_by_char[name]
-            char_rows[name] = {
-                "moris": m,
-                "fast": f,
-                "relative_error": None if m == 0.0 else f / m - 1.0,
+        for effect in compiled.effects:
+            if effect.actor != mihara_actor or effect.name not in MIHARA_DAMAGE_NAMES:
+                continue
+            rows = recording.effect_rows.get(effect.effect_id, [])
+            total = sum(row["damage"] for row in rows)
+            physical_hits = sum(int(row["physical_hits"] or 0) for row in rows)
+            fast_mihara["effects"][effect.name] = {
+                "score_calls": len(rows),
+                "physical_hits": physical_hits,
+                "total": total,
+                "mean_per_call": None if not rows else total / len(rows),
+                "mean_per_physical_hit": None if physical_hits == 0 else total / physical_hits,
+                "first": rows[:12],
             }
 
-        moris_mihara_skills = defaultdict(int)
-        for hit in moris.hits:
-            if hit.caster == "미하라 : 본딩 체인":
-                moris_mihara_skills[hit.skill_name] += int(hit.damage)
-
-        fast_mihara_marginals = {}
-        mihara_actor = compiled.names.index("미하라 : 본딩 체인")
-        for damage_name in MIHARA_DAMAGE_NAMES:
-            variant = zero_damage_effect(
-                compiled,
-                actor=mihara_actor,
-                name=damage_name,
-            )
-            variant_policy = compile_burst_policy(
-                moris_squad, variant, dict(CONFIG)
-            )
-            variant_score = score_static_squad(
-                variant, variant_policy, fast_enemy
-            )
-            self.assertEqual(variant_score.unsupported, ())
-            fast_mihara_marginals[damage_name] = (
-                float(fast.char_total[mihara_actor])
-                - float(variant_score.char_total[mihara_actor])
-            )
-
-        # Burst timing is measured separately from damage totals so a cadence
-        # mismatch cannot hide inside a skill-damage discrepancy.
-        sink = SimpleDamageScoreSink(compiled, fast_enemy)
-        runtime = BurstRuntime(compiled, policy, fast_enemy, damage_sink=sink)
-        fast_runtime = runtime.run(duration=policy.duration)
-        moris_burst_starts = [
-            row.t for row in moris.log.burst_log if row.event == "full_burst 시작"
-        ]
+        moris_skill_rows = {}
+        for skill_name in ("기본 공격",) + MIHARA_DAMAGE_NAMES:
+            rows = [
+                hit
+                for hit in moris.hits
+                if hit.caster == "미하라 : 본딩 체인"
+                and hit.skill_name == skill_name
+            ]
+            total = sum(int(hit.damage) for hit in rows)
+            moris_skill_rows[skill_name] = {
+                "physical_hits": len(rows),
+                "total": total,
+                "mean_per_physical_hit": None if not rows else total / len(rows),
+                "first": [
+                    {"t": float(hit.t), "damage": int(hit.damage), "tag": hit.hit_tag}
+                    for hit in rows[:12]
+                ],
+            }
 
         report = {
-            "members": list(compiled.names),
             "moris_total": float(moris.squad_total),
             "fast_total": float(fast.squad_total),
             "relative_error": float(fast.squad_total) / float(moris.squad_total) - 1.0,
             "moris_seconds": moris_seconds,
             "fast_seconds": fast_seconds,
             "speedup": moris_seconds / fast_seconds,
-            "fast_events": fast.events_processed,
-            "characters": char_rows,
-            "moris_mihara_skills": dict(sorted(moris_mihara_skills.items())),
-            "fast_mihara_damage_marginals": fast_mihara_marginals,
+            "fast_mihara": fast_mihara,
+            "moris_mihara": moris_skill_rows,
             "burst": {
-                "moris_count": len(moris_burst_starts),
-                "fast_count": len(fast_runtime.full_burst_starts),
-                "moris_starts": moris_burst_starts,
-                "fast_starts": list(fast_runtime.full_burst_starts),
+                "fast_count": len(runtime_result.full_burst_starts),
+                "moris_count": len([
+                    row for row in moris.log.burst_log if row.event == "full_burst 시작"
+                ]),
             },
             "scenario": {
-                "config": CONFIG,
-                "enemy": enemy,
                 "optimizer_candidate_generation_used": False,
                 "snapshot_case_overrides_used": False,
             },
         }
-        payload = json.dumps(report, ensure_ascii=False, sort_keys=True)
-        self.fail("INTENTIONAL_PARITY_LOCALIZATION=" + payload)
+        self.fail(
+            "INTENTIONAL_MIHARA_COUNT_VALUE_PROBE="
+            + json.dumps(report, ensure_ascii=False, sort_keys=True)
+        )
 
 
 if __name__ == "__main__":
