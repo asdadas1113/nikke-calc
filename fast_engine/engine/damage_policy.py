@@ -92,9 +92,8 @@ _SAFE_EVENT_KEYS = frozenset({
     "full_burst_start",
     "full_burst_end",
     "event:ally_burst_cast",
-    "hit_count",
-    "full_charge_hit",
 })
+_COUNT_BOUNDARY_EVENT_KEYS = frozenset({"hit_count", "full_charge_hit"})
 
 
 def _target_supported(spec) -> bool:
@@ -109,6 +108,11 @@ def _timing_supported(rule) -> bool:
     # exists for all damage stats.
     if rule.mode is TriggerMode.PERIODIC:
         return False
+    if rule.event_key in _COUNT_BOUNDARY_EVENT_KEYS:
+        # Fast currently materializes only modulo threshold crossings, not every
+        # raw weapon hit. Therefore hit_count:N / full_charge_count:N are safe,
+        # while literal hit_count / full_charge_hit EVENT rules must fail closed.
+        return rule.mode is TriggerMode.MODULO and rule.trigger_count_reducible
     if rule.event_key in _SAFE_EVENT_KEYS:
         return True
     if rule.event_key and rule.event_key.startswith("burst_enter:"):
