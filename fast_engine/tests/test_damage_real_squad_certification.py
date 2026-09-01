@@ -94,6 +94,31 @@ class RealSquadCertificationTests(unittest.TestCase):
         three_stack = sink.char_total[4] - before
         self.assertAlmostEqual(three_stack, one_stack * 3.0, places=6)
 
+    def test_mihara_burst_end_recharge_sees_current_cycle_cast_state(self):
+        moris_squad, compiled, _policy, enemy = self._fixture()
+        # Cycle 1 uses Helm B3; cycle 2 uses Mihara B3. The second full-burst end
+        # is therefore the first point where Mihara's burst_casted recharge must fire.
+        policy = compile_burst_policy(
+            moris_squad,
+            compiled,
+            {**CONFIG, "duration": 26.41},
+        )
+        sink = SimpleDamageScoreSink(compiled, enemy)
+        runtime = BurstRuntime(compiled, policy, enemy, damage_sink=sink)
+        runtime.run(duration=26.41)
+
+        mihara = [effect for effect in compiled.effects if effect.actor == 4]
+        recharge = next(effect for effect in mihara if effect.name == "바디 컨텍 2")
+        body_hit = next(effect for effect in mihara if effect.name == "바디 컨텍 3")
+        chain = next(effect for effect in mihara if effect.name == "사슬 감기")
+        consume = next(effect for effect in mihara if effect.name == "바디 컨텍 5")
+
+        self.assertEqual(runtime.dispatcher._activation_counts[recharge.effect_id], 1)
+        self.assertEqual(runtime.dispatcher._activation_counts[body_hit.effect_id], 2)
+        self.assertEqual(runtime.dispatcher._activation_counts[chain.effect_id], 2)
+        self.assertEqual(runtime.dispatcher._activation_counts[consume.effect_id], 2)
+        self.assertEqual(runtime.state.actors[4].gauges.get("포획 사슬"), 0.0)
+
     def test_mihara_dot_chain_captures_mutates_and_survives_named_removal(self):
         moris_squad, compiled, _policy, enemy = self._fixture()
         policy = compile_burst_policy(
