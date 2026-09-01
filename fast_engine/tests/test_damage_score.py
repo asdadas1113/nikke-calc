@@ -224,10 +224,9 @@ class LiberelioPendingB3ParityTests(unittest.TestCase):
     DURATION = 1.0
     SKILL = "잠기는 세계 2"
 
-    def test_first_burst_pending_bonus_matches_moris_before_raw_full_charge_state(self):
-        # `격류` uses literal full_charge_hit, whose every-hit producer is
-        # intentionally fail-closed in Fast. Keep this authority fixture shorter
-        # than Liberelio's 1.5s first charge so only pending B3 semantics remain.
+    def test_first_burst_pending_bonus_matches_moris_before_first_full_charge(self):
+        # Keep this authority fixture shorter than Liberelio's 1.5s first charge
+        # so pending B3 semantics are isolated from the separate `격류` lane.
         squad = build_squad(self.NAMES)
         compiled = compile_moris_squad(squad, require_five=False)
         config = {
@@ -266,6 +265,27 @@ class LiberelioPendingB3ParityTests(unittest.TestCase):
             0.01,
             f"Liberelio pending B3: Fast={estimate:,.2f}, Moris={authority:,.2f}, rel={rel_error:.4%}",
         )
+
+    def test_real_raw_full_charge_effect_activates_after_first_charge(self):
+        squad = build_squad(["리버렐리오"])
+        compiled = compile_moris_squad(squad, require_five=False)
+        config = {
+            "duration": 1.6,
+            "first_burst_time": 99.0,
+            "rng_mode": "expected",
+        }
+        policy = compile_burst_policy(squad, compiled, config)
+        runtime = BurstRuntime(
+            compiled,
+            policy,
+            EnemyStaticProfile(duration=1.6),
+        )
+        effect = next(e for e in compiled.members[0].effects if e.name == "격류")
+        self.assertTrue(runtime.dispatcher.is_runtime_executable_effect(effect))
+
+        runtime.run(duration=1.6)
+        active = runtime.dispatcher.effects.sum_stat(0, "atk_dmg_pct", now=1.6)
+        self.assertAlmostEqual(active, float(effect.value or 0.0), places=8)
 
 
 if __name__ == "__main__":
