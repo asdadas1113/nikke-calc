@@ -218,7 +218,23 @@ class BurstRuntime:
         self._schedule_static_last_bullets(horizon, dynamic_actors)
         self._schedule_initial_periodics(horizon)
 
-    def run(self, *, duration: float | None = None) -> BurstRuntimeResult:
+    def run(
+        self,
+        *,
+        duration: float | None = None,
+        score_observer=None,
+    ) -> BurstRuntimeResult:
+        """Run scheduled combat boundaries, optionally feeding a score observer.
+
+        Equal-time scoring follows Moris frame semantics:
+        expiry/periodic/burst state applies before the weapon shot at that time,
+        while weapon-trigger effects apply after that shot.  Scheduler phases
+        below 30 are therefore processed before the observer consumes ``=t``;
+        phase-30+ events consume the shot first and only then dispatch hit-based
+        effects.  This prevents a hit-triggered buff from retroactively boosting
+        the shot that created it.
+        """
+
         horizon = (
             self.policy.duration
             if duration is None
@@ -229,9 +245,25 @@ class BurstRuntime:
         casts: list[tuple[float, int, str]] = []
         fb_ends: list[float] = []
         processed = 0
+
+        def score_before_event(event) -> None:
+            if score_observer is None:
+                return
+            score_observer.consume_until(event.time, inclusive=False)
+            if event.phase >= 30:
+                score_observer.consume_until(event.time, inclusive=True)
+
+        def score_end_of_time(time: float) -> None:
+            if score_observer is None:
+                return
+            next_time = self.scheduler.peek_time()
+            if next_time is None or next_time > time + 1e-9:
+                score_observer.consume_until(time, inclusive=True)
+
         while self.scheduler and (self.scheduler.peek_time() or 0.0) <= horizon + 1e-9:
             event = self.scheduler.pop()
             processed += 1
+            score_before_event(event)
 
             if event.kind is EventKind.WEAPON_BOUNDARY:
                 boundary = self.weapons.handle_boundary(event)
@@ -257,6 +289,7 @@ class BurstRuntime:
                             count_increment=1,
                         )
                     self.weapons.sync(event.time)
+                score_end_of_time(event.time)
                 continue
 
             self.weapons.advance_to(event.time, inclusive=False)
@@ -264,11 +297,13 @@ class BurstRuntime:
             if event.kind is EventKind.STATE_EXPIRE:
                 self.dispatcher.handle_expiry(event)
                 self.weapons.sync(event.time)
+                score_end_of_time(event.time)
                 continue
 
             if event.kind is EventKind.PERIODIC_TICK:
                 token = event.payload
                 if not isinstance(token, PeriodicTickToken):
+                    score_end_of_time(event.time)
                     continue
                 self.dispatcher.dispatch_periodic(
                     token.effect_id,
@@ -285,11 +320,13 @@ class BurstRuntime:
                         payload=token,
                     )
                 self.weapons.sync(event.time)
+                score_end_of_time(event.time)
                 continue
 
             if event.kind is EventKind.TRIGGER_BOUNDARY:
                 self.dispatcher.dispatch(event.payload, context=SignalContext())
                 self.weapons.sync(event.time)
+                score_end_of_time(event.time)
                 continue
 
             extension = 0.0
@@ -321,6 +358,10 @@ class BurstRuntime:
             elif event.kind is EventKind.FULL_BURST_END:
                 fb_ends.append(event.time)
             self.weapons.sync(event.time)
+            score_end_of_time(event.time)
+
+        if score_observer is not None:
+            score_observer.consume_until(horizon, inclusive=True)
 
         return BurstRuntimeResult(
             tuple(fb_starts), tuple(fb_ends), tuple(casts), processed
