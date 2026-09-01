@@ -25,26 +25,32 @@ class DamageEventSpec:
 
 @dataclass(frozen=True, slots=True)
 class StackCountDamageSpec:
-    """Immediate non-DoT damage whose Moris hit count comes from one gauge.
-
-    Moris treats ``scaling: stack_count`` differently for direct damage and DoT:
-    direct damage repeats the physical hit ``ref_count`` times, while DoT scales
-    the per-tick coefficient. This wrapper is deliberately only the former.
-    """
+    """Immediate non-DoT damage whose Moris hit count comes from one gauge."""
 
     damage: DamageEventSpec
     ref: str
 
 
 @dataclass(frozen=True, slots=True)
-class FixedDotSpec:
-    """Finite, fixed-coefficient periodic damage timer.
+class StackScaledDotSpec:
+    """Named DoT whose per-tick coefficient is multiplied by captured stacks.
 
-    The timer itself is runtime state; the damage shape stays immutable and can
-    reuse the same expected-value kernel as immediate damage. Complex DoT ramps,
-    stack scaling and infinite/removal-coupled lifetimes deliberately remain out
-    of this first slice.
+    Moris registers these DoTs in active state as well as its timer table. The
+    reference count is captured into the DoT's own stack at activation, allowing
+    later stack mutation/removal of the original reference without changing an
+    already-created finite DoT.
     """
+
+    damage: DamageEventSpec
+    interval: float
+    duration: float
+    immediate: bool
+    ref: str
+
+
+@dataclass(frozen=True, slots=True)
+class FixedDotSpec:
+    """Finite, fixed-coefficient periodic damage timer."""
 
     damage: DamageEventSpec
     interval: float
@@ -95,7 +101,6 @@ def _compile_damage_event(
     if params.get("tick_start") is not None and not allow_tick_interval:
         return None
     if params.get("hits_parts"):
-        # The initial EnemyStaticProfile does not yet carry part-presence state.
         return None
 
     raw_target = effect.target
@@ -119,9 +124,6 @@ def _compile_damage_event(
         if hit_count <= 0:
             return None
 
-    # Moris delays only the *exact* stat ``bonus_damage`` for a B3 burst cast.
-    # Numeric variants such as ``bonus_damage:5`` stay immediate multi-hit
-    # damage and must not enter the pending full-burst lane.
     is_pending_b3_bonus = (
         stat == "bonus_damage"
         and character.burst_stage == "3"
@@ -167,13 +169,6 @@ def compile_simple_damage_event(
     effect: CompiledEffect,
     character: CompiledCharacter,
 ) -> DamageEventSpec | None:
-    """Lower immediate damage whose coefficient/hit count is compile-time fixed.
-
-    B3 ``burst_cast`` bonus damage deliberately stays out of this lane because
-    Moris delays it until full-burst entry. Use
-    :func:`compile_pending_b3_bonus_damage_event` for that distinct primitive.
-    """
-
     return _compile_damage_event(
         effect,
         character,
@@ -185,13 +180,7 @@ def compile_stack_count_damage_event(
     effect: CompiledEffect,
     character: CompiledCharacter,
 ) -> StackCountDamageSpec | None:
-    """Lower Moris' non-DoT ``scaling:stack_count`` hit-repeat primitive.
-
-    This first slice accepts exactly one unsuffixed immediate damage stat whose
-    repeat count is read from ``scaling_ref``. Named-stack/DoT semantics remain
-    separate; runtime additionally requires the ref to be a certified Fast gauge
-    family before the effect is considered supported.
-    """
+    """Lower Moris' non-DoT ``scaling:stack_count`` hit-repeat primitive."""
 
     if effect.effect_type != "damage" or effect.tick_interval is not None:
         return None
@@ -203,8 +192,6 @@ def compile_stack_count_damage_event(
         return None
     stat = effect.stat or "damage"
     if ":" in stat or stat.split(":", 1)[0] == "dot_damage":
-        # Moris gives explicit stat suffixes precedence over stack_count when
-        # choosing hit_count. Do not multiply both interpretations together.
         return None
 
     damage = _compile_damage_event(
@@ -218,18 +205,61 @@ def compile_stack_count_damage_event(
     return StackCountDamageSpec(damage=damage, ref=ref)
 
 
+def compile_stack_scaled_dot_damage_event(
+    effect: CompiledEffect,
+    character: CompiledCharacter,
+) -> StackScaledDotSpec | None:
+    """Lower the first observable Moris ``scaling_ref`` DoT primitive.
+
+    Only ordinary ``dot_damage`` with a positive fixed interval and immediate
+    first tick is accepted. Duration may be finite or -1 (until named removal).
+    Same-target ramps and other dynamic fields remain fail-closed.
+    """
+
+    if effect.effect_type != "damage" or effect.tick_interval is None:
+        return None
+    if (effect.stat or "").split(":", 1)[0] != "dot_damage":
+        return None
+    params = effect.parameters
+    if params.get("scaling") != "stack_count":
+        return None
+    ref = params.get("scaling_ref")
+    if not isinstance(ref, str) or not ref:
+        return None
+    if params.get("tick_start") != "immediate":
+        return None
+    if params.get("ramp_interval") is not None:
+        return None
+    interval = float(effect.tick_interval)
+    duration = effect.duration
+    if interval <= 0.0 or duration is None:
+        return None
+    duration = float(duration)
+    if duration != -1.0 and duration <= 0.0:
+        return None
+
+    damage = _compile_damage_event(
+        effect,
+        character,
+        allow_pending_b3_bonus=False,
+        allow_tick_interval=True,
+        allowed_dynamic_parameter_keys=frozenset({"scaling", "scaling_ref"}),
+    )
+    if damage is None or not damage.hit.is_dot:
+        return None
+    return StackScaledDotSpec(
+        damage=damage,
+        interval=interval,
+        duration=duration,
+        immediate=True,
+        ref=ref,
+    )
+
+
 def compile_pending_b3_bonus_damage_event(
     effect: CompiledEffect,
     character: CompiledCharacter,
 ) -> DamageEventSpec | None:
-    """Lower the fixed-coefficient subset of Moris' delayed B3 bonus damage.
-
-    This function only establishes the damage shape. Runtime still has to prove
-    source-order safety before accepting it: later same-caster ``burst_cast``
-    buffs are excluded by Moris from the delayed hit and therefore remain a
-    fail-closed blocker in ``SimpleDamageScoreSink``.
-    """
-
     if (effect.stat or "") != "bonus_damage":
         return None
     if character.burst_stage != "3":
@@ -247,15 +277,6 @@ def compile_fixed_dot_damage_event(
     effect: CompiledEffect,
     character: CompiledCharacter,
 ) -> FixedDotSpec | None:
-    """Lower the first safe periodic-damage slice.
-
-    Supported here means exactly: ``dot_damage`` with a positive fixed interval,
-    finite positive duration, one non-scaling stack, and either Moris' default
-    delayed first tick or ``tick_start: immediate``. DoT state dependencies,
-    same-target ramps, infinite/remove-coupled lifetimes and dynamic coefficient
-    scaling stay fail-closed in the runtime sink.
-    """
-
     if effect.effect_type != "damage" or effect.tick_interval is None:
         return None
     stat = effect.stat or ""
@@ -300,14 +321,19 @@ def expected_damage_event(
     *,
     full_burst: bool,
     hit_count: int | None = None,
+    coeff_multiplier: float = 1.0,
 ) -> float:
-    """Score a simple damage effect in one DealForm call × aggregated hit count."""
+    """Score one compiled damage shape with optional runtime aggregation."""
 
+    multiplier = max(0.0, float(coeff_multiplier))
+    if multiplier == 0.0:
+        return 0.0
     core_prob = spec.hit.core_prob
     if spec.normal_formula and not spec.hit.is_core_damage:
         core_prob = enemy.effective_core_rate
     hit = replace(
         spec.hit,
+        coeff=spec.hit.coeff * multiplier,
         core_prob=core_prob,
         is_full_burst=bool(full_burst),
     )
