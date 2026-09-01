@@ -34,7 +34,7 @@ class BurstRuntime:
 
     __slots__ = (
         "squad", "enemy", "policy", "scheduler", "state", "machine",
-        "dispatcher", "weapons",
+        "dispatcher", "weapons", "damage_sink",
     )
 
     _STATIC_LAST_BULLET_INVALIDATORS = frozenset({
@@ -48,6 +48,8 @@ class BurstRuntime:
         squad: CompiledSquad,
         policy: BurstPolicy,
         enemy: EnemyStaticProfile | None = None,
+        *,
+        damage_sink=None,
     ) -> None:
         self.squad = squad
         self.enemy = enemy or EnemyStaticProfile(duration=policy.duration)
@@ -55,8 +57,14 @@ class BurstRuntime:
         self.scheduler = EventScheduler()
         self.state = StateStore.from_compiled_squad(squad)
         self.machine = BurstMachine(squad, policy)
+        self.damage_sink = damage_sink
         self.dispatcher = TriggerDispatcher(
-            squad, self.state, self.enemy, self.machine, self.scheduler
+            squad,
+            self.state,
+            self.enemy,
+            self.machine,
+            self.scheduler,
+            damage_sink=damage_sink,
         )
         self.weapons = MultiSignalChargeCadenceRuntime(
             squad,
@@ -64,8 +72,10 @@ class BurstRuntime:
             self.state,
             self.scheduler,
             duration=policy.duration,
-            effect_filter=self.dispatcher.is_executable_effect,
+            effect_filter=self.dispatcher.is_runtime_executable_effect,
         )
+        if self.damage_sink is not None:
+            self.damage_sink.attach(self)
 
     def _broadcast(self, time: float, event_key: str) -> None:
         from .burst import BurstSignal
@@ -132,7 +142,7 @@ class BurstRuntime:
         interested = {
             effect.actor
             for effect in self.squad.effects
-            if self.dispatcher.is_executable_effect(effect)
+            if self.dispatcher.is_runtime_executable_effect(effect)
             and any(rule.event_key == "last_bullet_fire" for rule in effect.triggers)
         }
         if not interested:
@@ -147,7 +157,7 @@ class BurstRuntime:
 
         invalidators: list[tuple[int, str]] = []
         for effect in self.squad.effects:
-            if not self.dispatcher.is_executable_effect(effect):
+            if not self.dispatcher.is_runtime_executable_effect(effect):
                 continue
             if (effect.stat or "") not in self._STATIC_LAST_BULLET_INVALIDATORS:
                 continue
@@ -171,7 +181,7 @@ class BurstRuntime:
         for boundary in simulate_static_last_bullet_boundaries(
             self.squad,
             duration=horizon,
-            effect_filter=self.dispatcher.is_executable_effect,
+            effect_filter=self.dispatcher.is_runtime_executable_effect,
         ):
             self.scheduler.schedule(
                 boundary.time,
@@ -199,7 +209,7 @@ class BurstRuntime:
         for boundary in simulate_weapon_trigger_boundaries(
             self.squad,
             duration=horizon,
-            effect_filter=self.dispatcher.is_executable_effect,
+            effect_filter=self.dispatcher.is_runtime_executable_effect,
         ):
             if boundary.actor in dynamic_actors:
                 continue
@@ -228,10 +238,10 @@ class BurstRuntime:
 
         Equal-time scoring follows Moris frame semantics:
         expiry/periodic/burst state applies before the weapon shot at that time,
-        while weapon-trigger effects apply after that shot.  Scheduler phases
+        while weapon-trigger effects apply after that shot. Scheduler phases
         below 30 are therefore processed before the observer consumes ``=t``;
         phase-30+ events consume the shot first and only then dispatch hit-based
-        effects.  This prevents a hit-triggered buff from retroactively boosting
+        effects. This prevents a hit-triggered buff from retroactively boosting
         the shot that created it.
         """
 
