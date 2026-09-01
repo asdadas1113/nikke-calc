@@ -45,6 +45,16 @@ def _effect(effect_id: int, timing: str, event_key: str, threshold: int) -> Comp
     )
 
 
+def _raw_full_charge_effect(effect_id: int = 0) -> CompiledEffect:
+    base = _effect(effect_id, "full_charge_hit", "full_charge_hit", 1)
+    rule = TriggerRule(
+        "full_charge_hit",
+        "full_charge_hit",
+        TriggerMode.EVENT,
+    )
+    return replace(base, triggers=(rule,))
+
+
 def _squad() -> CompiledSquad:
     effects = (
         _effect(0, "hit_count:3", "hit_count", 3),
@@ -122,6 +132,36 @@ class DynamicMultiSignalTests(unittest.TestCase):
             {(row.event_key, row.count_increment) for row in second.signals},
             {("hit_count", 1), ("full_charge_hit", 1)},
         )
+
+    def test_raw_full_charge_consumer_promotes_each_charge_shot(self):
+        raw = _raw_full_charge_effect()
+        base = _squad().members[0]
+        member = replace(base, effects=(raw,))
+        squad = CompiledSquad(
+            (member,),
+            TriggerIndex.from_effects((raw,), actor_count=1),
+        )
+        scheduler = EventScheduler()
+        state = StateStore.from_compiled_squad(squad)
+        runtime = MultiSignalChargeCadenceRuntime(
+            squad,
+            ActiveEffectStore(squad, state),
+            state,
+            scheduler,
+            duration=10.0,
+            effect_filter=lambda _effect: True,
+        )
+        self.assertEqual(runtime.actors, (0,))
+        runtime.start(0.0)
+
+        self.assertAlmostEqual(scheduler.peek_time(), 1.0)
+        first = runtime.handle_boundary(scheduler.pop())
+        self.assertEqual(
+            [(row.event_key, row.count_increment) for row in first.signals],
+            [("full_charge_hit", 1)],
+        )
+        runtime.sync(1.0)
+        self.assertAlmostEqual(scheduler.peek_time(), 2.0)
 
     def test_hit_count_only_charge_actor_enters_dynamic_runtime(self):
         hit_only = _effect(0, "hit_count:3", "hit_count", 3)
