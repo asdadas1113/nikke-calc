@@ -86,7 +86,6 @@ class WeaponCadenceParityTests(unittest.TestCase):
         for name in ("델타", "아니스"):
             self.assertEqual(by_name[name].full_charge_hits, by_name[name].shots)
 
-
     def test_reducible_full_charge_trigger_materializes_only_threshold_boundaries(self):
         squad = compile_moris_squad(
             build_squad(["D : 킬러 와이프", "아니스", "라피", "미하라", "프로덕트 08"])
@@ -94,7 +93,12 @@ class WeaponCadenceParityTests(unittest.TestCase):
         cadence = simulate_static_weapon_cadence(squad, duration=80.0)[0]
         boundaries = [
             row for row in simulate_static_weapon_trigger_boundaries(
-                squad, duration=80.0, effect_filter=TriggerDispatcher.is_executable_effect
+                squad,
+                duration=80.0,
+                effect_filter=lambda effect: (
+                    TriggerDispatcher.is_executable_effect(effect)
+                    and effect.stat == "burst_cooldown_reduce"
+                ),
             )
             if row.actor == 0 and row.event_key == "full_charge_hit"
         ]
