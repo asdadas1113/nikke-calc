@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,11 @@ _NIKKE = json.loads((_ROOT / "data" / "parsed_nikke.json").read_text(encoding="u
 _MECHANICS = json.loads((_ROOT / "data" / "weapon_mechanics.json").read_text(encoding="utf-8"))
 _DELAYS = json.loads((_ROOT / "data" / "weapon_delays.json").read_text(encoding="utf-8"))
 
-from .capabilities import CURRENT_RUNTIME_CAPABILITIES, inspect_effect
+from .capabilities import (
+    CURRENT_RUNTIME_CAPABILITIES,
+    CapabilityDisposition,
+    inspect_effect,
+)
 from .conditions import compile_condition
 from .model import CompiledCharacter, CompiledEffect, CompiledSquad
 from .moris_bridge import effect_skill_level, registered_effects
@@ -115,6 +120,28 @@ def _parameters(effect: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _promote_exact_last_bullet_capability(capability, timings):
+    """Certify only exact `last_bullet_fire` when timing is the sole blocker.
+
+    The broad `weapon_hit` family remains PLANNED. Runtime support is deliberately
+    narrower: static cadence can expose the magazine-ending shot without creating
+    every-shot global events. Dynamic charge + last-bullet interaction still
+    fails closed in BurstRuntime until one weapon boundary can emit both signals.
+    """
+    if (
+        capability.disposition is CapabilityDisposition.PLANNED
+        and capability.blockers == ("timing:weapon_hit",)
+        and timings
+        and all(rule.raw == "last_bullet_fire" for rule in timings)
+    ):
+        return replace(
+            capability,
+            disposition=CapabilityDisposition.READY,
+            blockers=(),
+        )
+    return capability
+
+
 def compile_moris_squad(squad: list[dict], *, require_five: bool = True) -> CompiledSquad:
     """Compile already-built Moris character dicts into immutable Fast input.
 
@@ -169,6 +196,7 @@ def compile_moris_squad(squad: list[dict], *, require_five: bool = True) -> Comp
             root=_ROOT,
             character_names=char_names,
         )
+        capability = _promote_exact_last_bullet_capability(capability, timings)
         effects_by_actor[actor].append(
             CompiledEffect(
                 effect_id=effect_id,
