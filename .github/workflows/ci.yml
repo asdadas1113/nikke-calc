@@ -68,9 +68,9 @@ jobs:
       - name: Fast — target snapshot
         if: ${{ !cancelled() }}
         run: python -m unittest fast_engine.tests.test_target_snapshot
-      - name: Fast — weapon cadence
+      - name: Fast — weapon
         if: ${{ !cancelled() }}
-        run: python -m unittest fast_engine.tests.test_weapon_cadence
+        run: python -m unittest discover -s fast_engine/tests -p 'test_weapon*.py'
 
       # 아래는 Fast가 모두 초록일 때만 기존 정본 회귀를 돈다.
       - name: 엔진 단위 테스트
