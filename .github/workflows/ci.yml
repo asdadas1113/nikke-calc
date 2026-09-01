@@ -50,9 +50,9 @@ jobs:
       - name: Fast — compiled triggers
         if: ${{ !cancelled() }}
         run: python -m unittest fast_engine.tests.test_compiled_triggers
-      - name: Fast — damage kernel
+      - name: Fast — damage
         if: ${{ !cancelled() }}
-        run: python -m unittest fast_engine.tests.test_damage_kernel
+        run: python -m unittest discover -s fast_engine/tests -p 'test_damage*.py'
       - name: Fast — dispatch/burst runtime
         if: ${{ !cancelled() }}
         run: python -m unittest fast_engine.tests.test_dispatch_burst_runtime
