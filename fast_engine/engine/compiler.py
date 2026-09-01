@@ -81,6 +81,10 @@ def _weapon_view(name: str, meta: dict[str, Any], char: dict[str, Any]) -> dict[
         "core_dmg_mult": float(meta.get("core_dmg_mult") or 200.0),
         "full_charge_mult": float(meta.get("full_charge_mult") or 100.0),
         "normal_hit_coeff": normal_hit_coeff,
+        # Control is assembled by context.spec and can alter shot timing just as
+        # directly as weapon metadata. Preserve it at the compile boundary so
+        # score certification can fail closed until the Fast runtime implements it.
+        "control": dict(char.get("control") or {}),
         # Static accuracy model inputs are compiled once. Runtime only supplies
         # the current accuracy_pct and boss core_px; no JSON lookup is needed in
         # the scoring hot path.
