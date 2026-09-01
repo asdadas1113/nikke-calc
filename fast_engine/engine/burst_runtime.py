@@ -273,9 +273,11 @@ class BurstRuntime:
         never aliased into post-shot semantics.
 
         Static actors are safe only while their reload/max-ammo cadence cannot be
-        changed by live effects. Dynamic charge actors and potentially-targeting
-        runtime cadence modifiers fail closed instead of leaving stale magazine
-        boundaries in the scheduler.
+        changed by live effects. A dynamic charge actor is safe for post-shot
+        ``last_bullet`` only when its runtime already materializes every physical
+        charge shot; then magazine-end state is observed directly with no added
+        per-shot scheduling. Dynamic pre-shot ``last_bullet_fire`` still fails
+        closed because phase-30 weapon boundaries occur after score consumption.
         """
         interested = {
             effect.actor
@@ -289,13 +291,25 @@ class BurstRuntime:
         if not interested:
             return
 
-        unsupported = interested & dynamic_actors
+        pre_shot_interested = {
+            effect.actor
+            for effect in self.squad.effects
+            if self.dispatcher.is_runtime_executable_effect(effect)
+            and any(rule.event_key == "last_bullet_fire" for rule in effect.triggers)
+        }
+        unsupported = {
+            actor
+            for actor in interested & dynamic_actors
+            if actor in pre_shot_interested
+            or not self.weapons.emits_every_charge_shot(actor)
+        }
         if unsupported:
             names = ", ".join(self.squad.members[actor].name for actor in sorted(unsupported))
             raise NotImplementedError(
                 "Fast dynamic charge + last-bullet boundary not certified: " + names
             )
 
+        static_interested = interested - dynamic_actors
         invalidators: list[tuple[int, str]] = []
         for effect in self.squad.effects:
             if not self.dispatcher.is_runtime_executable_effect(effect):
@@ -304,7 +318,7 @@ class BurstRuntime:
                 continue
             if self._is_static_permanent_self_cadence(effect):
                 continue
-            for actor in interested:
+            for actor in static_interested:
                 if self._effect_may_target_actor(effect, actor):
                     invalidators.append((actor, effect.name or effect.stat or "?"))
 
@@ -322,7 +336,10 @@ class BurstRuntime:
         for boundary in simulate_static_last_bullet_boundaries(
             self.squad,
             duration=horizon,
-            effect_filter=self.dispatcher.is_runtime_executable_effect,
+            effect_filter=lambda effect: (
+                self.dispatcher.is_runtime_executable_effect(effect)
+                and effect.actor not in dynamic_actors
+            ),
         ):
             self.scheduler.schedule(
                 boundary.time,
@@ -445,6 +462,16 @@ class BurstRuntime:
                             attacker=boundary.actor,
                             context=SignalContext(),
                             count_increment=1,
+                        )
+                    if boundary.is_last_bullet:
+                        self.dispatcher.dispatch(
+                            BurstSignal(
+                                event.time,
+                                "last_bullet",
+                                boundary.actor,
+                                boundary.actor,
+                            ),
+                            context=SignalContext(),
                         )
                     self.weapons.sync(event.time)
                 score_end_of_time(event.time)
