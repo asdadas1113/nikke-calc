@@ -3,10 +3,12 @@ from __future__ import annotations
 from math import inf, nextafter
 from typing import TYPE_CHECKING
 
+from .damage_policy import is_direct_damage_buff_runtime_supported
 from .damage_state import DamageTermResolver
 from .model import CompiledSquad, EnemyStaticProfile, FastScore
 from .normal_attack import compile_normal_attack_spec, expected_normal_block_damage
 from .shot_blocks import ShotBlockCursor, compile_static_shot_blocks
+from .triggers import TriggerMode
 from .weapon import StaticCadenceModifiers
 
 if TYPE_CHECKING:
@@ -33,6 +35,57 @@ _CADENCE_OR_SHAPE_STATS = frozenset({
 })
 _STATIC_FOLDABLE = frozenset(StaticCadenceModifiers.__dataclass_fields__)
 
+# Direct numeric states that can change ordinary weapon damage in the initial
+# static-target model.  A stat being numerically resolvable is not enough: its
+# trigger/condition/target path must also be deliverable by the score runtime.
+_NORMAL_DIRECT_DAMAGE_STATS = frozenset({
+    "atk_pct",
+    "atk_flat",
+    "atk_caster_based_pct",
+    "def_ignore_pct",
+    "crit_rate",
+    "normal_atk_crit_rate",
+    "crit_dmg",
+    "normal_atk_crit_dmg",
+    "core_dmg_pct",
+    "normal_atk_dmg_pct",
+    "atk_dmg_pct",
+    "charge_dmg_pct",
+    "charge_dmg_mag_pct",
+    "received_dmg_pct",
+    "personal_received_dmg_pct",
+    "element_bonus",
+    "element_bonus_pct",
+    "def_pct",
+    "personal_enemy_def_down_pct",
+})
+
+# These are known Moris mechanisms that can alter normal-attack damage but are
+# not yet lowered into DamageTerms/HitSpec.  Their presence must block a score,
+# otherwise some archetypes would be systematically undervalued.
+_UNRESOLVED_NORMAL_DAMAGE_STATS = frozenset({
+    "atk_from_hp_pct",
+    "atk_copy",
+    "atk_buff_mag_pct",
+    "charge_dmg_per_max_ammo_pct",
+    "charge_speed_overflow_conversion_pct",
+    "dmg_scale_mag_pct",
+    "armor_break_enabled",
+    "pierce_enabled",
+    "element_code_override",
+})
+
+# A fixed periodic ATK state is the one deliberate exception outside the direct
+# timing policy: the periodic scheduler has already been parity-tested (Milk).
+# Effects that can move that periodic grid are not yet score-safe.
+_PERIODIC_AUX_STATS = frozenset({"atk_pct", "atk_flat", "atk_caster_based_pct"})
+_PERIODIC_GRID_INVALIDATORS = frozenset({
+    "effect_interval",
+    "skill_cooldown_pct",
+    "skill_cooldown_reduce_pct",
+    "force_skill_use",
+})
+
 
 def _is_folded_static_self_modifier(effect) -> bool:
     return (
@@ -46,23 +99,67 @@ def _is_folded_static_self_modifier(effect) -> bool:
     )
 
 
-def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
-    """Return cadence/shot-shape mechanics that make static shot blocks unsafe.
+def _is_score_safe_fixed_periodic(effect) -> bool:
+    return (
+        (effect.stat or "") in _PERIODIC_AUX_STATS
+        and effect.effect_type == "buff"
+        and effect.target_spec.runtime_supported
+        and all(rule.is_runtime_supported for rule in effect.condition_rules)
+        and bool(effect.triggers)
+        and all(
+            rule.mode is TriggerMode.PERIODIC
+            and rule.interval is not None
+            and float(rule.interval) > 0.0
+            for rule in effect.triggers
+        )
+    )
 
-    This intentionally scans *all* compiled effects, not only currently
-    executable ones. An unsupported cadence buff is still a reason not to emit a
-    deceptively precise static score.
+
+def _direct_normal_effect_needs_score_support(effect) -> bool:
+    stat = effect.stat or ""
+    if stat != "def_pct":
+        return True
+    # Ally DEF buffs do not enter outgoing normal-attack DealForm.  Enemy-target
+    # def_pct is the Moris defense-down path and does matter.
+    return effect.target_spec.mode.value == "enemy"
+
+
+def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
+    """Return mechanics that make the current static normal score unsafe.
+
+    This intentionally scans *all* compiled effects, not only effects currently
+    marked executable. Unsupported mechanics are exactly where a silent ranking
+    bias would otherwise enter.
     """
 
     blockers: list[str] = []
+    has_score_periodic = any(_is_score_safe_fixed_periodic(effect) for effect in squad.effects)
+
     for effect in squad.effects:
         stat = effect.stat or ""
-        if stat not in _CADENCE_OR_SHAPE_STATS:
-            continue
-        if _is_folded_static_self_modifier(effect):
-            continue
         owner = squad.members[effect.actor].name
-        blockers.append(f"{owner}:{effect.name or stat}:{stat}")
+        label = f"{owner}:{effect.name or stat}:{stat}"
+
+        if stat in _CADENCE_OR_SHAPE_STATS:
+            if not _is_folded_static_self_modifier(effect):
+                blockers.append(f"cadence:{label}")
+            continue
+
+        if stat in _UNRESOLVED_NORMAL_DAMAGE_STATS:
+            blockers.append(f"normal_state:{label}")
+            continue
+
+        if stat in _NORMAL_DIRECT_DAMAGE_STATS and _direct_normal_effect_needs_score_support(effect):
+            if is_direct_damage_buff_runtime_supported(effect):
+                continue
+            if _is_score_safe_fixed_periodic(effect):
+                continue
+            blockers.append(f"normal_delivery:{label}")
+            continue
+
+        if has_score_periodic and stat in _PERIODIC_GRID_INVALIDATORS:
+            blockers.append(f"periodic_grid:{label}")
+
     return tuple(dict.fromkeys(blockers))
 
 
@@ -85,7 +182,7 @@ class StaticNormalAttackObserver:
             if len(blockers) > 8:
                 detail += f", +{len(blockers) - 8} more"
             raise NotImplementedError(
-                "Fast static normal score blocked by live cadence/shot-shape effects: "
+                "Fast static normal score blocked by unsupported comparison-critical effects: "
                 + detail
             )
 
