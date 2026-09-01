@@ -37,11 +37,13 @@ class EffectExpiryToken:
 
 
 class ActiveEffectStore:
-    """Compact active-buff table preserving Moris target-cohort semantics.
+    """Compact active-buff/state table preserving Moris target-cohort semantics.
 
     Moris can keep two activations of the same compiled effect alive at once when
-    their resolved target cohorts differ.  The active key therefore contains the
-    whole activation cohort rather than only (effect_id, target).
+    their resolved target cohorts differ. The active key therefore contains the
+    whole activation cohort rather than only (effect_id, target). Damage effects
+    that are observable as named DoT states reuse this table as well; ordinary
+    score-only damage never enters it.
     """
 
     __slots__ = (
@@ -64,7 +66,7 @@ class ActiveEffectStore:
 
     @staticmethod
     def _cohort(targets: Iterable[int]) -> tuple[int, ...]:
-        # Target order is not part of buff identity.  Canonicalizing also keeps
+        # Target order is not part of buff identity. Canonicalizing also keeps
         # repeated composite selectors deterministic.
         return tuple(sorted(set(int(target) for target in targets)))
 
@@ -95,16 +97,39 @@ class ActiveEffectStore:
         cohort: tuple[int, ...],
         now: float,
         scheduler: EventScheduler,
+        *,
+        initial_stacks: float | None = None,
+        reset_scaled_stack: bool = False,
     ) -> ActiveEffect:
         key: ActiveKey = (effect.effect_id, target, cohort)
         old = self._active.get(key)
         max_stack = effect.max_stack if effect.max_stack is not None else 1.0
-        if old is None or max_stack == 1:
-            stacks = 1.0
+
+        if initial_stacks is None:
+            if old is None or max_stack == 1:
+                stacks = 1.0
+            else:
+                stacks = old.stacks + 1.0
+            if max_stack is not None and max_stack >= 0:
+                stacks = min(stacks, max_stack)
         else:
-            stacks = old.stacks + 1.0
-        if max_stack is not None and max_stack >= 0:
-            stacks = min(stacks, max_stack)
+            initial = max(0.0, float(initial_stacks))
+            if old is None:
+                # Moris scaling_ref DoTs capture the reference count directly at
+                # registration, even when the nominal max_stack is 1.
+                stacks = initial
+            elif max_stack == 1:
+                # Exact Moris branch order: max_stack==1 refreshes duration but
+                # keeps the previously captured stack instead of recapturing.
+                stacks = old.stacks
+            elif reset_scaled_stack:
+                # scaling_ref + max_stack>1 reactivation resets to the fresh
+                # reference value instead of incrementing the previous stack.
+                stacks = initial
+            else:
+                stacks = old.stacks + 1.0
+                if max_stack is not None and max_stack >= 0:
+                    stacks = min(stacks, max_stack)
 
         duration = effect.duration
         expires = inf if duration is None or duration == -1 else now + max(0.0, duration)
@@ -143,6 +168,32 @@ class ActiveEffectStore:
             return ()
         return tuple(
             self._activate_one(effect, target, cohort, now, scheduler)
+            for target in cohort
+        )
+
+    def activate_group_scaled(
+        self,
+        effect: "CompiledEffect",
+        targets: Iterable[int],
+        now: float,
+        scheduler: EventScheduler,
+        *,
+        initial_stacks: float,
+    ) -> tuple[ActiveEffect, ...]:
+        """Register a Moris scaling_ref DoT as an observable named state."""
+        cohort = self._cohort(targets)
+        if not cohort:
+            return ()
+        return tuple(
+            self._activate_one(
+                effect,
+                target,
+                cohort,
+                now,
+                scheduler,
+                initial_stacks=initial_stacks,
+                reset_scaled_stack=True,
+            )
             for target in cohort
         )
 
@@ -197,6 +248,54 @@ class ActiveEffectStore:
             ),
             default=0.0,
         )
+
+    def adjust_named_stack(
+        self,
+        target: int,
+        name: str,
+        delta: float,
+        *,
+        now: float,
+    ) -> tuple[int, ...]:
+        """Apply Moris target_effect stack mutation to active named states.
+
+        Explicitly named debuffs may reach zero without being removed; that is
+        Moris' debuff_stack_add/remove behavior. Expiry generations are not
+        changed because stack mutation does not refresh duration.
+        """
+        changed: list[int] = []
+        for key in self._active_keys(self._by_target_name, target, name, now):
+            active = self._active[key]
+            effect = self._effects[active.effect_id]
+            max_stack = effect.max_stack if effect.max_stack is not None else 1.0
+            cap = active.stacks + delta if max_stack == -1 else max_stack
+            stacks = max(0.0, min(active.stacks + float(delta), cap))
+            if abs(stacks - active.stacks) <= _EPS:
+                continue
+            active.stacks = stacks
+            self.state.touch(target, StateDomain.EFFECT)
+            changed.append(active.effect_id)
+        return tuple(changed)
+
+    def remove_named_state(
+        self,
+        target: int,
+        name: str,
+        *,
+        now: float,
+    ) -> tuple[int, ...]:
+        """Remove all currently active states with ``name`` from one target."""
+        removed: list[int] = []
+        for key in self._active_keys(self._by_target_name, target, name, now):
+            active = self._active.pop(key, None)
+            if active is None:
+                continue
+            effect = self._effects[active.effect_id]
+            self._index_remove(effect, key)
+            removed.append(active.effect_id)
+        if removed:
+            self.state.touch(target, StateDomain.EFFECT)
+        return tuple(removed)
 
     def has_stat(self, target: int, stat: str, *, now: float) -> bool:
         return bool(self._active_keys(self._by_target_stat, target, stat, now))
