@@ -237,6 +237,9 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
             self.state.set_ammo(actor, st.ammo)
         return True
 
+    def apply_force_reload(self, targets: tuple[int, ...], now: float) -> bool:
+        return self._rapid_reload.apply_force_reload(targets, now)
+
     def consume_post_shot_bullet_lifetimes(self, actor: int, now: float) -> tuple[int, ...]:
         return self._rapid_reload.consume_post_shot_bullet_lifetimes(actor, now)
 

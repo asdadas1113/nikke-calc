@@ -17,6 +17,7 @@ class EventKind(IntEnum):
     BURST_END_FINALIZE = 15
     DAMAGE_TICK = 19
     STATE_EXPIRE = 20
+    STATE_END_NOTIFY = 21
     PERIODIC_TICK = 30
     RELOAD_DONE = 40
     WEAPON_BOUNDARY = 50
@@ -31,6 +32,7 @@ class EventKind(IntEnum):
 _EVENT_PHASE: dict[EventKind, int] = {
     EventKind.DAMAGE_TICK: -10,
     EventKind.STATE_EXPIRE: 0,
+    EventKind.STATE_END_NOTIFY: 5,
     EventKind.PERIODIC_TICK: 10,
     EventKind.BURST_READY: 20,
     EventKind.BURST_ACTIVATE: 20,

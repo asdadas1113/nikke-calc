@@ -166,7 +166,16 @@ class DynamicRapidReloadRuntime:
         return max(0.0, 1.0 - speed / 100.0)
 
     def _signature(self, actor: int, now: float) -> tuple[float, ...]:
-        return (self.effects.sum_stat(actor, "reload_speed_pct", now=now),)
+        mode = str(self.squad.members[actor].weapon.get("fire_mode") or "auto")
+        warmup_speed = (
+            self.effects.sum_stat(actor, "mg_warmup_speed_pct", now=now)
+            if mode == "auto_warmup"
+            else 0.0
+        )
+        return (
+            self.effects.sum_stat(actor, "reload_speed_pct", now=now),
+            warmup_speed,
+        )
 
     def _hits_per_shot(self, actor: int) -> int:
         return self._machine(actor)._hits_per_shot()
@@ -180,7 +189,12 @@ class DynamicRapidReloadRuntime:
         rate = machine._mg_rate(st.warmup)
         inter = 1.0 / rate
         cap = float(self.squad.members[st.actor].weapon.get("warmup_bullets") or 1.0)
-        warm_inc = max(0.0, 1.0 + machine.mods.mg_warmup_speed_pct / 100.0)
+        warmup_speed = self.effects.sum_stat(
+            st.actor,
+            "mg_warmup_speed_pct",
+            now=st.phase_end,
+        )
+        warm_inc = max(0.0, 1.0 + warmup_speed / 100.0)
         st.warmup = min(cap, st.warmup + warm_inc)
         return inter
 
@@ -275,6 +289,31 @@ class DynamicRapidReloadRuntime:
     def advance_to(self, t: float, *, inclusive: bool = False) -> None:
         for actor in self.actors:
             self._advance_actor_to(actor, t, inclusive=inclusive)
+
+    def apply_force_reload(self, targets: tuple[int, ...], now: float) -> bool:
+        selected = tuple(dict.fromkeys(int(actor) for actor in targets))
+        if not selected or any(actor not in self.actors for actor in selected):
+            return False
+
+        self.advance_to(float(now), inclusive=False)
+        for actor in selected:
+            st = self._states.get(actor)
+            if st is None:
+                return False
+            if st.phase == "reloading":
+                continue
+            weapon = self.squad.members[actor].weapon
+            factor = self._reload_factor(actor, float(now))
+            st.ammo = 0
+            st.phase = "reloading"
+            st.phase_end = float(now) + (
+                float(weapon.get("reload_start_delay", 0.0))
+                + float(weapon.get("reload_time", 0.0))
+            ) * factor
+            self._invalidate(st)
+            self._plan(actor, float(now))
+            self.state.set_ammo(actor, 0)
+        return True
 
     def _predict_next_boundary(self, actor: int) -> tuple[float, int] | None:
         st = replace(self._states[actor])

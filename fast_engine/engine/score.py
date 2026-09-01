@@ -42,6 +42,7 @@ _CADENCE_OR_SHAPE_STATS = frozenset({
     "charge_time_fixed",
     "attack_speed_pct",
     "mg_warmup_speed_pct",
+    "force_reload",
     "pellet_count",
     "pellet_count_fixed",
 })
@@ -351,6 +352,36 @@ def _dynamic_ammo_charge_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
     return tuple(sorted(actors))
 
 
+def _is_dynamic_mg_warmup_score_supported(squad: CompiledSquad, effect) -> bool:
+    if (effect.stat or "") != "mg_warmup_speed_pct":
+        return False
+    if effect.effect_type != "buff":
+        return False
+    if effect.parameters.get("duration_bullets") is not None:
+        return False
+    if not TriggerDispatcher.is_executable_effect(effect):
+        return False
+    mg_targets = tuple(
+        actor
+        for actor in _possible_ally_targets(squad, effect)
+        if str(squad.members[actor].weapon.get("fire_mode") or "") == "auto_warmup"
+    )
+    return all(_rapid_actor_score_safe(squad, actor) for actor in mg_targets)
+
+
+def _dynamic_mg_warmup_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
+    actors: set[int] = set()
+    for effect in squad.effects:
+        if not _is_dynamic_mg_warmup_score_supported(squad, effect):
+            continue
+        actors.update(
+            actor
+            for actor in _possible_ally_targets(squad, effect)
+            if str(squad.members[actor].weapon.get("fire_mode") or "") == "auto_warmup"
+        )
+    return tuple(sorted(actors))
+
+
 def _reload_recipient_score_safe(squad: CompiledSquad, actor: int) -> bool:
     member = squad.members[actor]
     mode = str(member.weapon.get("fire_mode") or "")
@@ -361,17 +392,43 @@ def _reload_recipient_score_safe(squad: CompiledSquad, actor: int) -> bool:
     return False
 
 
+def _valid_dynamic_bullet_lifetime(effect) -> bool:
+    bullets = effect.parameters.get("duration_bullets")
+    if bullets is None:
+        return True
+    try:
+        value = float(bullets)
+    except (TypeError, ValueError):
+        return False
+    return value >= 1.0 and value.is_integer()
+
+
 def _is_dynamic_reload_score_supported(squad: CompiledSquad, effect) -> bool:
     if (effect.stat or "") not in _DYNAMIC_RELOAD_SCORE_STATS:
         return False
-    if effect.effect_type != "buff":
-        return False
-    if effect.parameters.get("duration_bullets") is not None:
+    if effect.effect_type != "buff" or not _valid_dynamic_bullet_lifetime(effect):
         return False
     if not TriggerDispatcher.is_executable_effect(effect):
         return False
     targets = _possible_ally_targets(squad, effect)
-    return all(_reload_recipient_score_safe(squad, actor) for actor in targets)
+    return bool(targets) and all(_reload_recipient_score_safe(squad, actor) for actor in targets)
+
+
+def _is_dynamic_force_reload_score_supported(squad: CompiledSquad, effect) -> bool:
+    if (effect.stat or "") != "force_reload" or effect.effect_type != "instant":
+        return False
+    if not TriggerDispatcher.is_executable_effect(effect):
+        return False
+    targets = _possible_ally_targets(squad, effect)
+    return bool(targets) and all(_rapid_actor_score_safe(squad, actor) for actor in targets)
+
+
+def _dynamic_force_reload_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
+    actors: set[int] = set()
+    for effect in squad.effects:
+        if _is_dynamic_force_reload_score_supported(squad, effect):
+            actors.update(_possible_ally_targets(squad, effect))
+    return tuple(sorted(actors))
 
 
 def _dynamic_reload_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
@@ -440,6 +497,8 @@ def _dynamic_rapid_reload_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
         if str(squad.members[actor].weapon.get("fire_mode") or "")
         in {"auto", "auto_warmup"}
     )
+    actors.update(_dynamic_mg_warmup_score_actors(squad))
+    actors.update(_dynamic_force_reload_score_actors(squad))
     return tuple(sorted(actors))
 
 
@@ -530,6 +589,10 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
             if stat == "reload_speed_pct" and _is_dynamic_reload_score_supported(squad, effect):
                 continue
             if stat in {"ammo_charge_pct", "ammo_charge_flat"} and _is_dynamic_ammo_charge_score_supported(squad, effect):
+                continue
+            if stat == "mg_warmup_speed_pct" and _is_dynamic_mg_warmup_score_supported(squad, effect):
+                continue
+            if stat == "force_reload" and _is_dynamic_force_reload_score_supported(squad, effect):
                 continue
             blockers.append(f"cadence:{label}")
             continue
@@ -635,6 +698,7 @@ class StaticNormalAttackObserver:
                 self._score_dynamic_reload_block,
             )
         runtime.dispatcher.attach_ammo_charge_sink(runtime.weapons.apply_ammo_charge)
+        runtime.dispatcher.attach_force_reload_sink(runtime.weapons.apply_force_reload)
 
     def _score_shots(self, actor: int, count: int, *, eval_time: float) -> None:
         if count <= 0:

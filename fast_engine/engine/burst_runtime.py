@@ -502,6 +502,22 @@ class BurstRuntime:
                 score_end_of_time(event.time)
                 continue
 
+            if event.kind is EventKind.STATE_END_NOTIFY:
+                from .burst import BurstSignal
+                owner, name = event.payload
+                self.dispatcher.dispatch(
+                    BurstSignal(
+                        event.time,
+                        f"event:state_end:{name}",
+                        int(owner),
+                        int(owner),
+                    ),
+                    context=SignalContext(),
+                )
+                self.weapons.sync(event.time)
+                score_end_of_time(event.time)
+                continue
+
             if event.kind is EventKind.PERIODIC_TICK:
                 token = event.payload
                 if not isinstance(token, PeriodicTickToken):

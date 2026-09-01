@@ -85,7 +85,7 @@ CURRENT_RUNTIME_CAPABILITIES = CapabilityProfile(
     supported_categories=frozenset({EffectCategory.CADENCE_TIMELINE, EffectCategory.DERIVED_STATE}),
     supported_stats=frozenset({
         "burst_cooldown_reduce", "burst_cooldown", "fullburst_duration",
-        "reload_speed_pct", "charge_speed_pct", "charge_speed_caster_based_pct",
+        "reload_speed_pct", "mg_warmup_speed_pct", "force_reload", "charge_speed_pct", "charge_speed_caster_based_pct",
         "max_ammo_pct", "max_ammo_flat", "ammo_charge_pct", "ammo_charge_flat", "charge_time_flat",
     }),
     supported_stat_prefixes=("burst_stage_override:",),

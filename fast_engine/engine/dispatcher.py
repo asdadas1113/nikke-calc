@@ -13,6 +13,7 @@ from .state import ENEMY, StateStore
 from .target_scope import possible_ally_targets, target_scope_is_static
 from .targets import TargetMode, TargetResolver
 from .triggers import TriggerMode
+from .scheduler import EventKind
 
 if TYPE_CHECKING:
     from .burst import BurstMachine, BurstSignal
@@ -38,6 +39,7 @@ class TriggerDispatcher:
         "conditions", "damage_sink", "_effect_table", "_event_counts", "_conditional_counts",
         "_activation_counts", "_state_dependency_names", "_gauge_maxima",
         "_unsafe_gauge_families", "_strict_score_delivery", "_ammo_charge_sink",
+        "_force_reload_sink",
     )
 
     _AUXILIARY_STATS = frozenset({
@@ -51,6 +53,8 @@ class TriggerDispatcher:
         "burst_cooldown",
         "fullburst_duration",
         "reload_speed_pct",
+        "mg_warmup_speed_pct",
+        "force_reload",
         "charge_speed_pct",
         "charge_speed_caster_based_pct",
         "max_ammo_pct",
@@ -113,6 +117,7 @@ class TriggerDispatcher:
         self._gauge_maxima: dict[tuple[int, str], float] = {}
         self._strict_score_delivery = False
         self._ammo_charge_sink: Callable[[str, tuple[int, ...], float, float], bool] | None = None
+        self._force_reload_sink: Callable[[tuple[int, ...], float], bool] | None = None
 
         unsafe_gauges: set[tuple[int, str]] = set()
         for effect in self._effect_table:
@@ -149,6 +154,12 @@ class TriggerDispatcher:
         sink: Callable[[str, tuple[int, ...], float, float], bool],
     ) -> None:
         self._ammo_charge_sink = sink
+
+    def attach_force_reload_sink(
+        self,
+        sink: Callable[[tuple[int, ...], float], bool],
+    ) -> None:
+        self._force_reload_sink = sink
 
     @classmethod
     def _gauge_family(cls, effect: "CompiledEffect") -> tuple[int, str] | None:
@@ -215,6 +226,29 @@ class TriggerDispatcher:
         )
 
     @staticmethod
+    def _state_end_timing_is_only_runtime_blocker(effect: "CompiledEffect") -> bool:
+        """Allow only the named-event shape emitted by Fast's timed self-state bridge.
+
+        ``duration_bullets`` remains a runtime safety decision, so its capability
+        field blocker may coexist with the state-end timing blocker here.
+        """
+
+        blockers = effect.capability.blockers
+        allowed = {"timing:named_event", "field:duration_bullets"}
+        return (
+            effect.capability.disposition is CapabilityDisposition.PLANNED
+            and bool(blockers)
+            and set(blockers).issubset(allowed)
+            and any((rule.event_key or "").startswith("event:state_end:") for rule in effect.triggers)
+            and all(
+                rule.mode is TriggerMode.EVENT
+                and (rule.event_key or "").startswith("event:state_end:")
+                for rule in effect.triggers
+            )
+            and not effect.condition_rules
+        )
+
+    @staticmethod
     def is_executable_effect(effect: "CompiledEffect") -> bool:
         stat = effect.stat or ""
         if stat in TriggerDispatcher._AUXILIARY_STATS:
@@ -228,6 +262,7 @@ class TriggerDispatcher:
         capability_ok = (
             effect.capability.disposition is CapabilityDisposition.READY
             or TriggerDispatcher._periodic_timing_is_only_blocker(effect)
+            or TriggerDispatcher._state_end_timing_is_only_runtime_blocker(effect)
         )
         if not capability_ok:
             return False
@@ -390,6 +425,12 @@ class TriggerDispatcher:
                     return False
                 actor_targets = tuple(int(target) for target in targets)
                 if not self._ammo_charge_sink(stat, actor_targets, value, now):
+                    return False
+            elif stat == "force_reload":
+                if self._force_reload_sink is None or any(target == ENEMY for target in targets):
+                    return False
+                actor_targets = tuple(int(target) for target in targets)
+                if not self._force_reload_sink(actor_targets, now):
                     return False
             elif stat in self._GAUGE_STATS:
                 family = self._gauge_family(effect)
@@ -603,6 +644,26 @@ class TriggerDispatcher:
         expired = self.effects.handle_expiry(event)
         if expired is None:
             return
+
+        # Moris removes all timed states first, then emits named state_end events.
+        # The first Fast bridge is deliberately restricted to a one-target self
+        # buff with an ordinary time lifetime. Group/bullet/removal-driven state
+        # endings remain fail-closed until they have their own ordering contract.
+        if (
+            expired.name
+            and expired.effect_type == "buff"
+            and expired.target_spec.mode is TargetMode.SELF
+            and expired.duration is not None
+            and expired.duration >= 0.0
+            and expired.parameters.get("duration_bullets") is None
+        ):
+            self.scheduler.schedule(
+                event.time,
+                EventKind.STATE_END_NOTIFY,
+                actor=expired.actor,
+                payload=(expired.actor, expired.name),
+            )
+
         stat = expired.stat or ""
         if stat.startswith("burst_stage_override:"):
             stage = None
