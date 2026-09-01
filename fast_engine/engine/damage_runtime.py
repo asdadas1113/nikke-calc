@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from math import inf, nextafter
 from typing import TYPE_CHECKING
 
 from .conditions import SignalContext
 from .damage_events import (
     DamageEventSpec,
+    FixedDotSpec,
+    compile_fixed_dot_damage_event,
     compile_pending_b3_bonus_damage_event,
     compile_simple_damage_event,
     expected_damage_event,
 )
 from .damage_state import DamageTermResolver
+from .scheduler import EventKind, ScheduledEvent
 from .state import ENEMY
 from .targets import TargetMode
 from .triggers import TriggerMode
@@ -37,24 +42,32 @@ _SAFE_EVENT_KEYS = frozenset({
     "squad_burst_cast:2",
     "squad_burst_cast:3",
 })
+_DOT_EPS = 1e-9
+
+
+@dataclass(frozen=True, slots=True)
+class DotTickToken:
+    effect_id: int
+    generation: int
+    expires_at: float
 
 
 class SimpleDamageScoreSink:
-    """Score fail-closed immediate and first pending B3 damage primitives.
+    """Score fail-closed immediate, pending-B3 and fixed periodic damage.
 
-    Supported immediate damage is one cached DamageTerms lookup + one expected
-    DealForm × hit_count; no HitEvent objects are created. The first delayed
-    primitive mirrors Moris B3 ``burst_cast`` bonus damage by queueing at cast
-    and evaluating only after ``full_burst_start`` buffs have been dispatched.
+    Immediate damage is one cached DamageTerms lookup + one expected DealForm ×
+    hit_count. Delayed B3 bonus damage is queued until full-burst entry. The first
+    DoT slice schedules only its meaningful damage ticks: no frame loop and no
+    per-frame polling. Reactivation invalidates old reservations by generation.
 
-    Source-order-sensitive B3 cases remain unsupported: if any later same-caster
-    ``burst_cast`` buff exists, Moris excludes it from the delayed damage and
-    Fast refuses the effect until explicit exclusion masks are compiled.
+    Source-order-sensitive B3 cases and state-observable/stack-scaled DoTs remain
+    unsupported until their distinct semantics are explicitly compiled.
     """
 
     __slots__ = (
-        "squad", "enemy", "specs", "pending_specs", "unsupported_effect_ids",
-        "char_total", "runtime", "resolver", "_pending_effect_ids", "_effect_actor",
+        "squad", "enemy", "specs", "pending_specs", "dot_specs",
+        "unsupported_effect_ids", "char_total", "runtime", "resolver",
+        "_pending_effect_ids", "_effect_actor", "_dot_generation",
     )
 
     def __init__(self, squad: "CompiledSquad", enemy: "EnemyStaticProfile") -> None:
@@ -62,6 +75,7 @@ class SimpleDamageScoreSink:
         self.enemy = enemy
         self.specs: dict[int, DamageEventSpec] = {}
         self.pending_specs: dict[int, DamageEventSpec] = {}
+        self.dot_specs: dict[int, FixedDotSpec] = {}
         self.unsupported_effect_ids: set[int] = set()
         self.char_total = [0.0] * len(squad.members)
         self.runtime: "BurstRuntime | None" = None
@@ -70,6 +84,7 @@ class SimpleDamageScoreSink:
         self._effect_actor = {
             effect.effect_id: effect.actor for effect in squad.effects
         }
+        self._dot_generation: dict[int, int] = {}
 
         downstream_keys = set(squad.trigger_index.by_event)
         scaled_names = {
@@ -85,12 +100,20 @@ class SimpleDamageScoreSink:
 
             spec = compile_simple_damage_event(effect, squad.members[effect.actor])
             pending = None
+            dot = None
             if spec is None:
                 pending = compile_pending_b3_bonus_damage_event(
                     effect, squad.members[effect.actor]
                 )
+            if spec is None and pending is None:
+                dot = compile_fixed_dot_damage_event(
+                    effect, squad.members[effect.actor]
+                )
 
-            if (spec is None and pending is None) or not self._delivery_supported(effect):
+            if (
+                (spec is None and pending is None and dot is None)
+                or not self._delivery_supported(effect)
+            ):
                 self.unsupported_effect_ids.add(effect.effect_id)
                 continue
             if effect.name and (
@@ -106,6 +129,11 @@ class SimpleDamageScoreSink:
                     self.unsupported_effect_ids.add(effect.effect_id)
                     continue
                 self.pending_specs[effect.effect_id] = pending
+            elif dot is not None:
+                if self._dot_state_is_observed(effect):
+                    self.unsupported_effect_ids.add(effect.effect_id)
+                    continue
+                self.dot_specs[effect.effect_id] = dot
             else:
                 assert spec is not None
                 self.specs[effect.effect_id] = spec
@@ -126,6 +154,28 @@ class SimpleDamageScoreSink:
             for other in self.squad.effects
         )
 
+    def _dot_state_is_observed(self, effect: "CompiledEffect") -> bool:
+        """Reject DoTs whose active debuff identity is part of other mechanics.
+
+        Moris registers periodic damage in ActiveBuff as well as in its timer map.
+        This first Fast slice intentionally models only damage/timer semantics, so
+        any mechanic that reads/removes that named state must remain fail-closed.
+        """
+        name = effect.name
+        if not name:
+            return False
+        for other in self.squad.effects:
+            if other.effect_id == effect.effect_id:
+                continue
+            if any(name in condition for condition in other.conditions):
+                return True
+            if other.parameters.get("target_effect") == name:
+                return True
+            raw_target = other.target
+            if isinstance(raw_target, str) and raw_target.endswith(f":{name}"):
+                return True
+        return False
+
     @staticmethod
     def _delivery_supported(effect: "CompiledEffect") -> bool:
         if effect.target_spec.mode is not TargetMode.ENEMY:
@@ -144,7 +194,11 @@ class SimpleDamageScoreSink:
         return True
 
     def supports(self, effect: "CompiledEffect") -> bool:
-        return effect.effect_id in self.specs or effect.effect_id in self.pending_specs
+        return (
+            effect.effect_id in self.specs
+            or effect.effect_id in self.pending_specs
+            or effect.effect_id in self.dot_specs
+        )
 
     def attach(self, runtime: "BurstRuntime") -> None:
         self.runtime = runtime
@@ -155,8 +209,21 @@ class SimpleDamageScoreSink:
             runtime.enemy,
         )
 
-    def _score_spec(self, effect_id: int, *, now: float, full_burst: bool) -> bool:
-        spec = self.specs.get(effect_id) or self.pending_specs.get(effect_id)
+    def _damage_spec(self, effect_id: int) -> DamageEventSpec | None:
+        direct = self.specs.get(effect_id) or self.pending_specs.get(effect_id)
+        if direct is not None:
+            return direct
+        dot = self.dot_specs.get(effect_id)
+        return None if dot is None else dot.damage
+
+    def _score_spec(
+        self,
+        effect_id: int,
+        *,
+        now: float,
+        full_burst: bool,
+    ) -> bool:
+        spec = self._damage_spec(effect_id)
         runtime = self.runtime
         resolver = self.resolver
         actor = self._effect_actor.get(effect_id)
@@ -170,6 +237,32 @@ class SimpleDamageScoreSink:
             terms,
             full_burst=full_burst,
         )
+        return True
+
+    @staticmethod
+    def _dot_tick_allowed(spec: FixedDotSpec, tick_t: float, expires_at: float) -> bool:
+        if spec.immediate:
+            return tick_t < expires_at - _DOT_EPS
+        return tick_t <= expires_at + _DOT_EPS
+
+    def _activate_dot(self, effect_id: int, *, now: float) -> bool:
+        spec = self.dot_specs.get(effect_id)
+        runtime = self.runtime
+        actor = self._effect_actor.get(effect_id)
+        if spec is None or runtime is None or actor is None:
+            return False
+
+        generation = self._dot_generation.get(effect_id, 0) + 1
+        self._dot_generation[effect_id] = generation
+        expires_at = float(now) + spec.duration
+        first_t = float(now) if spec.immediate else float(now) + spec.interval
+        if self._dot_tick_allowed(spec, first_t, expires_at):
+            runtime.scheduler.schedule(
+                first_t,
+                EventKind.DAMAGE_TICK,
+                actor=actor,
+                payload=DotTickToken(effect_id, generation, expires_at),
+            )
         return True
 
     def activate(
@@ -191,11 +284,53 @@ class SimpleDamageScoreSink:
             self._pending_effect_ids.append(effect.effect_id)
             return True
 
+        if effect.effect_id in self.dot_specs:
+            return self._activate_dot(effect.effect_id, now=now)
+
         return self._score_spec(
             effect.effect_id,
             now=now,
             full_burst=bool(self.runtime and self.runtime.machine.phase == "full_burst"),
         )
+
+    def handle_scheduled_tick(self, event: ScheduledEvent) -> bool:
+        """Score one current DoT timer boundary and reserve its next tick."""
+        token = event.payload
+        if not isinstance(token, DotTickToken):
+            return False
+        spec = self.dot_specs.get(token.effect_id)
+        runtime = self.runtime
+        if spec is None or runtime is None:
+            return False
+        if self._dot_generation.get(token.effect_id) != token.generation:
+            return False
+        if not self._dot_tick_allowed(spec, event.time, token.expires_at):
+            return False
+
+        # Moris type-2 DoT includes the tick exactly at expiry but evaluates it
+        # with the immediately-pre-expiry buff state. Event ordering alone is not
+        # sufficient because DamageTermResolver excludes t >= expires_at buffs.
+        eval_time = float(event.time)
+        if not spec.immediate and event.time >= token.expires_at - _DOT_EPS:
+            eval_time = nextafter(float(token.expires_at), -inf)
+
+        fired = self._score_spec(
+            token.effect_id,
+            now=eval_time,
+            full_burst=runtime.machine.phase == "full_burst",
+        )
+        if not fired:
+            return False
+
+        next_t = float(event.time) + spec.interval
+        if self._dot_tick_allowed(spec, next_t, token.expires_at):
+            runtime.scheduler.schedule(
+                next_t,
+                EventKind.DAMAGE_TICK,
+                actor=event.actor,
+                payload=token,
+            )
+        return True
 
     def flush_pending_burst(self, *, now: float) -> int:
         """Fire queued B3 bonus damage after full-burst-start state is active."""
@@ -211,7 +346,7 @@ class SimpleDamageScoreSink:
 
     @property
     def supported_count(self) -> int:
-        return len(self.specs) + len(self.pending_specs)
+        return len(self.specs) + len(self.pending_specs) + len(self.dot_specs)
 
     @property
     def unsupported_count(self) -> int:
