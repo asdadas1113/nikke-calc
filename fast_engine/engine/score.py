@@ -7,7 +7,11 @@ from .damage_policy import DIRECT_DAMAGE_STATE_STATS, is_direct_damage_buff_runt
 from .damage_state import DamageTermResolver
 from .model import CompiledSquad, EnemyStaticProfile, FastScore
 from .normal_attack import compile_normal_attack_spec, expected_normal_block_damage
-from .shot_blocks import ShotBlockCursor, compile_static_shot_blocks
+from .shot_blocks import (
+    ShotBlockCursor,
+    compile_static_shot_blocks,
+    static_bullet_lifetime_cadence_safe,
+)
 from .triggers import TriggerMode
 from .weapon import StaticCadenceModifiers
 
@@ -153,6 +157,22 @@ def _direct_skill_state_needs_score_support(effect) -> bool:
     return True
 
 
+def _direct_damage_buff_score_supported(squad: CompiledSquad, effect) -> bool:
+    """Match effect-local policy with the dispatcher's squad-local safety gate."""
+
+    if not is_direct_damage_buff_runtime_supported(effect):
+        return False
+    if effect.parameters.get("duration_bullets") is None:
+        return True
+    # Dynamic selectors such as Miranda's top-ATK target can choose any ally as
+    # combat state changes. Until candidate-recipient analysis is certified, the
+    # ranking path requires every ally's shot cadence to be statically safe.
+    return all(
+        static_bullet_lifetime_cadence_safe(squad, actor)
+        for actor in range(len(squad.members))
+    )
+
+
 def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
     """Return mechanics that make the current static normal score unsafe.
 
@@ -192,7 +212,7 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
             continue
 
         if stat in _NORMAL_DIRECT_DAMAGE_STATS and _direct_normal_effect_needs_score_support(effect):
-            if is_direct_damage_buff_runtime_supported(effect):
+            if _direct_damage_buff_score_supported(squad, effect):
                 continue
             if _is_score_safe_fixed_periodic(effect):
                 continue
@@ -223,7 +243,7 @@ def static_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
             continue
         if not _direct_skill_state_needs_score_support(effect):
             continue
-        if is_direct_damage_buff_runtime_supported(effect):
+        if _direct_damage_buff_score_supported(squad, effect):
             continue
         if _is_score_safe_fixed_periodic(effect):
             continue
