@@ -2,8 +2,38 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from .targets import TargetMode, TargetSpec
+
 if TYPE_CHECKING:
     from .model import CompiledEffect, CompiledSquad
+
+
+_STATIC_ALLY_TARGET_MODES = frozenset({
+    TargetMode.SELF,
+    TargetMode.ALL_ALLIES,
+    TargetMode.ALL_ALLIES_EXCL_SELF,
+    TargetMode.NAMED_ACTOR,
+    TargetMode.ENEMY,
+    TargetMode.ADJACENT,
+    TargetMode.WEAPON,
+    TargetMode.WEAPON_EXCL_SELF,
+    TargetMode.CHARACTER_CLASS,
+    TargetMode.ELEMENT,
+    TargetMode.ELEMENT_WEAPON,
+    TargetMode.SAME_SQUAD,
+})
+
+
+def target_scope_is_static(spec: TargetSpec) -> bool:
+    """Whether a target cohort is fixed by immutable squad metadata.
+
+    Buff/state/rank/burst-history selectors are deliberately dynamic. Composite
+    selectors are static only when every child is static.
+    """
+
+    if spec.mode is TargetMode.COMPOSITE:
+        return all(target_scope_is_static(child) for child in spec.children)
+    return spec.mode in _STATIC_ALLY_TARGET_MODES
 
 
 def possible_ally_targets(
@@ -13,9 +43,9 @@ def possible_ally_targets(
     """Return a conservative set of allies that an effect may target.
 
     Selectors determined only by immutable squad metadata are narrowed exactly.
-    Rank/history/state selectors can change during combat, so they widen to all
-    allies. Callers may therefore use this set for fail-closed certification
-    without assuming a dynamic selector stays on its initial recipient.
+    Dynamic rank/history/state selectors widen to all allies so callers can use
+    this set for compile-time fail-closed checks without assuming a selector
+    stays on its initial recipient.
     """
 
     mode = effect.target_spec.mode.value
@@ -30,6 +60,11 @@ def possible_ally_targets(
         return tuple(range(n))
     if mode == "all_allies_excl_self":
         return tuple(i for i in range(n) if i != effect.actor)
+    if mode == "adjacent":
+        k = max(0, effect.target_spec.count or 0)
+        cand = [i for i in range(n) if i != effect.actor]
+        cand.sort(key=lambda i: (abs(i - effect.actor), i))
+        return tuple(cand[:k])
     if mode in {"weapon", "weapon_excl_self"}:
         return tuple(
             i
