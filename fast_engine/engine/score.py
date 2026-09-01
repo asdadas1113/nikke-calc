@@ -164,6 +164,14 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
     """
 
     blockers: list[str] = []
+    # context.spec may attach manual control policies to a character before the
+    # Fast compile boundary. Cover/hold/reload control changes weapon cadence and
+    # is not implemented by the static shot-block runtime yet. Ignoring it can
+    # silently score periods where Moris deliberately does not shoot at all.
+    for member in squad.members:
+        if member.weapon.get("control"):
+            blockers.append(f"control:{member.name}")
+
     has_score_periodic = any(_is_score_safe_fixed_periodic(effect) for effect in squad.effects)
 
     for effect in squad.effects:
