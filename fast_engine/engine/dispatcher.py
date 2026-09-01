@@ -8,6 +8,7 @@ from .capabilities import CapabilityDisposition
 from .conditions import ConditionEvaluator, ConditionMode, SignalContext
 from .damage_policy import is_direct_damage_buff_runtime_supported
 from .effects import ActiveEffectStore
+from .shot_blocks import static_bullet_lifetime_cadence_safe
 from .state import ENEMY, StateStore
 from .targets import TargetMode, TargetResolver
 from .triggers import TriggerMode
@@ -230,6 +231,24 @@ class TriggerDispatcher:
 
     _is_executable = is_executable_effect
 
+    def _bullet_lifetime_runtime_safe(self, effect: "CompiledEffect") -> bool:
+        """Apply the squad-dependent half of duration_bullets certification.
+
+        Shape/timing support is effect-local and lives in damage_policy. The
+        actual recipient may be selected dynamically (Miranda uses top ATK), so
+        the dispatcher additionally requires every possible ally recipient to
+        have a stable static shot plan. This deliberately skips the effect in a
+        plain runtime with manual control/live cadence rather than activating it
+        and discovering the unsafe target only after state mutation.
+        """
+
+        if effect.parameters.get("duration_bullets") is None:
+            return True
+        return all(
+            static_bullet_lifetime_cadence_safe(self.squad, actor)
+            for actor in range(len(self.squad.members))
+        )
+
     def is_runtime_executable_effect(self, effect: "CompiledEffect") -> bool:
         """Return effects executable in this dispatcher instance.
 
@@ -248,7 +267,7 @@ class TriggerDispatcher:
         ):
             return True
         if self.is_executable_effect(effect):
-            return True
+            return self._bullet_lifetime_runtime_safe(effect)
         if self.damage_sink is None:
             return False
         return (
