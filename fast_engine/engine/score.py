@@ -45,8 +45,8 @@ _CADENCE_OR_SHAPE_STATS = frozenset({
 })
 _STATIC_FOLDABLE = frozenset(StaticCadenceModifiers.__dataclass_fields__)
 
-# Direct numeric states that can change ordinary weapon damage in the initial
-# static-target model. A stat being numerically resolvable is not enough: its
+# Damage-facing states that can change ordinary weapon damage in the initial
+# static-target model. A state being representable is not enough: its
 # trigger/condition/target path must also be deliverable by the score runtime.
 _NORMAL_DIRECT_DAMAGE_STATS = frozenset({
     "atk_pct",
@@ -69,6 +69,8 @@ _NORMAL_DIRECT_DAMAGE_STATS = frozenset({
     "element_bonus_pct",
     "def_pct",
     "personal_enemy_def_down_pct",
+    "pierce_enabled",
+    "armor_break_enabled",
 })
 
 # These are known Moris mechanisms that can alter normal-attack damage but are
@@ -81,8 +83,6 @@ _UNRESOLVED_NORMAL_DAMAGE_STATS = frozenset({
     "charge_dmg_per_max_ammo_pct",
     "charge_speed_overflow_conversion_pct",
     "dmg_scale_mag_pct",
-    "armor_break_enabled",
-    "pierce_enabled",
 })
 
 # A fixed periodic ATK state is the one deliberate exception outside the direct
@@ -153,6 +153,11 @@ def _direct_normal_effect_needs_score_support(effect) -> bool:
 def _direct_skill_state_needs_score_support(effect) -> bool:
     stat = effect.stat or ""
     mode = effect.target_spec.mode.value
+    # Weapon-mode toggles only alter ordinary/weapon-mode shot HitSpec. They do
+    # not contaminate arbitrary skill-damage events, so only the normal score
+    # gate needs to certify their delivery path.
+    if stat in {"pierce_enabled", "armor_break_enabled"}:
+        return False
     # These two stats only enter outgoing DealForm when they are attached to the
     # enemy. Ally defensive versions must not block a ranking score.
     if stat in {"def_pct", "received_dmg_pct"}:
