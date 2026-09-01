@@ -1,4 +1,4 @@
-name: Fast blocker frontier once
+name: Fast public audit once
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
       - fast-engine-phase2-20260901
 
 jobs:
-  frontier:
+  audit:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -14,5 +14,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Public blocker frontier
-        run: python -m fast_engine.research.public_blocker_frontier
+      - name: Standardized public ranking probe
+        run: python -m fast_engine.research.public_ranking_probe
