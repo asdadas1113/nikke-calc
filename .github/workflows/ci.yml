@@ -58,8 +58,32 @@ jobs:
           python -m unittest discover -s calculator -p 'test_*.py'
           python calculator/damage.py
 
-      - name: Fast Engine 단위 테스트
-        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
+      # Fast는 개발 중인 독립 runtime이라 파일 단위로 쪼갠다. 하나가 실패해도
+      # 나머지를 실행해야 jobs API만으로 회귀 범위를 바로 좁힐 수 있다.
+      - name: Fast — burst machine
+        if: always()
+        run: python -m unittest fast_engine.tests.test_burst_machine
+      - name: Fast — capabilities/state
+        if: always()
+        run: python -m unittest fast_engine.tests.test_capabilities_state
+      - name: Fast — compiled triggers
+        if: always()
+        run: python -m unittest fast_engine.tests.test_compiled_triggers
+      - name: Fast — dispatch/burst runtime
+        if: always()
+        run: python -m unittest fast_engine.tests.test_dispatch_burst_runtime
+      - name: Fast — greenfield core
+        if: always()
+        run: python -m unittest fast_engine.tests.test_greenfield_core
+      - name: Fast — periodic runtime
+        if: always()
+        run: python -m unittest fast_engine.tests.test_periodic_runtime
+      - name: Fast — target snapshot
+        if: always()
+        run: python -m unittest fast_engine.tests.test_target_snapshot
+      - name: Fast — weapon cadence
+        if: always()
+        run: python -m unittest fast_engine.tests.test_weapon_cadence
 
       - name: 옵티마이저 단위 테스트
         run: python -m unittest discover -s tests -p 'test_optimizer_*.py'
