@@ -83,8 +83,11 @@ def _compile_damage_event(
         if hit_count <= 0:
             return None
 
+    # Moris delays only the *exact* stat ``bonus_damage`` for a B3 burst cast.
+    # Numeric variants such as ``bonus_damage:5`` stay immediate multi-hit
+    # damage and must not enter the pending full-burst lane.
     is_pending_b3_bonus = (
-        base_stat == "bonus_damage"
+        stat == "bonus_damage"
         and character.burst_stage == "3"
         and any(rule.raw == "burst_cast" for rule in effect.triggers)
     )
@@ -153,8 +156,7 @@ def compile_pending_b3_bonus_damage_event(
     fail-closed blocker in ``SimpleDamageScoreSink``.
     """
 
-    stat = effect.stat or ""
-    if stat.split(":", 1)[0] != "bonus_damage":
+    if (effect.stat or "") != "bonus_damage":
         return None
     if character.burst_stage != "3":
         return None
