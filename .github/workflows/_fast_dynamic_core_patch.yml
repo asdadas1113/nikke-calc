@@ -1,0 +1,143 @@
+name: Fast dynamic core patch
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Apply generic dynamic expected-core patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one patch anchor, found {count}: {old[:80]!r}")
+              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          # 1) Rapid runtime: materialize only expected core threshold crossings.
+          path = "fast_engine/engine/dynamic_rapid.py"
+          replace_once(
+              path,
+              "from typing import Callable, Sequence\n\nfrom .dynamic_reload import DynamicRapidReloadRuntime, _RapidActorState\nfrom .weapon import _EPS\n",
+              "from math import floor\nfrom typing import Callable, Mapping, Sequence\n\nfrom .core_events import is_static_expected_core_count_rule\nfrom .dynamic_reload import (\n    DynamicRapidBoundary,\n    DynamicRapidCountSignal,\n    DynamicRapidReloadRuntime,\n    _RapidActorState,\n)\nfrom .weapon import _EPS\n",
+          )
+          replace_once(
+              path,
+              "    __slots__ = (\"_cover_until\",)\n\n    def __init__(self, *args, **kwargs) -> None:\n        super().__init__(*args, **kwargs)\n        self._cover_until: dict[int, float] = {}\n",
+              "    __slots__ = (\n        \"_cover_until\",\n        \"_core_thresholds\",\n        \"_core_probability_by_actor\",\n        \"_dispatched_core_count\",\n    )\n\n    def __init__(self, *args, **kwargs) -> None:\n        super().__init__(*args, **kwargs)\n        self._cover_until: dict[int, float] = {}\n\n        core_thresholds: dict[int, tuple[int, ...]] = {}\n        for actor, character in enumerate(self.squad.members):\n            values = {\n                int(rule.threshold or 0)\n                for effect in character.effects\n                if self.effect_filter(effect)\n                for rule in effect.triggers\n                if is_static_expected_core_count_rule(rule)\n            }\n            values.discard(0)\n            if values:\n                core_thresholds[actor] = tuple(sorted(values))\n        self._core_thresholds = core_thresholds\n        self._core_probability_by_actor: dict[int, float] = {}\n        self._dispatched_core_count: dict[int, int] = {}\n",
+          )
+          replace_once(
+              path,
+              "        self.effects.enable_dynamic_bullet_lifetime_targets(selected)\n        super().attach_score_sink(selected, sink)\n\n    def _cover_end(self, actor: int) -> float:\n",
+              "        self.effects.enable_dynamic_bullet_lifetime_targets(selected)\n        super().attach_score_sink(selected, sink)\n\n    def supports_expected_core_count(self, actor: int) -> bool:\n        return int(actor) in self.actors and int(actor) in self._core_thresholds\n\n    def configure_expected_core_probability(\n        self, probabilities: Mapping[int, float]\n    ) -> None:\n        \"\"\"Bind fixed per-hit core probabilities before weapon runtime start.\"\"\"\n\n        if self._states:\n            raise RuntimeError(\n                \"Fast dynamic core probability must be configured before weapon start\"\n            )\n        selected: dict[int, float] = {}\n        for raw_actor, raw_probability in probabilities.items():\n            actor = int(raw_actor)\n            if actor not in self._core_thresholds:\n                continue\n            if actor not in self.actors:\n                raise NotImplementedError(\n                    \"Fast dynamic core-count actor is not owned by rapid cadence: \"\n                    + self.squad.members[actor].name\n                )\n            selected[actor] = min(1.0, max(0.0, float(raw_probability)))\n        self._core_probability_by_actor = selected\n        self._dispatched_core_count = {actor: 0 for actor in selected}\n\n    def _expected_core_count(self, actor: int, shot_count: int) -> int:\n        probability = self._core_probability_by_actor.get(actor)\n        if probability is None or probability <= 0.0 or shot_count <= 0:\n            return 0\n        expected_per_shot = self._hits_per_shot(actor) * probability\n        return int(floor(float(shot_count) * expected_per_shot + 1e-12))\n\n    def _crosses_expected_core_threshold(self, st: _RapidActorState) -> bool:\n        thresholds = self._core_thresholds.get(st.actor, ())\n        if not thresholds or st.actor not in self._core_probability_by_actor:\n            return False\n        before = self._expected_core_count(st.actor, st.hit_count)\n        after = self._expected_core_count(st.actor, st.hit_count + 1)\n        return self._crosses(before, after, thresholds)\n\n    def _cover_end(self, actor: int) -> float:\n",
+          )
+          replace_once(
+              path,
+              "    def _shot_is_boundary(self, st: _RapidActorState) -> bool:\n        if self.effects.has_dynamic_bullet_lifetime(st.actor, now=st.phase_end):\n            return True\n        return super()._shot_is_boundary(st)\n",
+              "    def _shot_is_boundary(self, st: _RapidActorState) -> bool:\n        if self.effects.has_dynamic_bullet_lifetime(st.actor, now=st.phase_end):\n            return True\n        if self._crosses_expected_core_threshold(st):\n            return True\n        return super()._shot_is_boundary(st)\n",
+          )
+          replace_once(
+              path,
+              "    def begin_full_burst(\n        self,\n        now: float,\n        casted: Sequence[bool],\n        full_burst_end: float,\n    ) -> tuple[int, ...]:\n",
+              "    def handle_boundary(self, event):\n        boundary = super().handle_boundary(event)\n        if boundary is None:\n            return None\n\n        actor = boundary.actor\n        thresholds = self._core_thresholds.get(actor, ())\n        if actor not in self._core_probability_by_actor or not thresholds:\n            return boundary\n\n        actual = self._expected_core_count(actor, self._states[actor].hit_count)\n        increments, last = self._crossing_increments(\n            self._dispatched_core_count.get(actor, 0),\n            actual,\n            thresholds,\n        )\n        self._dispatched_core_count[actor] = last\n        if not increments:\n            return boundary\n\n        core_signals = tuple(\n            DynamicRapidCountSignal(\"core_hit\", increment)\n            for increment in increments\n        )\n        return DynamicRapidBoundary(\n            actor,\n            core_signals + boundary.signals,\n            is_last_bullet=boundary.is_last_bullet,\n        )\n\n    def begin_full_burst(\n        self,\n        now: float,\n        casted: Sequence[bool],\n        full_burst_end: float,\n    ) -> tuple[int, ...]:\n",
+          )
+
+          # 2) Composite weapon runtime: expose a public bridge, keeping BurstRuntime
+          # out of the rapid runtime's private fields.
+          path = "fast_engine/engine/dynamic_weapon.py"
+          replace_once(
+              path,
+              "from typing import Callable, Sequence, TYPE_CHECKING\n",
+              "from typing import Callable, Mapping, Sequence, TYPE_CHECKING\n",
+          )
+          replace_once(
+              path,
+              "    def attach_score_block_sink(\n        self,\n        actors: tuple[int, ...] | frozenset[int],\n        sink: Callable[[int, int, float], None],\n    ) -> None:\n        self._rapid_reload.attach_score_sink(actors, sink)\n\n    def begin_full_burst(\n",
+              "    def attach_score_block_sink(\n        self,\n        actors: tuple[int, ...] | frozenset[int],\n        sink: Callable[[int, int, float], None],\n    ) -> None:\n        self._rapid_reload.attach_score_sink(actors, sink)\n\n    def supports_dynamic_expected_core_count(self, actor: int) -> bool:\n        return self._rapid_reload.supports_expected_core_count(actor)\n\n    def configure_dynamic_expected_core_probabilities(\n        self, probabilities: Mapping[int, float]\n    ) -> None:\n        self._rapid_reload.configure_expected_core_probability(probabilities)\n\n    def begin_full_burst(\n",
+          )
+
+          # 3) Burst runtime: dynamic rapid actors own their core threshold plan.
+          path = "fast_engine/engine/burst_runtime.py"
+          p = Path(path)
+          text = p.read_text(encoding="utf-8")
+          start = text.index("    def _schedule_static_core_hits(\n")
+          end = text.index("    def _schedule_static_last_bullets(\n", start)
+          new_func = '''    def _schedule_static_core_hits(\n        self, horizon: float, dynamic_actors: set[int]\n    ) -> None:\n        \"\"\"Schedule static core thresholds and configure certified rapid ones.\n\n        Static actors retain the precompiled expected-boundary path. Rapid actors\n        whose physical cadence is already owned by Fast instead materialize only\n        threshold-crossing shots from that live cadence. Core probability itself\n        must remain fixed; live accuracy, pellet shape, or weapon replacement\n        therefore stays fail-closed.\n        \"\"\"\n\n        interested = {\n            effect.actor\n            for effect in self.squad.effects\n            if self.dispatcher.is_runtime_executable_effect(effect)\n            and any(is_static_expected_core_count_rule(rule) for rule in effect.triggers)\n        }\n        if not interested:\n            return\n\n        dynamic_interested = interested & dynamic_actors\n        unsupported_dynamic = {\n            actor\n            for actor in dynamic_interested\n            if not self.weapons.supports_dynamic_expected_core_count(actor)\n        }\n        if unsupported_dynamic:\n            names = \", \".join(\n                self.squad.members[actor].name for actor in sorted(unsupported_dynamic)\n            )\n            raise NotImplementedError(\n                \"Fast dynamic weapon + core_hit_count boundary not certified: \" + names\n            )\n\n        dynamic_invalidators: list[tuple[int, str]] = []\n        for actor in dynamic_interested:\n            for effect in self.squad.effects:\n                if not self._effect_may_target_actor(effect, actor):\n                    continue\n                stat = effect.stat or \"\"\n                if effect.effect_type == \"weapon_change\" or stat in {\n                    \"pellet_count\",\n                    \"pellet_count_fixed\",\n                }:\n                    dynamic_invalidators.append(\n                        (actor, effect.name or stat or effect.effect_type)\n                    )\n                    continue\n                if stat == \"accuracy_pct\":\n                    if (\n                        self._is_static_permanent_accuracy(effect)\n                        and self.dispatcher.is_runtime_executable_effect(effect)\n                    ):\n                        continue\n                    dynamic_invalidators.append((actor, effect.name or stat))\n\n        if dynamic_invalidators:\n            detail = \", \".join(\n                f\"{self.squad.members[actor].name}<-{name}\"\n                for actor, name in dynamic_invalidators[:8]\n            )\n            if len(dynamic_invalidators) > 8:\n                detail += f\", +{len(dynamic_invalidators) - 8} more\"\n            raise NotImplementedError(\n                \"Fast dynamic core_hit_count probability/shape is not fixed: \" + detail\n            )\n\n        resolver = DamageTermResolver(\n            self.squad,\n            self.dispatcher.effects,\n            self.state,\n            self.enemy,\n        )\n        if dynamic_interested:\n            dynamic_probabilities = {\n                actor: self.enemy.core_rate_for_weapon(\n                    self.squad.members[actor].weapon,\n                    accuracy_pct=resolver.resolve(actor, now=0.0).accuracy_pct,\n                )\n                for actor in dynamic_interested\n            }\n            self.weapons.configure_dynamic_expected_core_probabilities(\n                dynamic_probabilities\n            )\n\n        static_interested = interested - dynamic_interested\n        if not static_interested:\n            return\n\n        invalidators: list[tuple[int, str]] = []\n        for effect in self.squad.effects:\n            stat = effect.stat or \"\"\n            is_weapon_change = effect.effect_type == \"weapon_change\"\n            is_cadence = stat in self._STATIC_CORE_CADENCE_INVALIDATORS\n            is_accuracy = stat == \"accuracy_pct\"\n            if not (is_weapon_change or is_cadence or is_accuracy):\n                continue\n\n            if is_cadence and self._is_static_permanent_self_cadence(effect):\n                continue\n            if (\n                is_accuracy\n                and self._is_static_permanent_accuracy(effect)\n                and self.dispatcher.is_runtime_executable_effect(effect)\n            ):\n                continue\n\n            for actor in static_interested:\n                if self._effect_may_target_actor(effect, actor):\n                    invalidators.append((actor, effect.name or stat or effect.effect_type))\n\n        if invalidators:\n            detail = \", \".join(\n                f\"{self.squad.members[actor].name}<-{name}\"\n                for actor, name in invalidators[:8]\n            )\n            if len(invalidators) > 8:\n                detail += f\", +{len(invalidators) - 8} more\"\n            raise NotImplementedError(\n                \"Fast static core_hit_count probability/cadence can be invalidated by live weapon state: \"\n                + detail\n            )\n\n        probabilities = {\n            actor: self.enemy.core_rate_for_weapon(\n                self.squad.members[actor].weapon,\n                accuracy_pct=resolver.resolve(actor, now=0.0).accuracy_pct,\n            )\n            for actor in static_interested\n        }\n\n        from .burst import BurstSignal\n        for boundary in simulate_static_expected_core_boundaries(\n            self.squad,\n            duration=horizon,\n            core_probability_by_actor=probabilities,\n            effect_filter=lambda effect: (\n                self.dispatcher.is_runtime_executable_effect(effect)\n                and effect.actor in static_interested\n            ),\n        ):\n            self.scheduler.schedule(\n                boundary.time,\n                EventKind.TRIGGER_BOUNDARY,\n                actor=boundary.actor,\n                payload=BurstSignal(\n                    boundary.time,\n                    \"core_hit\",\n                    boundary.actor,\n                    boundary.actor,\n                    count_increment=boundary.count_increment,\n                ),\n            )\n\n\n'''
+          p.write_text(text[:start] + new_func + text[end:], encoding="utf-8")
+          replace_once(
+              path,
+              "        self.weapons.start(0.0)\n        dynamic_actors = set(self.weapons.all_dynamic_actors)\n        # Core-hit notifications happen inside Moris' physical-hit loop before\n        # shot-level hit_count/on_attack notifications. Schedule core boundaries\n        # first so equal-time stable ordering preserves that relation for static actors.\n        self._schedule_static_core_hits(horizon, dynamic_actors)\n",
+              "        dynamic_actors = set(self.weapons.all_dynamic_actors)\n        # Core probability is fixed before weapon start. Static actors get\n        # precompiled boundaries; certified rapid actors bind that probability to\n        # their live cadence before any dynamic shot plan is created.\n        self._schedule_static_core_hits(horizon, dynamic_actors)\n        self.weapons.start(0.0)\n",
+          )
+
+          # 4) Score certification: core-count rapid actors are allowed only while
+          # their expected-core probability and physical hit shape are fixed.
+          path = "fast_engine/engine/score.py"
+          replace_once(
+              path,
+              "def _rapid_actor_score_safe(\n",
+              "def _rapid_dynamic_core_score_safe(squad: CompiledSquad, actor: int) -> bool:\n    if not _actor_has_executable_core_count(squad, actor):\n        return True\n    for effect in squad.effects:\n        if actor not in _possible_ally_targets(squad, effect):\n            continue\n        stat = effect.stat or \"\"\n        if effect.effect_type == \"weapon_change\" or stat in {\n            \"pellet_count\",\n            \"pellet_count_fixed\",\n        }:\n            return False\n        if stat != \"accuracy_pct\":\n            continue\n        if (\n            effect.effect_type == \"buff\"\n            and effect.duration in (None, -1.0)\n            and not effect.condition_rules\n            and bool(effect.triggers)\n            and all(rule.event_key == \"battle_start\" for rule in effect.triggers)\n            and TriggerDispatcher.is_executable_effect(effect)\n        ):\n            continue\n        return False\n    return True\n\n\ndef _rapid_actor_score_safe(\n",
+          )
+          replace_once(
+              path,
+              "    if _actor_has_executable_core_count(squad, actor):\n        return False\n",
+              "    if not _rapid_dynamic_core_score_safe(squad, actor):\n        return False\n",
+          )
+
+          # 5) Regression tests: dynamic core -> refill -> cadence replan, plus the
+          # real public Ludmilla blocker disappearing without touching Crown.
+          path = "fast_engine/tests/test_damage_dynamic_ammo_charge.py"
+          replace_once(
+              path,
+              "def _named_consumer(effect_id: int = 1) -> CompiledEffect:\n",
+              "def _core_ammo_effect() -> CompiledEffect:\n    return CompiledEffect(\n        effect_id=0,\n        actor=0,\n        actor_effect_index=0,\n        source=\"synthetic\",\n        source_tag=\"skill\",\n        name=\"core refill\",\n        effect_type=\"instant\",\n        stat=\"ammo_charge_flat\",\n        polarity=\"beneficial\",\n        target=\"self\",\n        target_spec=compile_target(\"self\", actor_by_name={\"synthetic-reload\": 0}),\n        conditions=(),\n        condition_rules=(),\n        triggers=(\n            TriggerRule(\n                \"core_hit_count:2\",\n                \"core_hit\",\n                TriggerMode.MODULO,\n                threshold=2.0,\n                trigger_count_reducible=True,\n            ),\n        ),\n        value=1.0,\n        duration=None,\n        max_stack=None,\n        max_trigger=None,\n        tick_interval=None,\n        parameters={},\n        capability=EffectCapability(\n            character=\"synthetic-reload\",\n            index=0,\n            source=\"synthetic\",\n            name=\"core refill\",\n            effect_type=\"instant\",\n            stat=\"ammo_charge_flat\",\n            category=EffectCategory.CADENCE_TIMELINE,\n            timing_families=(\"weapon_count\",),\n            condition_families=(),\n            target_family=\"ally_static\",\n            advanced_fields=(),\n            disposition=CapabilityDisposition.READY,\n            blockers=(),\n        ),\n    )\n\n\ndef _named_consumer(effect_id: int = 1) -> CompiledEffect:\n",
+          )
+          replace_once(
+              path,
+              "    def test_named_event_consumer_keeps_ammo_effect_fail_closed(self):\n",
+              "    def test_dynamic_core_count_refill_replans_rapid_cadence(self):\n        effect = _core_ammo_effect()\n        squad = _squad((effect,))\n        blockers = static_score_blockers(squad)\n        self.assertNotIn(\n            \"cadence:synthetic-reload:core refill:ammo_charge_flat\", blockers\n        )\n\n        runtime = BurstRuntime(\n            squad,\n            BurstPolicy(duration=2.1, first_burst_time=30.0),\n            EnemyStaticProfile(\n                defense=0.0,\n                core_uptime=1.0,\n                core_hit_rate_when_open=1.0,\n                duration=2.1,\n            ),\n        )\n        observer = StaticNormalAttackObserver(runtime, duration=2.1)\n        result = runtime.run(duration=2.1, score_observer=observer)\n        observer.finish(events_processed=result.events_processed)\n\n        # max_ammo=2, 2 shots/s. Every second expected core hit refills one\n        # round after that shot, so reload is repeatedly avoided: 0,.5,1,1.5,2.\n        self.assertEqual(runtime.weapons._rapid_reload._states[0].hit_count, 5)\n        self.assertEqual(runtime.dispatcher._activation_counts.get(0, 0), 2)\n\n    def test_named_event_consumer_keeps_ammo_effect_fail_closed(self):\n",
+          )
+          replace_once(
+              path,
+              "    def test_public_squad1_little_mermaid_ammo_blocker_is_removed(self):\n",
+              "    def test_public_asuka_ludmilla_ammo_blocker_is_removed(self):\n        names = [\n            \"리틀 머메이드\",\n            \"나가\",\n            \"크라운\",\n            \"아스카 : WILLE\",\n            \"루드밀라 : 윈터 오너\",\n        ]\n        compiled = __import__(\n            \"fast_engine.engine.compiler\", fromlist=[\"compile_moris_squad\"]\n        ).compile_moris_squad(build_squad(names))\n        blockers = static_score_blockers(compiled)\n        self.assertNotIn(\n            \"cadence:루드밀라 : 윈터 오너:여왕의 시선 3:ammo_charge_flat\",\n            blockers,\n        )\n        self.assertIn(\n            \"normal_delivery:크라운:로얄 에타이어 4:atk_dmg_pct\", blockers\n        )\n\n    def test_public_squad1_little_mermaid_ammo_blocker_is_removed(self):\n",
+          )
+          PY
+
+      - name: Focused regression
+        run: |
+          python -m unittest fast_engine.tests.test_damage_dynamic_ammo_charge
+          python -m unittest fast_engine.tests.test_core_probability
+          python -m unittest fast_engine.tests.test_core_hit_events
+          python -m unittest fast_engine.tests.test_dynamic_weapon_signals
+          python -m unittest discover -s fast_engine/tests -p 'test_damage*.py'
+
+      - name: Commit patch and remove temporary workflow
+        run: |
+          rm .github/workflows/_fast_dynamic_core_patch.yml
+          git config user.name "fast-engine-bot"
+          git config user.email "fast-engine-bot@users.noreply.github.com"
+          git add -A
+          git commit -m "impl: dynamic rapid expected core replanning"
+          git push origin HEAD:fast-engine-phase2-20260901
