@@ -235,6 +235,7 @@ class TriggerDispatcher:
         targets = possible_ally_targets(self.squad, effect)
         return bool(targets) and all(
             static_bullet_lifetime_cadence_safe(self.squad, actor)
+            or self.effects.dynamic_bullet_lifetime_supported(actor)
             for actor in targets
         )
 
@@ -353,6 +354,7 @@ class TriggerDispatcher:
                 for target in targets
                 if target != ENEMY
                 and not static_bullet_lifetime_cadence_safe(self.squad, target)
+                and not self.effects.dynamic_bullet_lifetime_supported(target)
             )
             if unsafe_targets:
                 if self._strict_score_delivery:
@@ -360,7 +362,7 @@ class TriggerDispatcher:
                         self.squad.members[target].name for target in unsafe_targets
                     )
                     raise NotImplementedError(
-                        "Fast duration_bullets resolved target cadence not static: " + names
+                        "Fast duration_bullets resolved target cadence not owned: " + names
                     )
                 return False
 
