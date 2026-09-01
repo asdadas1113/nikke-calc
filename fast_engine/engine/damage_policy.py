@@ -17,6 +17,7 @@ DIRECT_DAMAGE_STATE_STATS = frozenset({
     "crit_dmg",
     "normal_atk_crit_dmg",
     "core_dmg_pct",
+    "accuracy_pct",
     "normal_atk_dmg_pct",
     "atk_dmg_pct",
     "burst_dmg_pct",
