@@ -6,7 +6,7 @@ from typing import Callable, TYPE_CHECKING
 from .scheduler import EventScheduler, ScheduledEvent
 from .state import StateStore
 from .triggers import TriggerMode
-from .weapon import DynamicChargeCadenceRuntime
+from .weapon import DynamicChargeCadenceRuntime, WeaponCadenceMachine
 
 if TYPE_CHECKING:
     from .effects import ActiveEffectStore
@@ -29,10 +29,14 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
     """Dynamic SR/RL cadence with several count signals on one physical shot.
 
     The base runtime already fast-forwards unchanged charge/reload spans and
-    materializes only meaningful full-charge boundaries.  This layer adds
-    generic ``hit_count:N`` thresholds to the same physical boundary schedule,
-    so a shot that advances both counters creates one scheduler event rather
-    than one event per semantic counter (and still never creates a frame loop).
+    materializes only meaningful full-charge boundaries. This layer adds generic
+    ``hit_count:N`` thresholds to the same physical boundary schedule, so a shot
+    that advances both counters creates one scheduler event rather than one event
+    per semantic counter (and still never creates a frame loop).
+
+    Current certification requires one hit event per charge shot. A multi-hit
+    charge shot can cross the same modulo threshold several times at one timestamp;
+    that intra-shot case fails closed until represented explicitly.
     """
 
     __slots__ = ("_hit_thresholds",)
@@ -73,6 +77,20 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
                             values.add(threshold)
             if values:
                 hit_thresholds[actor] = tuple(sorted(values))
+
+        for actor in hit_thresholds:
+            character = squad.members[actor]
+            if str(character.weapon.get("fire_mode") or "") != "charge":
+                continue
+            hits_per_shot = WeaponCadenceMachine(
+                actor, character, duration=duration
+            )._hits_per_shot()
+            if hits_per_shot != 1:
+                raise NotImplementedError(
+                    "Fast dynamic charge hit_count with multiple hits per shot "
+                    f"is not certified: {character.name} ({hits_per_shot} hits/shot)"
+                )
+
         self._hit_thresholds = hit_thresholds
 
         # A charge actor may be interesting only because of generic hit_count.
