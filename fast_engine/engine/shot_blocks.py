@@ -146,11 +146,9 @@ class _BlockBuilder(WeaponCadenceMachine):
         return tuple(rows)
 
 
-# A bullet-count lifetime can only be lowered to one future shot boundary while
-# the recipient's cadence is static. These are the same families that can move
-# physical shot timestamps or change how many ammo-consuming shots occur.
 _BULLET_LIFETIME_CADENCE_STATS = frozenset({
     "reload_speed_pct",
+    "reload_time_fixed",
     "max_ammo_pct",
     "max_ammo_flat",
     "max_ammo_infinite",
@@ -179,14 +177,7 @@ def _is_folded_static_self_modifier(effect) -> bool:
 
 
 def static_bullet_lifetime_cadence_safe(squad: CompiledSquad, actor: int) -> bool:
-    """Whether a recipient has a stable static shot plan for bullet expiry.
-
-    The check is intentionally conservative. Any live cadence/weapon mutation in
-    the squad keeps duration_bullets fail-closed; permanent unconditional self
-    modifiers are safe because WeaponCadenceMachine already folds them into the
-    static plan. Manual control is also rejected because it changes whether a
-    nominal shot is actually fired.
-    """
+    """Whether a recipient has a stable static shot plan for bullet expiry."""
 
     if actor < 0 or actor >= len(squad.members):
         return False
@@ -330,14 +321,7 @@ class ShotBlockCursor:
         self.shot_offset = 0
 
     def consume_until(self, time: float, *, inclusive: bool) -> int:
-        """Consume shots ``<= time`` or strictly ``< time``.
-
-        The exclusive path deliberately uses a ceil formulation instead of
-        subtracting epsilon and then feeding that value through the inclusive
-        floor formula.  The latter can add epsilon twice and accidentally pull
-        an exactly-equal shot across the boundary (e.g. t=3.0 into ``<3.0``),
-        which would make hit-triggered buffs retroactively affect their own shot.
-        """
+        """Consume shots ``<= time`` or strictly ``< time``."""
 
         total = 0
         eps = 1e-9
@@ -367,7 +351,6 @@ class ShotBlockCursor:
                 if first >= time - eps:
                     break
                 relative = (time - first) / block.interval
-                # Number of integer offsets i >= 0 satisfying i < relative.
                 take = min(
                     remaining,
                     max(0, int(math.ceil(relative - eps))),
