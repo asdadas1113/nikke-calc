@@ -10,7 +10,7 @@ from .damage_policy import is_direct_damage_buff_runtime_supported
 from .effects import ActiveEffectStore
 from .shot_blocks import static_bullet_lifetime_cadence_safe
 from .state import ENEMY, StateStore
-from .target_scope import possible_ally_targets
+from .target_scope import possible_ally_targets, target_scope_is_static
 from .targets import TargetMode, TargetResolver
 from .triggers import TriggerMode
 
@@ -77,10 +77,6 @@ class TriggerDispatcher:
         "full_burst_start",
         "full_burst_end",
     })
-    # The initial Fast enemy never kills/downs anything and never attacks the
-    # squad. A writer reachable only through these signals cannot change a gauge
-    # under the current static-target scoring contract, so it need not poison an
-    # otherwise-complete lifecycle/burst gauge family.
     _PATTERNLESS_UNREACHABLE_GAUGE_EVENTS = frozenset({
         "enemy_death",
         "received_hit",
@@ -195,12 +191,6 @@ class TriggerDispatcher:
 
     @staticmethod
     def _periodic_timing_is_only_blocker(effect: "CompiledEffect") -> bool:
-        """Allow fixed-grid periodic execution without widening capability yet.
-
-        Capability remains conservative until Moris parity is rerun. This bridge
-        only bypasses PLANNED when every blocker is exactly periodic timing;
-        stat/target/condition/category blockers still fail closed.
-        """
         blockers = effect.capability.blockers
         return (
             effect.capability.disposition is CapabilityDisposition.PLANNED
@@ -235,12 +225,14 @@ class TriggerDispatcher:
     def _bullet_lifetime_runtime_safe(self, effect: "CompiledEffect") -> bool:
         """Apply the squad-dependent half of duration_bullets certification.
 
-        Shape/timing support is effect-local and lives in damage_policy. Static
-        selectors are checked only against allies they can actually reach;
-        dynamic selectors remain conservatively widened by possible_ally_targets.
+        Immutable target cohorts are certified before runtime. Dynamic rank,
+        state, and burst-history cohorts defer cadence validation until the
+        activation-time target snapshot has been resolved.
         """
 
         if effect.parameters.get("duration_bullets") is None:
+            return True
+        if not target_scope_is_static(effect.target_spec):
             return True
         targets = possible_ally_targets(self.squad, effect)
         return bool(targets) and all(
@@ -249,15 +241,6 @@ class TriggerDispatcher:
         )
 
     def is_runtime_executable_effect(self, effect: "CompiledEffect") -> bool:
-        """Return effects executable in this dispatcher instance.
-
-        Score-only damage support is deliberately opt-in through ``damage_sink``.
-        Lifecycle/burst gauge writers are also instance-scoped because a gauge
-        family is certified only after scanning the whole squad for unsupported
-        reachable writers or advanced gauge-capacity mechanics. Named DoT stack
-        operations use the same score-only bridge and therefore cannot widen a
-        plain BurstRuntime silently.
-        """
         family = self._gauge_family(effect)
         if (
             family is not None
@@ -275,7 +258,6 @@ class TriggerDispatcher:
         )
 
     def _is_state_dependency(self, effect: "CompiledEffect") -> bool:
-        """Track otherwise-unsupported named buffs needed by certified conditions."""
         return (
             effect.effect_type == "buff"
             and bool(effect.name)
@@ -367,6 +349,21 @@ class TriggerDispatcher:
             owner_actor=(effect.actor if target_owner_actor is None else target_owner_actor),
             now=now,
         )
+        if effect.parameters.get("duration_bullets") is not None:
+            unsafe_targets = tuple(
+                target
+                for target in targets
+                if target != ENEMY
+                and not static_bullet_lifetime_cadence_safe(self.squad, target)
+            )
+            if unsafe_targets:
+                names = ", ".join(
+                    self.squad.members[target].name for target in unsafe_targets
+                )
+                raise NotImplementedError(
+                    "Fast duration_bullets resolved target cadence not static: " + names
+                )
+
         stat = effect.stat or ""
         value = float(effect.value or 0.0)
 
