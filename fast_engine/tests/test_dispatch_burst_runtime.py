@@ -8,8 +8,10 @@ from calculator.timeline import simulate
 from context.spec import build_squad
 from fast_engine.engine.burst import compile_burst_policy
 from fast_engine.engine.burst_runtime import BurstRuntime
+from fast_engine.engine.capabilities import CapabilityDisposition
 from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.conditions import compile_condition
+from fast_engine.engine.last_bullet import simulate_static_last_bullet_boundaries
 from fast_engine.engine.targets import compile_target
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -74,17 +76,68 @@ class BurstDispatchParityTests(unittest.TestCase):
             # can accumulate by a few frames over repeated short Red Hood cycles.
             self.assertLessEqual(abs(a - b), 0.05, (a, b))
 
-
     def test_killer_wife_full_charge_fast_forward_drives_burst_cooldown(self):
         names = ["D : 킬러 와이프", "아니스", "라피", "미하라", "프로덕트 08"]
         squad, _compiled, fast = self._fast(names, 80.0)
         moris_starts = self._moris_burst_times(squad, 80.0, "full_burst 시작")
         self.assertGreaterEqual(len(fast.full_burst_starts), 6)
         # Without weapon trigger dispatch this fixture falls back to ~20 s
-        # burst cycles.  Count-boundary fast-forward restores the 13 s rhythm.
+        # burst cycles. Count-boundary fast-forward restores the 13 s rhythm.
         self.assertLess(fast.full_burst_starts[1] - fast.full_burst_starts[0], 14.0)
         for a, b in zip(fast.full_burst_starts[:6], moris_starts[:6]):
             self.assertFrameClose(a, b)
+
+    def test_dorothy_static_last_bullet_boundaries_track_moris_ammo_zero(self):
+        names = ["도로시", "아니스", "라피", "미하라", "프로덕트 08"]
+        squad = build_squad(names)
+        compiled = compile_moris_squad(squad)
+        rows = simulate_static_last_bullet_boundaries(
+            compiled,
+            duration=50.0,
+            effect_filter=lambda effect: (
+                effect.capability.disposition is CapabilityDisposition.READY
+            ),
+        )
+        fast_times = [row.time for row in rows if row.actor == 0]
+        moris = simulate(
+            squad,
+            config={"duration": 50.0, "rng_mode": "expected"},
+            verbose=True,
+        )
+        moris_times = [
+            row.t
+            for row in moris.log.ammo_log
+            if row.caster == "도로시" and row.ammo == 0
+        ]
+        self.assertTrue(fast_times)
+        self.assertTrue(moris_times)
+        pairs = list(zip(fast_times[:3], moris_times[:3]))
+        detail = ", ".join(
+            f"{i}:F={fast_t:.6f}/M={moris_t:.6f}/d={fast_t-moris_t:+.6f}"
+            for i, (fast_t, moris_t) in enumerate(pairs, start=1)
+        )
+        self.assertLessEqual(
+            max(abs(fast_t - moris_t) for fast_t, moris_t in pairs),
+            0.35,
+            detail,
+        )
+
+    def test_dorothy_last_bullet_cdr_preserves_moris_burst_cycles(self):
+        names = ["도로시", "아니스", "라피", "미하라", "프로덕트 08"]
+        squad, _compiled, fast = self._fast(names, 80.0)
+        moris_starts = self._moris_burst_times(squad, 80.0, "full_burst 시작")
+        self.assertEqual(len(fast.full_burst_starts), len(moris_starts))
+        self.assertGreaterEqual(len(moris_starts), 4)
+        pairs = list(zip(fast.full_burst_starts, moris_starts))
+        detail = ", ".join(
+            f"{i}:F={fast_t:.6f}/M={moris_t:.6f}/d={fast_t-moris_t:+.6f}"
+            for i, (fast_t, moris_t) in enumerate(pairs, start=1)
+        )
+        self.assertLessEqual(
+            max(abs(fast_t - moris_t) for fast_t, moris_t in pairs),
+            0.35,
+            detail,
+        )
 
     def test_modernia_fullburst_duration_only_applies_when_she_casts_b3(self):
         names = ["리타", "크라운", "모더니아", "앨리스", "나가"]
