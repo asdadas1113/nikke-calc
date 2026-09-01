@@ -55,9 +55,10 @@ class DynamicRapidReloadRuntime:
     """Compressed live-reload cadence for non-clip auto/MG weapons.
 
     Only reload speed is dynamic in this slice. Fire rate, magazine size and shot
-    shape remain statically compiled, so ordinary shots can be advanced inside
-    the runtime without adding one scheduler event per bullet. The global
-    scheduler sees only magazine-ending shots and reducible hit/pellet thresholds.
+    shape remain statically compiled, so ordinary shots and magazine transitions
+    can be advanced inside the runtime without adding one scheduler event per
+    bullet. The global scheduler is needed only for reducible hit/pellet trigger
+    crossings; score-only actors with no such consumers remain fully compressed.
 
     Reload semantics mirror Moris:
     - reload_start_delay and the reload action use speed at reload start;
@@ -188,11 +189,6 @@ class DynamicRapidReloadRuntime:
         return any(before // threshold != after // threshold for threshold in thresholds)
 
     def _shot_is_boundary(self, st: _RapidActorState) -> bool:
-        if st.ammo <= 1:
-            # Keep every magazine end globally visible. That preserves post-shot
-            # last_bullet delivery and prevents the score path from fast-forwarding
-            # across the point where reload timing begins.
-            return True
         next_hit = st.hit_count + 1
         if any(next_hit % threshold == 0 for threshold in self._hit_thresholds.get(st.actor, ())):
             return True
