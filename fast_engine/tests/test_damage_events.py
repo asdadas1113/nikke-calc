@@ -4,7 +4,11 @@ import unittest
 
 from calculator.damage import calc_damage_avg, default_hit_type
 from fast_engine.engine.damage import DamageTerms
-from fast_engine.engine.damage_events import compile_simple_damage_event, expected_damage_event
+from fast_engine.engine.damage_events import (
+    compile_pending_b3_bonus_damage_event,
+    compile_simple_damage_event,
+    expected_damage_event,
+)
 from fast_engine.engine.model import CompiledCharacter, CompiledEffect, EnemyStaticProfile
 from fast_engine.engine.triggers import TriggerMode, TriggerRule
 
@@ -182,6 +186,28 @@ class SimpleDamageEventTests(unittest.TestCase):
         )
         self.assertAlmostEqual(fast, moris, places=8)
 
+    def test_b3_burst_cast_bonus_has_distinct_pending_compiler(self):
+        char = _character(burst_stage="3")
+        effect = _effect(stat="bonus_damage", value=500.0, burst_cast=True)
+        self.assertIsNone(compile_simple_damage_event(effect, char))
+        pending = compile_pending_b3_bonus_damage_event(effect, char)
+        self.assertIsNotNone(pending)
+        self.assertEqual(pending.hit_count, 1)
+        self.assertFalse(pending.hit.is_burst_damage)
+        self.assertFalse(pending.hit.is_normal_atk)
+
+        # The Moris special case is base B3 + bonus_damage + burst_cast only.
+        self.assertIsNone(
+            compile_pending_b3_bonus_damage_event(
+                effect, _character(burst_stage="2")
+            )
+        )
+        self.assertIsNone(
+            compile_pending_b3_bonus_damage_event(
+                _effect(stat="burst_damage", burst_cast=True), char
+            )
+        )
+
     def test_dynamic_or_delayed_damage_fails_closed(self):
         char = _character(burst_stage="3")
         self.assertIsNone(
@@ -198,6 +224,22 @@ class SimpleDamageEventTests(unittest.TestCase):
         self.assertIsNone(
             compile_simple_damage_event(
                 _effect(stat="bonus_damage", burst_cast=True), char
+            )
+        )
+        self.assertIsNone(
+            compile_pending_b3_bonus_damage_event(
+                _effect(
+                    stat="bonus_damage",
+                    burst_cast=True,
+                    parameters={"scaling": "stack_count", "scaling_ref": "x"},
+                ),
+                char,
+            )
+        )
+        self.assertIsNone(
+            compile_pending_b3_bonus_damage_event(
+                _effect(stat="bonus_damage", burst_cast=True, target="same_target:paired"),
+                char,
             )
         )
         self.assertIsNone(
