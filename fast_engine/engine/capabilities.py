@@ -86,7 +86,7 @@ CURRENT_RUNTIME_CAPABILITIES = CapabilityProfile(
     supported_stats=frozenset({
         "burst_cooldown_reduce", "burst_cooldown", "fullburst_duration",
         "reload_speed_pct", "charge_speed_pct", "charge_speed_caster_based_pct",
-        "max_ammo_pct", "max_ammo_flat", "charge_time_flat",
+        "max_ammo_pct", "max_ammo_flat", "ammo_charge_pct", "ammo_charge_flat", "charge_time_flat",
     }),
     supported_stat_prefixes=("burst_stage_override:",),
     supported_timing_families=frozenset({"lifecycle", "burst"}),

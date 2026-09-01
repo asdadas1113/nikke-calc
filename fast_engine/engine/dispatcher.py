@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import Callable, TYPE_CHECKING
 
 from .capabilities import CapabilityDisposition
 from .conditions import ConditionEvaluator, ConditionMode, SignalContext
@@ -37,7 +37,7 @@ class TriggerDispatcher:
         "squad", "state", "enemy", "burst", "scheduler", "effects", "targets",
         "conditions", "damage_sink", "_effect_table", "_event_counts", "_conditional_counts",
         "_activation_counts", "_state_dependency_names", "_gauge_maxima",
-        "_unsafe_gauge_families", "_strict_score_delivery",
+        "_unsafe_gauge_families", "_strict_score_delivery", "_ammo_charge_sink",
     )
 
     _AUXILIARY_STATS = frozenset({
@@ -55,6 +55,8 @@ class TriggerDispatcher:
         "charge_speed_caster_based_pct",
         "max_ammo_pct",
         "max_ammo_flat",
+        "ammo_charge_pct",
+        "ammo_charge_flat",
         "charge_time_flat",
     })
 
@@ -110,6 +112,7 @@ class TriggerDispatcher:
         self._activation_counts: dict[int, int] = defaultdict(int)
         self._gauge_maxima: dict[tuple[int, str], float] = {}
         self._strict_score_delivery = False
+        self._ammo_charge_sink: Callable[[str, tuple[int, ...], float, float], bool] | None = None
 
         unsafe_gauges: set[tuple[int, str]] = set()
         for effect in self._effect_table:
@@ -140,6 +143,12 @@ class TriggerDispatcher:
 
     def enable_strict_score_delivery(self) -> None:
         self._strict_score_delivery = True
+
+    def attach_ammo_charge_sink(
+        self,
+        sink: Callable[[str, tuple[int, ...], float, float], bool],
+    ) -> None:
+        self._ammo_charge_sink = sink
 
     @classmethod
     def _gauge_family(cls, effect: "CompiledEffect") -> tuple[int, str] | None:
@@ -376,6 +385,12 @@ class TriggerDispatcher:
                 for target in targets:
                     if target != ENEMY:
                         self.burst.adjust_cooldown(target, value, now, self.scheduler)
+            elif stat in {"ammo_charge_pct", "ammo_charge_flat"}:
+                if self._ammo_charge_sink is None or any(target == ENEMY for target in targets):
+                    return False
+                actor_targets = tuple(int(target) for target in targets)
+                if not self._ammo_charge_sink(stat, actor_targets, value, now):
+                    return False
             elif stat in self._GAUGE_STATS:
                 family = self._gauge_family(effect)
                 if (

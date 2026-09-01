@@ -291,6 +291,66 @@ def _rapid_actor_score_safe(
     return True
 
 
+def _actor_has_live_max_ammo_mutation(squad: CompiledSquad, actor: int) -> bool:
+    for effect in squad.effects:
+        if (effect.stat or "") not in {"max_ammo_pct", "max_ammo_flat", "max_ammo_infinite"}:
+            continue
+        if _is_folded_static_self_modifier(effect):
+            continue
+        if actor in _possible_ally_targets(squad, effect):
+            return True
+    return False
+
+
+def _ammo_charge_named_event_safe(squad: CompiledSquad, effect) -> bool:
+    if not effect.name:
+        return True
+    event_key = f"event:{effect.name}"
+    return not any(
+        other.effect_id != effect.effect_id
+        and any(rule.event_key == event_key for rule in other.triggers)
+        for other in squad.effects
+    )
+
+
+def _ammo_charge_recipient_score_safe(squad: CompiledSquad, actor: int) -> bool:
+    if _actor_has_live_max_ammo_mutation(squad, actor):
+        return False
+    mode = str(squad.members[actor].weapon.get("fire_mode") or "")
+    if mode in {"auto", "auto_warmup"}:
+        return _rapid_actor_score_safe(squad, actor)
+    if mode == "charge":
+        return _charge_actor_score_safe(squad, actor)
+    return False
+
+
+def _is_dynamic_ammo_charge_score_supported(squad: CompiledSquad, effect) -> bool:
+    if (effect.stat or "") not in {"ammo_charge_pct", "ammo_charge_flat"}:
+        return False
+    if effect.effect_type != "instant" or effect.value is None or float(effect.value) < 0.0:
+        return False
+    if not TriggerDispatcher.is_executable_effect(effect):
+        return False
+    # Weapon state is initialized after battle_start in BurstRuntime. Keep that
+    # lifecycle shape fail-closed in the first ammo-refill slice.
+    if any(rule.event_key == "battle_start" for rule in effect.triggers):
+        return False
+    if not _ammo_charge_named_event_safe(squad, effect):
+        return False
+    targets = _possible_ally_targets(squad, effect)
+    return bool(targets) and all(
+        _ammo_charge_recipient_score_safe(squad, actor) for actor in targets
+    )
+
+
+def _dynamic_ammo_charge_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
+    actors: set[int] = set()
+    for effect in squad.effects:
+        if _is_dynamic_ammo_charge_score_supported(squad, effect):
+            actors.update(_possible_ally_targets(squad, effect))
+    return tuple(sorted(actors))
+
+
 def _reload_recipient_score_safe(squad: CompiledSquad, actor: int) -> bool:
     member = squad.members[actor]
     mode = str(member.weapon.get("fire_mode") or "")
@@ -356,6 +416,7 @@ def _dynamic_charge_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
         ):
             actors.update(charge)
     actors.update(charge & set(_dynamic_reload_score_actors(squad)))
+    actors.update(charge & set(_dynamic_ammo_charge_score_actors(squad)))
     actors.update(_dynamic_charge_bullet_lifetime_score_actors(squad))
     return tuple(sorted(actors))
 
@@ -372,6 +433,12 @@ def _dynamic_rapid_reload_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
         for actor, member in enumerate(squad.members)
         if member.weapon.get("control")
         and _rapid_actor_score_safe(squad, actor, require_cover_control=True)
+    )
+    actors.update(
+        actor
+        for actor in _dynamic_ammo_charge_score_actors(squad)
+        if str(squad.members[actor].weapon.get("fire_mode") or "")
+        in {"auto", "auto_warmup"}
     )
     return tuple(sorted(actors))
 
@@ -461,6 +528,8 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
             ):
                 continue
             if stat == "reload_speed_pct" and _is_dynamic_reload_score_supported(squad, effect):
+                continue
+            if stat in {"ammo_charge_pct", "ammo_charge_flat"} and _is_dynamic_ammo_charge_score_supported(squad, effect):
                 continue
             blockers.append(f"cadence:{label}")
             continue
@@ -565,6 +634,7 @@ class StaticNormalAttackObserver:
                 self.dynamic_reload_actors,
                 self._score_dynamic_reload_block,
             )
+        runtime.dispatcher.attach_ammo_charge_sink(runtime.weapons.apply_ammo_charge)
 
     def _score_shots(self, actor: int, count: int, *, eval_time: float) -> None:
         if count <= 0:

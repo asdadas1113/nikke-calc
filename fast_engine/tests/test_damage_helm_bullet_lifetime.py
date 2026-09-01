@@ -199,7 +199,7 @@ class HelmTenShotLifetimeTests(unittest.TestCase):
         self.assertNotIn("cadence:크라운:원 포 올 2:reload_speed_pct", blockers)
         self.assertNotIn("normal_delivery:헬름:이지스 캐논 3:charge_dmg_mag_pct", blockers)
         self.assertNotIn("skill_state_delivery:헬름:이지스 캐논 3:charge_dmg_mag_pct", blockers)
-        self.assertIn("cadence:리틀 머메이드:세이렌 송 2:ammo_charge_pct", blockers)
+        self.assertNotIn("cadence:리틀 머메이드:세이렌 송 2:ammo_charge_pct", blockers)
         self.assertIn("normal_delivery:크라운:로얄 에타이어 4:atk_dmg_pct", blockers)
 
     def test_reactivation_resets_ten_shot_generation(self):

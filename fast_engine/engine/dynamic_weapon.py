@@ -169,6 +169,74 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
     ) -> tuple[int, ...]:
         return self._rapid_reload.begin_full_burst(now, casted, full_burst_end)
 
+    @staticmethod
+    def _ammo_charge_gain(full: int, stat: str, value: float) -> int:
+        if stat == "ammo_charge_pct":
+            # Moris uses Python round() on final effective maximum ammo.
+            return int(round(float(full) * float(value) / 100.0))
+        if stat == "ammo_charge_flat":
+            return int(value)
+        raise ValueError(f"unsupported ammo charge stat: {stat}")
+
+    def apply_ammo_charge(
+        self,
+        stat: str,
+        targets: tuple[int, ...],
+        value: float,
+        now: float,
+    ) -> bool:
+        """Apply an instant ammo refill to dynamic weapon state.
+
+        All recipients are validated before mutation. Reload-cancel-on-full is
+        intentionally outside this slice; certification rejects such controls.
+        """
+
+        if value < 0.0:
+            return False
+        selected = tuple(dict.fromkeys(int(actor) for actor in targets))
+        dynamic = set(self.all_dynamic_actors)
+        if not selected or any(actor not in dynamic for actor in selected):
+            return False
+
+        # Bring every selected actor to immediately before the instant effect.
+        # BurstRuntime already does this globally, but keeping it local makes the
+        # callback safe for direct tests and future non-burst instant sources.
+        self.advance_to(float(now), inclusive=False)
+
+        for actor in selected:
+            if actor in self._rapid_reload.actors:
+                runtime = self._rapid_reload
+                st = runtime._states.get(actor)
+                if st is None:
+                    return False
+                full = runtime._machine(actor)._full_ammo()
+                gain = self._ammo_charge_gain(full, stat, value)
+                st.ammo = min(full, st.ammo + gain)
+                if st.phase == "reload_wait" and st.ammo > 0:
+                    # The empty-magazine probe has not started reloading yet.
+                    # Refilled ammo therefore preserves that next fire probe.
+                    st.phase = "firing"
+                    st.phase_end = max(float(now), st.phase_end)
+                runtime._invalidate(st)
+                runtime._plan(actor, float(now))
+                self.state.set_ammo(actor, st.ammo)
+                continue
+
+            st = self._states.get(actor)
+            if st is None:
+                return False
+            full = self._full_ammo(actor, float(now))
+            gain = self._ammo_charge_gain(full, stat, value)
+            st.ammo = min(full, st.ammo + gain)
+            if st.phase == "post_fire_reload" and st.ammo > 0:
+                # Refill arrived after the last shot but before reload start.
+                # Keep the existing post-fire boundary, then charge again.
+                st.phase = "post_fire"
+            self._invalidate(st)
+            self._plan(actor, float(now))
+            self.state.set_ammo(actor, st.ammo)
+        return True
+
     def consume_post_shot_bullet_lifetimes(self, actor: int, now: float) -> tuple[int, ...]:
         return self._rapid_reload.consume_post_shot_bullet_lifetimes(actor, now)
 
