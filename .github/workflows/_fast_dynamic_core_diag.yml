@@ -1,0 +1,58 @@
+name: Fast dynamic core diag
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Diagnose Ludmilla rapid safety
+        run: |
+          python - <<'PY'
+          from context.spec import build_squad
+          from fast_engine.engine.compiler import compile_moris_squad
+          import fast_engine.engine.score as s
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+
+          names = ["리틀 머메이드", "나가", "크라운", "아스카 : WILLE", "루드밀라 : 윈터 오너"]
+          squad = compile_moris_squad(build_squad(names))
+          actor = names.index("루드밀라 : 윈터 오너")
+          member = squad.members[actor]
+          print("weapon", member.weapon)
+          print("core_count", s._actor_has_executable_core_count(squad, actor))
+          print("rapid_safe", s._rapid_actor_score_safe(squad, actor))
+          print("unhandled_counts", s._actor_has_unhandled_count_event(squad, actor, frozenset({"hit_count", "pellet_hit"})))
+          print("special_events", s._actor_has_executable_event(squad, actor, frozenset({"last_bullet_fire", "last_bullet", "on_attack", "event:full_reload", "full_reload", "event:cover"})))
+          print("squad_body_hits", [
+              (e.actor, squad.members[e.actor].name, e.name, e.stat)
+              for e in squad.effects
+              if TriggerDispatcher.is_executable_effect(e)
+              and any(r.event_key == "squad_body_hit" for r in e.triggers)
+          ])
+          print("weapon_changes", [
+              (e.actor, squad.members[e.actor].name, e.name, e.stat)
+              for e in squad.effects
+              if e.effect_type == "weapon_change" and actor in s._possible_ally_targets(squad, e)
+          ])
+          print("accuracy_or_pellet", [
+              (e.actor, squad.members[e.actor].name, e.name, e.stat, [r.raw for r in e.triggers], e.duration)
+              for e in squad.effects
+              if (e.stat or "") in {"accuracy_pct", "pellet_count", "pellet_count_fixed"}
+              and actor in s._possible_ally_targets(squad, e)
+          ])
+          print("ammo_effects", [
+              (e.actor, squad.members[e.actor].name, e.name, e.stat, [r.raw for r in e.triggers])
+              for e in squad.effects
+              if (e.stat or "") in {"ammo_charge_flat", "ammo_charge_pct"}
+              and actor in s._possible_ally_targets(squad, e)
+          ])
+          print("blockers", s.static_score_blockers(squad))
+          PY
