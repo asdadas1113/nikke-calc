@@ -1,6 +1,6 @@
 # Research-engine lessons for the greenfield Fast runtime
 
-The controlled Crown/Mast research engine is no longer retained in this repository. Only the reusable design/profiling lessons are kept here. The production Fast Engine must not depend on the removed prototype.
+The controlled Crown/Mast research engine is no longer retained in this repository. Only reusable design/profiling lessons are kept here. Production Fast Engine must not depend on the removed prototype.
 
 ## Keep the ideas
 
@@ -8,19 +8,86 @@ The controlled Crown/Mast research engine is no longer retained in this reposito
 - Treat combat as a timeline of meaningful state changes rather than as one static DPS number.
 - Buff/state lookup is a major performance hotspot; compile/cache repeated resolution work instead of recomputing it per shot.
 - Unchanged spans can be aggregated. A weapon that fires under identical state for a span does not need one Python object per frame or per bullet unless a trigger boundary falls inside the span.
-- A score-oriented runtime does not need Moris UI artifacts such as the full hit history, graph timeline, or verbose combat log.
-- Profiling of the controlled engine demonstrated that reducing repeated buff resolution can materially improve 180-second runtime, so the design should make state-version caching natural from the start.
+- A score-oriented runtime does not need Moris UI artifacts such as full hit history, graph timeline, or verbose combat log.
+- Reducing repeated buff/damage-state resolution materially improves 180-second runtime, so state-version caching should be natural from the start.
+- Expected-value deterministic treatment is preferable to RNG noise for broad candidate ranking when it preserves long-run proc frequency.
+- Raw events should be promoted selectively: only actors/effects that actually consume an every-hit/every-charge signal should force those boundaries into the scheduler.
+
+## Accuracy lesson: protect ranking, not cosmetic parity
+
+The project goal is not exact Moris decimal equality. The important distinction is:
+
+- harmless/common approximation error;
+- **systematic comparison bias** that favors or suppresses one weapon/mechanic/team archetype.
+
+Examples encountered during development:
+
+- Moris frame quantization can produce small timing differences that should not force a global 1/60 Fast loop.
+- A battle-end boundary difference (`180.0 s` included vs excluded) caused an exact extra periodic proc and therefore meaningful comparison error; that semantic boundary had to match.
+- Treating SG `hit_count` as pellet count instead of one per trigger pull can make SG count effects activate dramatically too early. This is a ranking-bias bug, not cosmetic damage error.
+- Using one common core-hit probability for all weapon types can bias rankings on core-heavy bosses because Moris core probability depends on weapon spread, accuracy and core size.
+
+When choosing where to spend fidelity, prioritize errors that can reorder squads.
+
+## Character anomaly debugging rule
+
+Do **not** change common runtime logic merely because one character disagrees with Moris.
+
+Use this diagnosis hierarchy:
+
+1. same pattern across many characters → common formula/runtime issue;
+2. same pattern within one weapon/mechanic cohort → mechanic module issue;
+3. exactly one character differs → inspect that character's data/unique mechanic first.
+
+Unique mechanics worth checking before touching shared logic include:
+
+- position/adjacency targeting;
+- Top/Lowest ATK or class/element restricted targeting;
+- burst-caster/B3-only selection;
+- HP/ammo/stack/gauge conditions;
+- activation-time snapshot vs continuous re-ranking;
+- source order of effects in one skill;
+- unusual stacking/refresh behavior;
+- caster-based coefficients;
+- max-HP scaling;
+- charge/core/share damage;
+- invulnerability/cover/taunt/pierce/part/summon states.
+
+Preferred layering:
+
+```text
+common calculation
+  → generic mechanic handler
+  → named-character exception only if genuinely unavoidable
+```
+
+A character exposing a mechanic first does not make that mechanic character-specific. For example, adjacency/side-slot behavior should be a position-targeting primitive rather than `if Rouge` logic.
+
+## Fail-closed lesson
+
+A numeric stat being understood is not enough to claim support.
+
+For a score to be trustworthy, Fast must also be able to deliver:
+
+- the trigger timing;
+- the condition;
+- the target selection;
+- the state lifetime/refresh semantics.
+
+If an unsupported buff/debuff could change otherwise-supported damage, block that score rather than silently omit the state. Unsupported isolated damage events may be reported separately when the returned subtotal remains interpretable.
+
+Capability labels should therefore be conservative. A narrow auxiliary path (for example, using one ATK buff only to resolve Top-ATK targeting) does not make the full damage mechanic globally READY.
 
 ## Do not carry the research constraints forward
 
 The following were research-specific and must not define production abstractions:
 
-- `TeamRoster.crown` / `TeamRoster.mast` as structural slots.
-- B2 rotation restricted to `crown | mast`.
-- Crown/Maid Mast-specific `_on_b2` dispatch.
-- `MastState`, Drunken/Hangover handling embedded in the scheduler rather than compiled effects/state primitives.
-- fixed Crown/Mast cycle scenarios or a fixed 12-cycle policy.
-- any assumption that Burst II is owned by two named characters.
+- `TeamRoster.crown` / `TeamRoster.mast` as structural slots;
+- B2 rotation restricted to `crown | mast`;
+- Crown/Maid Mast-specific `_on_b2` dispatch;
+- `MastState`, Drunken/Hangover handling embedded in the scheduler rather than compiled effects/state primitives;
+- fixed Crown/Mast cycle scenarios or a fixed 12-cycle policy;
+- any assumption that Burst II is owned by two named characters;
 - fixed 1/60-second frame stepping.
 
 The generic runtime must be character-name blind. A burst actor is selected by burst metadata/policy and then its compiled effects are dispatched; the scheduler must not contain `if Crown`, `if Mast`, or equivalent named-character branches.
@@ -29,9 +96,11 @@ The generic runtime must be character-name blind. A burst actor is selected by b
 
 It proved feasibility, not generality:
 
-1. a much lighter score-oriented runtime can execute a 180-second theoretical fight faster than the full Moris path;
+1. a much lighter score-oriented runtime can execute a 180-second theoretical fight dramatically faster than the full Moris path;
 2. event/buff/damage separation is useful;
 3. aggressive caching/aggregation has large headroom;
 4. character-specific research assumptions make retrofitting the engine into a general Solo Raid runtime more expensive than starting a greenfield core.
 
-Therefore the production Fast Engine is greenfield. These written lessons are the only retained project dependency from that research prototype.
+The greenfield Fast runtime has since reinforced that conclusion: 180-second five-person score tests are already in the tens-of-milliseconds range on CI fixtures while preserving increasingly broad Moris semantics.
+
+Therefore the production Fast Engine remains greenfield. These written lessons are the only retained project dependency from the old controlled research prototype.
