@@ -207,7 +207,7 @@ class DynamicMultiSignalTests(unittest.TestCase):
             [("hit_count", 3)],
         )
 
-    def test_multi_hit_charge_hit_count_fails_closed(self):
+    def test_multi_hit_charge_still_advances_hit_count_once_per_attack(self):
         base = _squad()
         hit_only = _effect(0, "hit_count:3", "hit_count", 3)
         weapon = dict(base.members[0].weapon)
@@ -219,15 +219,23 @@ class DynamicMultiSignalTests(unittest.TestCase):
         )
         scheduler = EventScheduler()
         state = StateStore.from_compiled_squad(squad)
-        with self.assertRaisesRegex(NotImplementedError, "multiple hits per shot"):
-            MultiSignalChargeCadenceRuntime(
-                squad,
-                ActiveEffectStore(squad, state),
-                state,
-                scheduler,
-                duration=10.0,
-                effect_filter=lambda _effect: True,
-            )
+        runtime = MultiSignalChargeCadenceRuntime(
+            squad,
+            ActiveEffectStore(squad, state),
+            state,
+            scheduler,
+            duration=10.0,
+            effect_filter=lambda _effect: True,
+        )
+        runtime.start(0.0)
+        # Two muzzles do not double Moris hit_count; the third charge attack is
+        # still the first hit_count:3 boundary.
+        self.assertAlmostEqual(scheduler.peek_time(), 3.0)
+        boundary = runtime.handle_boundary(scheduler.pop())
+        self.assertEqual(
+            [(row.event_key, row.count_increment) for row in boundary.signals],
+            [("hit_count", 3)],
+        )
 
 
 if __name__ == "__main__":
