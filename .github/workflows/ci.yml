@@ -5,10 +5,9 @@
 # Fast Engine 장기 개발 브랜치는 PR 없이 checkpoint를 쌓으므로 해당 브랜치 push도
 # 직접 검증한다. master push는 여전히 pages.yml만 담당한다.
 #
-# 통과 여부만으로는 리뷰가 안 된다. 계산기를 고치면 baseline도 같이 고쳐 PR에 넣으므로
-# **회귀는 초록불로 지나가기 때문**이다. 실제로 읽어야 할 것은 마지막 단계가 PR 요약에
-# 붙이는 **변동 표**다 — 한 캐릭터를 고쳤는데 29개 스쿼드가 다 흔들렸다면 초록불이어도
-# 의도한 수정이 아니다.
+# Fast 브랜치에서는 개발 중인 Fast 테스트를 먼저 돌린다. Fast가 깨진 checkpoint에서
+# 30초+ calculator 회귀를 먼저 태우면 진단 주기가 불필요하게 길어진다. Fast가 모두
+# 통과한 뒤에만 기존 calculator/optimizer/site/golden 회귀를 수행한다.
 
 name: CI
 
@@ -19,7 +18,6 @@ on:
     branches:
       - fast-engine-phase2-20260901
 
-# 연달아 push하면 앞 실행은 취소한다. 스냅샷이 길어 쌓이면 큐가 밀린다.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -31,12 +29,51 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # 변동 표가 기준 커밋의 baseline을 `git show`로 읽는다. 얕은 클론이면 없다.
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+
+      # 파이썬 쪽은 표준 라이브러리만 쓴다 — `pip install` 단계가 없는 게 정상이다.
+      - name: 문서·데이터 정합 (doclint)
+        run: python -m context.doclint
+
+      # Fast는 개발 중인 독립 runtime이라 파일 단위로 쪼갠다. 하나가 실패해도
+      # 나머지는 실행하되, 새 push로 run 자체가 취소되면 즉시 멈춘다.
+      - name: Fast — burst machine
+        if: ${{ !cancelled() }}
+        run: python -m unittest fast_engine.tests.test_burst_machine
+      - name: Fast — capabilities/state
+        if: ${{ !cancelled() }}
+        run: python -m unittest fast_engine.tests.test_capabilities_state
+      - name: Fast — compiled triggers
+        if: ${{ !cancelled() }}
+        run: python -m unittest fast_engine.tests.test_compiled_triggers
+      - name: Fast — dispatch/burst runtime
+        if: ${{ !cancelled() }}
+        run: python -m unittest fast_engine.tests.test_dispatch_burst_runtime
+      - name: Fast — greenfield core
+        if: ${{ !cancelled() }}
+        run: python -m unittest fast_engine.tests.test_greenfield_core
+      - name: Fast — periodic runtime
+        if: ${{ !cancelled() }}
+        run: python -m unittest fast_engine.tests.test_periodic_runtime
+      - name: Fast — target snapshot
+        if: ${{ !cancelled() }}
+        run: python -m unittest fast_engine.tests.test_target_snapshot
+      - name: Fast — weapon cadence
+        if: ${{ !cancelled() }}
+        run: python -m unittest fast_engine.tests.test_weapon_cadence
+
+      # 아래는 Fast가 모두 초록일 때만 기존 정본 회귀를 돈다.
+      - name: 엔진 단위 테스트
+        run: |
+          python -m unittest discover -s calculator -p 'test_*.py'
+          python calculator/damage.py
+
+      - name: 옵티마이저 단위 테스트
+        run: python -m unittest discover -s tests -p 'test_optimizer_*.py'
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -48,45 +85,6 @@ jobs:
       - name: Install dependencies
         working-directory: site
         run: npm ci
-
-      # 파이썬 쪽은 표준 라이브러리만 쓴다 — `pip install` 단계가 없는 게 정상이다.
-      - name: 문서·데이터 정합 (doclint)
-        run: python -m context.doclint
-
-      - name: 엔진 단위 테스트
-        run: |
-          python -m unittest discover -s calculator -p 'test_*.py'
-          python calculator/damage.py
-
-      # Fast는 개발 중인 독립 runtime이라 파일 단위로 쪼갠다. 하나가 실패해도
-      # 나머지를 실행해야 jobs API만으로 회귀 범위를 바로 좁힐 수 있다.
-      - name: Fast — burst machine
-        if: always()
-        run: python -m unittest fast_engine.tests.test_burst_machine
-      - name: Fast — capabilities/state
-        if: always()
-        run: python -m unittest fast_engine.tests.test_capabilities_state
-      - name: Fast — compiled triggers
-        if: always()
-        run: python -m unittest fast_engine.tests.test_compiled_triggers
-      - name: Fast — dispatch/burst runtime
-        if: always()
-        run: python -m unittest fast_engine.tests.test_dispatch_burst_runtime
-      - name: Fast — greenfield core
-        if: always()
-        run: python -m unittest fast_engine.tests.test_greenfield_core
-      - name: Fast — periodic runtime
-        if: always()
-        run: python -m unittest fast_engine.tests.test_periodic_runtime
-      - name: Fast — target snapshot
-        if: always()
-        run: python -m unittest fast_engine.tests.test_target_snapshot
-      - name: Fast — weapon cadence
-        if: always()
-        run: python -m unittest fast_engine.tests.test_weapon_cadence
-
-      - name: 옵티마이저 단위 테스트
-        run: python -m unittest discover -s tests -p 'test_optimizer_*.py'
 
       - name: 브리지 스모크 테스트
         working-directory: site
