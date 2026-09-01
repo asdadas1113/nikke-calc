@@ -5,12 +5,13 @@ from dataclasses import dataclass
 from .burst import BurstMachine, BurstPolicy
 from .conditions import SignalContext
 from .dispatcher import TriggerDispatcher
+from .dynamic_weapon import MultiSignalChargeCadenceRuntime
 from .last_bullet import simulate_static_last_bullet_boundaries
 from .model import CompiledSquad, EnemyStaticProfile
 from .scheduler import EventKind, EventScheduler
 from .state import StateStore
 from .triggers import TriggerMode
-from .weapon import DynamicChargeCadenceRuntime, simulate_static_weapon_trigger_boundaries
+from .weapon import simulate_static_weapon_trigger_boundaries
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +58,7 @@ class BurstRuntime:
         self.dispatcher = TriggerDispatcher(
             squad, self.state, self.enemy, self.machine, self.scheduler
         )
-        self.weapons = DynamicChargeCadenceRuntime(
+        self.weapons = MultiSignalChargeCadenceRuntime(
             squad,
             self.dispatcher.effects,
             self.state,
@@ -236,22 +237,22 @@ class BurstRuntime:
                 boundary = self.weapons.handle_boundary(event)
                 if boundary is not None:
                     from .burst import BurstSignal
-                    actor, event_key, count_increment = boundary
-                    self.dispatcher.dispatch(
-                        BurstSignal(
-                            event.time,
-                            event_key,
-                            actor,
-                            actor,
-                            count_increment=count_increment,
-                        ),
-                        context=SignalContext(),
-                    )
+                    for count_signal in boundary.signals:
+                        self.dispatcher.dispatch(
+                            BurstSignal(
+                                event.time,
+                                count_signal.event_key,
+                                boundary.actor,
+                                boundary.actor,
+                                count_increment=count_signal.count_increment,
+                            ),
+                            context=SignalContext(),
+                        )
                     if self.weapons.emits_each_charge_hit:
                         self.dispatcher.dispatch_team_hit(
                             "squad_body_hit",
                             time=event.time,
-                            attacker=actor,
+                            attacker=boundary.actor,
                             context=SignalContext(),
                             count_increment=1,
                         )
