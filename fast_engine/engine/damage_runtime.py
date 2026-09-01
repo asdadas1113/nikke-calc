@@ -5,6 +5,7 @@ from math import inf, nextafter
 from typing import TYPE_CHECKING
 
 from .conditions import SignalContext
+from .core_events import is_static_expected_core_count_rule
 from .damage_events import (
     DamageEventSpec,
     FixedDotSpec,
@@ -34,6 +35,7 @@ _SAFE_EVENT_KEYS = frozenset({
     "event:ally_burst_cast",
     "hit_count",
     "full_charge_hit",
+    "core_hit",
     "pellet_hit",
     "burst_enter:1",
     "burst_enter:2",
@@ -190,6 +192,8 @@ class SimpleDamageScoreSink:
                     return False
                 continue
             if rule.event_key not in _SAFE_EVENT_KEYS:
+                return False
+            if rule.event_key == "core_hit" and not is_static_expected_core_count_rule(rule):
                 return False
         return True
 

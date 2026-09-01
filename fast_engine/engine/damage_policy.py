@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .conditions import ConditionMode
+from .core_events import is_static_expected_core_count_rule
 from .targets import TargetMode
 from .triggers import TriggerMode
 
@@ -121,6 +122,11 @@ def _timing_supported(rule) -> bool:
         # Generic every-hit production is still intentionally absent. Only
         # reducible hit_count:N crossings are certified.
         return rule.mode is TriggerMode.MODULO and rule.trigger_count_reducible
+    if rule.event_key == "core_hit":
+        # The expected-value producer intentionally supports only fixed
+        # core_hit_count:N thresholds. Legacy core_hit:N can be modified by
+        # trigger-count-reduction buffs and therefore still fails closed.
+        return is_static_expected_core_count_rule(rule)
     if rule.event_key in _SAFE_EVENT_KEYS:
         return True
     if rule.event_key and rule.event_key.startswith("burst_enter:"):

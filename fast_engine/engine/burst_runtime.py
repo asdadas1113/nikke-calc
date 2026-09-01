@@ -4,6 +4,11 @@ from dataclasses import dataclass
 
 from .burst import BurstMachine, BurstPolicy
 from .conditions import SignalContext
+from .core_events import (
+    is_static_expected_core_count_rule,
+    simulate_static_expected_core_boundaries,
+)
+from .damage_state import DamageTermResolver
 from .dispatcher import TriggerDispatcher
 from .dynamic_weapon import MultiSignalChargeCadenceRuntime
 from .last_bullet import simulate_static_last_bullet_boundaries
@@ -41,6 +46,20 @@ class BurstRuntime:
         "reload_speed_pct",
         "max_ammo_pct",
         "max_ammo_flat",
+    })
+    _STATIC_CORE_CADENCE_INVALIDATORS = frozenset({
+        "reload_speed_pct",
+        "max_ammo_pct",
+        "max_ammo_flat",
+        "max_ammo_infinite",
+        "charge_speed_pct",
+        "charge_speed_caster_based_pct",
+        "charge_time_flat",
+        "charge_time_fixed",
+        "attack_speed_pct",
+        "mg_warmup_speed_pct",
+        "pellet_count",
+        "pellet_count_fixed",
     })
 
     def __init__(
@@ -119,6 +138,17 @@ class BurstRuntime:
         )
 
     @staticmethod
+    def _is_static_permanent_accuracy(effect) -> bool:
+        """Accuracy fixed by battle-start state is safe for one static core plan."""
+        return (
+            effect.effect_type == "buff"
+            and (effect.stat or "") == "accuracy_pct"
+            and effect.duration in (None, -1.0)
+            and bool(effect.triggers)
+            and all(rule.event_key == "battle_start" for rule in effect.triggers)
+        )
+
+    @staticmethod
     def _effect_may_target_actor(effect, actor: int) -> bool:
         mode = effect.target_spec.mode.value
         if mode == "self":
@@ -128,8 +158,106 @@ class BurstRuntime:
         if mode in {"enemy", "model_excluded", "unsupported"}:
             return False
         # Dynamic ranks/filters are intentionally conservative: if the cohort can
-        # change later, static last-bullet planning must assume this actor may enter it.
+        # change later, static planning must assume this actor may enter it.
         return True
+
+    def _schedule_static_core_hits(
+        self, horizon: float, dynamic_actors: set[int]
+    ) -> None:
+        """Schedule fixed expected ``core_hit_count:N`` crossings only.
+
+        Moris expected mode accumulates fractional core probability once per
+        physical hit/pellet and emits a logical core-hit event at each integer
+        crossing. Fast collapses those events to only modulo thresholds that any
+        executable effect observes. Live accuracy/cadence changes and dynamic
+        charge actors fail closed so no stale future core boundary is retained.
+        """
+
+        interested = {
+            effect.actor
+            for effect in self.squad.effects
+            if self.dispatcher.is_runtime_executable_effect(effect)
+            and any(is_static_expected_core_count_rule(rule) for rule in effect.triggers)
+        }
+        if not interested:
+            return
+
+        unsupported = interested & dynamic_actors
+        if unsupported:
+            names = ", ".join(
+                self.squad.members[actor].name for actor in sorted(unsupported)
+            )
+            raise NotImplementedError(
+                "Fast dynamic charge + core_hit_count boundary not certified: " + names
+            )
+
+        invalidators: list[tuple[int, str]] = []
+        for effect in self.squad.effects:
+            stat = effect.stat or ""
+            is_weapon_change = effect.effect_type == "weapon_change"
+            is_cadence = stat in self._STATIC_CORE_CADENCE_INVALIDATORS
+            is_accuracy = stat == "accuracy_pct"
+            if not (is_weapon_change or is_cadence or is_accuracy):
+                continue
+
+            if is_cadence and self._is_static_permanent_self_cadence(effect):
+                continue
+            if (
+                is_accuracy
+                and self._is_static_permanent_accuracy(effect)
+                and self.dispatcher.is_runtime_executable_effect(effect)
+            ):
+                continue
+
+            for actor in interested:
+                if self._effect_may_target_actor(effect, actor):
+                    invalidators.append((actor, effect.name or stat or effect.effect_type))
+
+        if invalidators:
+            detail = ", ".join(
+                f"{self.squad.members[actor].name}<-{name}"
+                for actor, name in invalidators[:8]
+            )
+            if len(invalidators) > 8:
+                detail += f", +{len(invalidators) - 8} more"
+            raise NotImplementedError(
+                "Fast static core_hit_count probability/cadence can be invalidated by live weapon state: "
+                + detail
+            )
+
+        resolver = DamageTermResolver(
+            self.squad,
+            self.dispatcher.effects,
+            self.state,
+            self.enemy,
+        )
+        probabilities = {
+            actor: self.enemy.core_rate_for_weapon(
+                self.squad.members[actor].weapon,
+                accuracy_pct=resolver.resolve(actor, now=0.0).accuracy_pct,
+            )
+            for actor in interested
+        }
+
+        from .burst import BurstSignal
+        for boundary in simulate_static_expected_core_boundaries(
+            self.squad,
+            duration=horizon,
+            core_probability_by_actor=probabilities,
+            effect_filter=self.dispatcher.is_runtime_executable_effect,
+        ):
+            self.scheduler.schedule(
+                boundary.time,
+                EventKind.TRIGGER_BOUNDARY,
+                actor=boundary.actor,
+                payload=BurstSignal(
+                    boundary.time,
+                    "core_hit",
+                    boundary.actor,
+                    boundary.actor,
+                    count_increment=boundary.count_increment,
+                ),
+            )
 
     def _schedule_static_last_bullets(
         self, horizon: float, dynamic_actors: set[int]
@@ -207,6 +335,10 @@ class BurstRuntime:
         )
         self.weapons.start(0.0)
         dynamic_actors = set(self.weapons.actors)
+        # Core-hit notifications happen inside Moris' physical-hit loop before
+        # shot-level hit_count/on_attack notifications. Schedule core boundaries
+        # first so equal-time stable ordering preserves that relation for static actors.
+        self._schedule_static_core_hits(horizon, dynamic_actors)
         from .burst import BurstSignal
         for boundary in simulate_weapon_trigger_boundaries(
             self.squad,
