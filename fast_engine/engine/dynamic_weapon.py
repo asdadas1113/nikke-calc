@@ -168,8 +168,12 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         )
 
     def supports_dynamic_last_bullet(self, actor: int) -> bool:
+        # Charge score actors already materialize every shot and therefore know
+        # exact magazine end. Rapid reload actors deliberately stay compressed
+        # across magazine boundaries unless a reducible hit/pellet crossing is
+        # needed, so post-shot last_bullet remains fail-closed for that path.
         if actor in self._rapid_reload.actors:
-            return True
+            return False
         return self.emits_every_charge_shot(actor)
 
     def emits_squad_body_hit(self, actor: int) -> bool:
