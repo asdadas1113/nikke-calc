@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Callable, Sequence
 
 from .dynamic_reload import DynamicRapidReloadRuntime, _RapidActorState
 from .weapon import _EPS
@@ -68,6 +68,17 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._cover_until: dict[int, float] = {}
+
+    def attach_score_sink(
+        self,
+        actors: tuple[int, ...] | frozenset[int],
+        sink: Callable[[int, int, float], None],
+    ) -> None:
+        selected = tuple(sorted(set(int(actor) for actor in actors)))
+        # Registration must happen before any duration_bullets activation so the
+        # effect store knows not to schedule a stale static Nth-shot expiry.
+        self.effects.enable_dynamic_bullet_lifetime_targets(selected)
+        super().attach_score_sink(selected, sink)
 
     def _cover_end(self, actor: int) -> float:
         return float(self._cover_until.get(actor, -1.0))
