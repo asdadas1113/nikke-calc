@@ -4,14 +4,16 @@ from dataclasses import dataclass
 from math import inf, nextafter
 from typing import TYPE_CHECKING
 
-from .conditions import SignalContext
+from .conditions import ConditionMode, SignalContext
 from .core_events import is_static_expected_core_count_rule
 from .damage_events import (
     DamageEventSpec,
     FixedDotSpec,
+    StackCountDamageSpec,
     compile_fixed_dot_damage_event,
     compile_pending_b3_bonus_damage_event,
     compile_simple_damage_event,
+    compile_stack_count_damage_event,
     expected_damage_event,
 )
 from .damage_state import DamageTermResolver
@@ -44,6 +46,16 @@ _SAFE_EVENT_KEYS = frozenset({
     "squad_burst_cast:2",
     "squad_burst_cast:3",
 })
+_STACK_COUNT_SAFE_CONDITIONS = frozenset({
+    ConditionMode.DURING_FULL_BURST,
+    ConditionMode.NOT_DURING_FULL_BURST,
+    ConditionMode.BURST_CASTED,
+    ConditionMode.BURST_NOT_CASTED,
+    ConditionMode.GAUGE_AT_LEAST,
+    ConditionMode.GAUGE_BELOW,
+    ConditionMode.GAUGE_EQUAL,
+    ConditionMode.GAUGE_MOD,
+})
 _DOT_EPS = 1e-9
 
 
@@ -62,12 +74,13 @@ class SimpleDamageScoreSink:
     DoT slice schedules only its meaningful damage ticks: no frame loop and no
     per-frame polling. Reactivation invalidates old reservations by generation.
 
-    Source-order-sensitive B3 cases and state-observable/stack-scaled DoTs remain
-    unsupported until their distinct semantics are explicitly compiled.
+    The first dynamic direct-damage slice supports Moris' non-DoT
+    ``scaling:stack_count`` only when the reference is a fully certified Fast
+    gauge family. Named-stack scaling and stack-scaled DoTs remain unsupported.
     """
 
     __slots__ = (
-        "squad", "enemy", "specs", "pending_specs", "dot_specs",
+        "squad", "enemy", "specs", "pending_specs", "dot_specs", "stack_specs",
         "unsupported_effect_ids", "char_total", "runtime", "resolver",
         "_pending_effect_ids", "_effect_actor", "_dot_generation",
     )
@@ -78,6 +91,7 @@ class SimpleDamageScoreSink:
         self.specs: dict[int, DamageEventSpec] = {}
         self.pending_specs: dict[int, DamageEventSpec] = {}
         self.dot_specs: dict[int, FixedDotSpec] = {}
+        self.stack_specs: dict[int, StackCountDamageSpec] = {}
         self.unsupported_effect_ids: set[int] = set()
         self.char_total = [0.0] * len(squad.members)
         self.runtime: "BurstRuntime | None" = None
@@ -103,17 +117,22 @@ class SimpleDamageScoreSink:
             spec = compile_simple_damage_event(effect, squad.members[effect.actor])
             pending = None
             dot = None
+            stack = None
             if spec is None:
                 pending = compile_pending_b3_bonus_damage_event(
                     effect, squad.members[effect.actor]
                 )
             if spec is None and pending is None:
+                stack = compile_stack_count_damage_event(
+                    effect, squad.members[effect.actor]
+                )
+            if spec is None and pending is None and stack is None:
                 dot = compile_fixed_dot_damage_event(
                     effect, squad.members[effect.actor]
                 )
 
             if (
-                (spec is None and pending is None and dot is None)
+                (spec is None and pending is None and dot is None and stack is None)
                 or not self._delivery_supported(effect)
             ):
                 self.unsupported_effect_ids.add(effect.effect_id)
@@ -126,7 +145,12 @@ class SimpleDamageScoreSink:
                 self.unsupported_effect_ids.add(effect.effect_id)
                 continue
 
-            if pending is not None:
+            if stack is not None:
+                if not self._stack_count_shape_supported(effect, stack):
+                    self.unsupported_effect_ids.add(effect.effect_id)
+                    continue
+                self.stack_specs[effect.effect_id] = stack
+            elif pending is not None:
                 if self._has_later_same_actor_burst_cast_buff(effect):
                     self.unsupported_effect_ids.add(effect.effect_id)
                     continue
@@ -153,6 +177,49 @@ class SimpleDamageScoreSink:
             and other.actor_effect_index > effect.actor_effect_index
             and other.effect_type == "buff"
             and any(rule.raw == "burst_cast" for rule in other.triggers)
+            for other in self.squad.effects
+        )
+
+    def _stack_count_shape_supported(
+        self,
+        effect: "CompiledEffect",
+        spec: StackCountDamageSpec,
+    ) -> bool:
+        """Keep the first stack-count slice gauge-only and source-complete.
+
+        A declared gauge writer is required so a same-named buff cannot silently
+        take over Moris' ``ref_count`` fallback semantics. Whole-family safety is
+        checked again after BurstRuntime attaches because the dispatcher owns the
+        authoritative scan for unsupported reachable writers.
+        """
+        if any(
+            rule.mode not in _STACK_COUNT_SAFE_CONDITIONS
+            for rule in effect.condition_rules
+        ):
+            return False
+        return any(
+            other.actor == effect.actor
+            and other.parameters.get("gauge_id") == spec.ref
+            and (other.stat or "") in {"gauge_charge", "gauge_consume"}
+            for other in self.squad.effects
+        )
+
+    def _stack_count_runtime_supported(self, effect: "CompiledEffect") -> bool:
+        spec = self.stack_specs.get(effect.effect_id)
+        if spec is None:
+            return False
+        runtime = self.runtime
+        if runtime is None:
+            # TriggerDispatcher is built before attach(). This is provisional;
+            # once attached, every activation and final certification rechecks the
+            # dispatcher's whole-gauge fail-closed verdict.
+            return True
+        family = (effect.actor, spec.ref)
+        if family in runtime.dispatcher._unsafe_gauge_families:
+            return False
+        return any(
+            runtime.dispatcher._gauge_family(other) == family
+            and runtime.dispatcher._gauge_shape_supported(other)
             for other in self.squad.effects
         )
 
@@ -198,6 +265,8 @@ class SimpleDamageScoreSink:
         return True
 
     def supports(self, effect: "CompiledEffect") -> bool:
+        if effect.effect_id in self.stack_specs:
+            return self._stack_count_runtime_supported(effect)
         return (
             effect.effect_id in self.specs
             or effect.effect_id in self.pending_specs
@@ -217,8 +286,23 @@ class SimpleDamageScoreSink:
         direct = self.specs.get(effect_id) or self.pending_specs.get(effect_id)
         if direct is not None:
             return direct
+        stack = self.stack_specs.get(effect_id)
+        if stack is not None:
+            return stack.damage
         dot = self.dot_specs.get(effect_id)
         return None if dot is None else dot.damage
+
+    def _stack_count_hit_count(self, effect_id: int) -> int | None:
+        spec = self.stack_specs.get(effect_id)
+        runtime = self.runtime
+        actor = self._effect_actor.get(effect_id)
+        if spec is None or runtime is None or actor is None:
+            return None
+        gauges = runtime.state.actors[actor].gauges
+        if spec.ref not in gauges:
+            # Moris leaves the default one hit in place when ref_count() is None.
+            return spec.damage.hit_count
+        return max(0, int(gauges[spec.ref]))
 
     def _score_spec(
         self,
@@ -233,6 +317,11 @@ class SimpleDamageScoreSink:
         actor = self._effect_actor.get(effect_id)
         if spec is None or runtime is None or resolver is None or actor is None:
             return False
+        hit_count = None
+        if effect_id in self.stack_specs:
+            hit_count = self._stack_count_hit_count(effect_id)
+            if hit_count is None:
+                return False
         terms = resolver.resolve(actor, now=now)
         self.char_total[actor] += expected_damage_event(
             spec,
@@ -240,6 +329,7 @@ class SimpleDamageScoreSink:
             runtime.enemy,
             terms,
             full_burst=full_burst,
+            hit_count=hit_count,
         )
         return True
 
@@ -279,6 +369,8 @@ class SimpleDamageScoreSink:
     ) -> bool:
         del context  # reserved for future crit/core trigger chaining
         if ENEMY not in targets:
+            return False
+        if effect.effect_id in self.stack_specs and not self._stack_count_runtime_supported(effect):
             return False
 
         if effect.effect_id in self.pending_specs:
@@ -350,7 +442,12 @@ class SimpleDamageScoreSink:
 
     @property
     def supported_count(self) -> int:
-        return len(self.specs) + len(self.pending_specs) + len(self.dot_specs)
+        return (
+            len(self.specs)
+            + len(self.pending_specs)
+            + len(self.dot_specs)
+            + len(self.stack_specs)
+        )
 
     @property
     def unsupported_count(self) -> int:
