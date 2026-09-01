@@ -157,6 +157,14 @@ def is_direct_damage_buff_runtime_supported(effect) -> bool:
 
     if effect.effect_type != "buff" or (effect.stat or "") not in DIRECT_DAMAGE_STATE_STATS:
         return False
+    # Moris duration_bullets is a target-side lifetime: the resolved recipient
+    # consumes one count after each normal shot and the buff disappears at zero.
+    # Fast's current ActiveEffectStore only has time expiry, so accepting these
+    # effects would turn finite one/few-shot states (e.g. Miranda Wake Up! 4)
+    # into permanent buffs. Keep them fail-closed until a post-shot consumption
+    # boundary exists in the compressed normal-attack scorer.
+    if effect.parameters.get("duration_bullets") is not None:
+        return False
     if not _target_supported(effect.target_spec):
         return False
     if any(rule.mode not in _SAFE_CONDITIONS for rule in effect.condition_rules):
