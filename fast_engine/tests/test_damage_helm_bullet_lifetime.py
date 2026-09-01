@@ -152,6 +152,7 @@ class HelmTenShotLifetimeTests(unittest.TestCase):
         )
 
         self.assertTrue(dispatcher.is_runtime_executable_effect(miranda))
+        dispatcher.enable_strict_score_delivery()
         with self.assertRaisesRegex(
             NotImplementedError,
             "duration_bullets resolved target cadence not static: 미하라 : 본딩 체인",
