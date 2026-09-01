@@ -40,6 +40,33 @@ class TargetSnapshotTests(unittest.TestCase):
         next_activation = resolver.resolve(spec, owner_actor=0, now=5.1)
         self.assertEqual(next_activation, (2,))
 
+    def test_lowest_atk_burst3_uses_base_stage_and_effective_atk(self):
+        runtime = self._runtime()
+        resolver = runtime.dispatcher.targets
+        actor_by_name = {
+            member.name: actor for actor, member in enumerate(runtime.squad.members)
+        }
+        spec = compile_target("allies_lowest_atk_burst3:1", actor_by_name=actor_by_name)
+
+        candidates = [
+            actor
+            for actor, member in enumerate(runtime.squad.members)
+            if member.burst_stage == "3"
+        ]
+        self.assertGreaterEqual(len(candidates), 2)
+        expected = min(
+            candidates,
+            key=lambda actor: (runtime.dispatcher.effects.effective_atk(actor, now=1.0), actor),
+        )
+
+        # Moris filters by parsed/base B3, so a live stage override must not
+        # remove the actor from this particular target selector.
+        runtime.machine.set_stage_override(expected, "1")
+        self.assertEqual(
+            resolver.resolve(spec, owner_actor=0, now=1.0),
+            (expected,),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
