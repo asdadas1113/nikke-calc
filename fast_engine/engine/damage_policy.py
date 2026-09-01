@@ -106,6 +106,19 @@ _SAFE_EVENT_KEYS = frozenset({
     "last_bullet",
 })
 
+# Narrow duration_bullets lane. Moris only decrements a newly activated
+# duration_bullets state on the same timestamp when the activation itself is a
+# weapon-bound trigger. These burst-controller timings are all before weapon
+# processing and are not in Moris' bullet-bound trigger set, so the first
+# consuming shot is strictly after the activation timestamp.
+_SAFE_ONE_SHOT_EVENT_KEYS = frozenset({
+    "battle_start",
+    "burst_cast",
+    "full_burst_start",
+    "full_burst_end",
+    "event:ally_burst_cast",
+})
+
 
 def _target_supported(spec) -> bool:
     if spec.mode is TargetMode.COMPOSITE:
@@ -145,6 +158,38 @@ def _timing_supported(rule) -> bool:
     return False
 
 
+def _one_shot_lifetime_supported(effect) -> bool:
+    raw = effect.parameters.get("duration_bullets")
+    if raw is None:
+        return True
+    try:
+        bullets = float(raw)
+    except (TypeError, ValueError):
+        return False
+    if bullets != 1.0:
+        return False
+    if effect.duration not in (None, -1.0):
+        return False
+    max_stack = effect.max_stack if effect.max_stack is not None else 1.0
+    if float(max_stack) != 1.0:
+        return False
+    # Enemy-target bullet lifetimes have no recipient weapon that can consume the
+    # count. Composite targets are also deferred until per-child lifecycle rules
+    # are independently certified.
+    if effect.target_spec.mode in {TargetMode.ENEMY, TargetMode.COMPOSITE}:
+        return False
+    if not effect.triggers:
+        return False
+    for rule in effect.triggers:
+        key = rule.event_key or ""
+        if key in _SAFE_ONE_SHOT_EVENT_KEYS:
+            continue
+        if key.startswith("burst_enter:") or key.startswith("squad_burst_cast:"):
+            continue
+        return False
+    return True
+
+
 def is_direct_damage_buff_runtime_supported(effect) -> bool:
     """Return True only when Fast can both represent and *deliver* this buff.
 
@@ -157,13 +202,7 @@ def is_direct_damage_buff_runtime_supported(effect) -> bool:
 
     if effect.effect_type != "buff" or (effect.stat or "") not in DIRECT_DAMAGE_STATE_STATS:
         return False
-    # Moris duration_bullets is a target-side lifetime: the resolved recipient
-    # consumes one count after each normal shot and the buff disappears at zero.
-    # Fast's current ActiveEffectStore only has time expiry, so accepting these
-    # effects would turn finite one/few-shot states (e.g. Miranda Wake Up! 4)
-    # into permanent buffs. Keep them fail-closed until a post-shot consumption
-    # boundary exists in the compressed normal-attack scorer.
-    if effect.parameters.get("duration_bullets") is not None:
+    if not _one_shot_lifetime_supported(effect):
         return False
     if not _target_supported(effect.target_spec):
         return False
