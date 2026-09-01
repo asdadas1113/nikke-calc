@@ -176,6 +176,33 @@ def _one_shot_lifetime_supported(effect) -> bool:
     return True
 
 
+def is_static_element_override_score_supported(effect) -> bool:
+    """Certify immutable battle-start element-advantage overrides for scoring.
+
+    Moris keeps ``element_code_override`` separate from the roster element code:
+    while the buff is active, matching ``target_code`` simply ORs into the usual
+    element-advantage predicate. Fast folds only the shape that cannot change
+    after battle start; mutable/conditional variants remain fail-closed.
+    """
+
+    target_code = effect.parameters.get("target_code")
+    return (
+        effect.effect_type == "buff"
+        and (effect.stat or "") == "element_code_override"
+        and effect.target_spec.mode is TargetMode.SELF
+        and effect.duration in (None, -1.0)
+        and "irremovable" in str(effect.polarity or "")
+        and not effect.condition_rules
+        and bool(effect.triggers)
+        and all(
+            rule.mode is TriggerMode.EVENT and rule.event_key == "battle_start"
+            for rule in effect.triggers
+        )
+        and isinstance(target_code, str)
+        and bool(target_code)
+    )
+
+
 def is_direct_damage_buff_runtime_supported(effect) -> bool:
     """Return True only when Fast can both represent and *deliver* this buff."""
 
