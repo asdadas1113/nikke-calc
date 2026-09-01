@@ -7,6 +7,7 @@ from context.spec import build_squad
 from fast_engine.engine.burst import BurstSignal, compile_burst_policy
 from fast_engine.engine.burst_runtime import BurstRuntime
 from fast_engine.engine.compiler import compile_moris_squad
+from fast_engine.engine.conditions import SignalContext
 from fast_engine.engine.model import CompiledSquad
 from fast_engine.engine.targets import TargetMode
 from fast_engine.engine.triggers import TriggerIndex
@@ -64,33 +65,21 @@ class GaugeRuntimeTests(unittest.TestCase):
         _compiled, runtime, by_name = self._fixture()
         charge = by_name["바디 컨텍"]
         consume = by_name["바디 컨텍 5"]
+        context = SignalContext()
 
         self.assertTrue(
-            runtime.dispatcher._activate(
-                charge,
-                now=0.0,
-                context=runtime.dispatcher.conditions.__class__.__module__
-                and __import__("fast_engine.engine.conditions", fromlist=["SignalContext"]).SignalContext(),
-            )
+            runtime.dispatcher._activate(charge, now=0.0, context=context)
         )
         self.assertEqual(runtime.state.actors[4].gauges["포획 사슬"], 10.0)
 
         # A second +10 activation must remain capped by gauge_max=10.
         self.assertTrue(
-            runtime.dispatcher._activate(
-                charge,
-                now=0.1,
-                context=__import__("fast_engine.engine.conditions", fromlist=["SignalContext"]).SignalContext(),
-            )
+            runtime.dispatcher._activate(charge, now=0.1, context=context)
         )
         self.assertEqual(runtime.state.actors[4].gauges["포획 사슬"], 10.0)
 
         self.assertTrue(
-            runtime.dispatcher._activate(
-                consume,
-                now=0.2,
-                context=__import__("fast_engine.engine.conditions", fromlist=["SignalContext"]).SignalContext(),
-            )
+            runtime.dispatcher._activate(consume, now=0.2, context=context)
         )
         self.assertEqual(runtime.state.actors[4].gauges["포획 사슬"], 0.0)
 
