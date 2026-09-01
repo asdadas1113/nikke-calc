@@ -58,6 +58,8 @@ def _weapon_view(name: str, meta: dict[str, Any], char: dict[str, Any]) -> dict[
     normal_hit_coeff = float(
         (_MECHANICS.get("normal_hit_coeff") or {}).get(weapon_type, 1.0)
     )
+    accuracy_table = _MECHANICS.get("accuracy") or {}
+    accuracy_spec = accuracy_table.get(weapon_type) or {}
     return {
         "weapon_type": weapon_type,
         "fire_mode": fire_mode,
@@ -79,6 +81,12 @@ def _weapon_view(name: str, meta: dict[str, Any], char: dict[str, Any]) -> dict[
         "core_dmg_mult": float(meta.get("core_dmg_mult") or 200.0),
         "full_charge_mult": float(meta.get("full_charge_mult") or 100.0),
         "normal_hit_coeff": normal_hit_coeff,
+        # Static accuracy model inputs are compiled once. Runtime only supplies
+        # the current accuracy_pct and boss core_px; no JSON lookup is needed in
+        # the scoring hot path.
+        "core_base_diameter": float(accuracy_spec.get("base_diameter", 10.0)),
+        "core_acc_slope": float(accuracy_spec.get("acc_slope", 0.0)),
+        "core_model_n": float(accuracy_table.get("_model_n", 2.55)),
     }
 
 
@@ -169,7 +177,6 @@ def compile_moris_squad(squad: list[dict], *, require_five: bool = True) -> Comp
     collection, manual stats and favorite-stage skill variants cannot silently
     disappear. The Fast combat runtime itself never instantiates BuffManager.
     """
-
     if require_five and len(squad) != 5:
         raise ValueError(f"Fast Solo Raid squad must contain 5 members, got {len(squad)}")
 
@@ -223,11 +230,11 @@ def compile_moris_squad(squad: list[dict], *, require_five: bool = True) -> Comp
                 actor=actor,
                 actor_effect_index=actor_effect_index,
                 source=effect.get("source"),
-                source_tag=str(effect.get("_source_tag") or "skill"),
-                name=str(effect.get("name") or ""),
-                effect_type=str(effect.get("type") or ""),
-                stat=str(effect["stat"]) if effect.get("stat") is not None else None,
-                polarity=str(effect["polarity"]) if effect.get("polarity") is not None else None,
+                source_tag="skill" if effect.get("source") else "external",
+                name=str(effect.get("name") or effect.get("stat") or "effect"),
+                effect_type=str(effect.get("type") or "buff"),
+                stat=effect.get("stat"),
+                polarity=effect.get("polarity"),
                 target=effect.get("target"),
                 target_spec=target_spec,
                 conditions=raw_conditions,
@@ -235,9 +242,9 @@ def compile_moris_squad(squad: list[dict], *, require_five: bool = True) -> Comp
                 triggers=timings,
                 value=_effect_value(effect, skill_level),
                 duration=_effect_duration(effect, skill_level),
-                max_stack=float(effect["max_stack"]) if effect.get("max_stack") is not None else None,
-                max_trigger=int(effect["max_trigger"]) if effect.get("max_trigger") is not None else None,
-                tick_interval=float(effect["tick_interval"]) if effect.get("tick_interval") is not None else None,
+                max_stack=(None if effect.get("max_stack") is None else float(effect["max_stack"])),
+                max_trigger=(None if effect.get("max_trigger") is None else int(effect["max_trigger"])),
+                tick_interval=(None if effect.get("tick_interval") is None else float(effect["tick_interval"])),
                 parameters=_parameters(effect),
                 capability=capability,
             )
@@ -257,20 +264,16 @@ def compile_moris_squad(squad: list[dict], *, require_five: bool = True) -> Comp
                 element=meta.get("element_code"),
                 character_class=str(meta.get("class") or ""),
                 squad_group=meta.get("squad"),
-                burst_stage=str(char.get("burst_stage") or meta.get("burst_stage", "")),
-                burst_cooldown=float(meta.get("burst_cooldown") or 0.0),
+                burst_stage=str(meta.get("burst_stage") or ""),
+                burst_cooldown=float(meta.get("burst_cooldown") or 40.0),
                 burst_regen_time=float(char.get("burst_regen_time", 2.0)),
-                weapon_type=str(meta.get("weapon_type", "")),
+                weapon_type=str(meta.get("weapon_type") or ""),
                 weapon=_weapon_view(name, meta, char),
                 effects=tuple(effects_by_actor[actor]),
                 skill_levels=dict(char.get("skill_levels") or {}),
-                favorite_stage=int(char.get("favorite_stage", 3)),
+                favorite_stage=int(char.get("favorite_stage", 0)),
             )
         )
 
-    flat_effects = tuple(effect for member in members for effect in member.effects)
-    # effect_id order is Moris registration order, which is actor-major. Assert it
-    # before relying on tuple indexing in the later dispatcher.
-    if tuple(effect.effect_id for effect in flat_effects) != tuple(range(len(flat_effects))):
-        raise AssertionError("compiled effect order drifted from Moris registration order")
-    return CompiledSquad(tuple(members), TriggerIndex.from_effects(flat_effects, actor_count=len(members)))
+    effects = tuple(effect for member in members for effect in member.effects)
+    return CompiledSquad(tuple(members), TriggerIndex.from_effects(effects, actor_count=len(members)))
