@@ -4,14 +4,15 @@ from dataclasses import replace
 import unittest
 
 from context.spec import build_squad
-from fast_engine.engine.burst import BurstMachine, compile_burst_policy
+from fast_engine.engine.burst import BurstMachine, BurstPolicy, compile_burst_policy
+from fast_engine.engine.burst_runtime import BurstRuntime
 from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.conditions import SignalContext
 from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_supported
 from fast_engine.engine.dispatcher import TriggerDispatcher
 from fast_engine.engine.model import CompiledSquad, EnemyStaticProfile
 from fast_engine.engine.scheduler import EventKind, EventScheduler
-from fast_engine.engine.score import static_score_blockers
+from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
 from fast_engine.engine.shot_blocks import next_static_shot_after
 from fast_engine.engine.state import StateStore
 
@@ -164,6 +165,42 @@ class HelmTenShotLifetimeTests(unittest.TestCase):
             0.0,
         )
         self.assertFalse(scheduler)
+
+    def test_dynamic_charge_owner_consumes_ten_shot_lifetime(self):
+        compiled, _policy, helm = self._fixture()
+        runtime = BurstRuntime(
+            compiled,
+            BurstPolicy(duration=20.0, first_burst_time=30.0),
+            EnemyStaticProfile(defense=31784.0, duration=20.0),
+        )
+        observer = StaticNormalAttackObserver(runtime, duration=20.0)
+        self.assertIn(2, observer.dynamic_charge_actors)
+        self.assertTrue(runtime.dispatcher.effects.dynamic_bullet_lifetime_supported(2))
+
+        runtime.dispatcher.effects.activate(helm, 2, 0.0, runtime.scheduler)
+        self.assertGreater(
+            runtime.dispatcher.effects.sum_stat(2, "charge_dmg_mag_pct", now=0.0),
+            0.0,
+        )
+        runtime.run(duration=20.0, score_observer=observer)
+        lingering = [
+            active
+            for effect, active in runtime.dispatcher.effects.iter_stat(
+                "charge_dmg_mag_pct", now=19.9
+            )
+            if effect.effect_id == helm.effect_id
+        ]
+        self.assertEqual(lingering, [])
+
+    def test_squad1_helm_charge_lifetime_and_crown_reload_are_certified(self):
+        names = ["리틀 머메이드", "크라운", "라피 : 레드 후드", "미하라 : 본딩 체인", "헬름"]
+        compiled = compile_moris_squad(build_squad(names))
+        blockers = static_score_blockers(compiled)
+        self.assertNotIn("cadence:크라운:원 포 올 2:reload_speed_pct", blockers)
+        self.assertNotIn("normal_delivery:헬름:이지스 캐논 3:charge_dmg_mag_pct", blockers)
+        self.assertNotIn("skill_state_delivery:헬름:이지스 캐논 3:charge_dmg_mag_pct", blockers)
+        self.assertIn("cadence:리틀 머메이드:세이렌 송 2:ammo_charge_pct", blockers)
+        self.assertIn("normal_delivery:크라운:로얄 에타이어 4:atk_dmg_pct", blockers)
 
     def test_reactivation_resets_ten_shot_generation(self):
         compiled, policy, helm = self._fixture()

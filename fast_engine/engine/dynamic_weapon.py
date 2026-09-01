@@ -145,6 +145,10 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
                     "Fast dynamic score shot sink only supports charge weapons: "
                     + self.squad.members[actor].name
                 )
+        # Charge duration_bullets must be registered before battle-start
+        # activation so ActiveEffectStore does not schedule a stale static
+        # Nth-shot expiry. Rapid registration is additive in the store.
+        self.effects.enable_dynamic_bullet_lifetime_targets(selected)
         self._score_actors = selected
         self._score_shot_sink = sink
         if selected:
@@ -241,6 +245,11 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
             signals.append(DynamicCountSignal("full_charge_hit", count_increment))
         if actor in self._hit_thresholds:
             signals.append(DynamicCountSignal("hit_count", count_increment))
+        if self.effects.has_dynamic_bullet_lifetime(actor, now=float(event.time)):
+            # The consuming charge shot is scored above and its hit/full-charge
+            # signals are delivered first. Remove bullet-duration state only at
+            # the same post-shot point used by the rapid runtime.
+            signals.append(DynamicCountSignal(_INTERNAL_BULLET_CONSUME_EVENT, 1))
         return DynamicChargeBoundary(
             actor,
             tuple(signals),

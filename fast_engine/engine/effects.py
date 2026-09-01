@@ -77,7 +77,9 @@ class ActiveEffectStore:
         selected = frozenset(int(actor) for actor in actors)
         if any(actor < 0 or actor >= len(self.squad.members) for actor in selected):
             raise IndexError("dynamic bullet-lifetime actor out of range")
-        self._dynamic_bullet_targets = selected
+        # Registration is additive: charge and rapid score runtimes may
+        # both own recipient-shot lifetimes in the same squad.
+        self._dynamic_bullet_targets = self._dynamic_bullet_targets | selected
 
     def dynamic_bullet_lifetime_supported(self, target: int) -> bool:
         return int(target) in self._dynamic_bullet_targets

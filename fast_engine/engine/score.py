@@ -175,6 +175,65 @@ def _actor_has_executable_core_count(squad: CompiledSquad, actor: int) -> bool:
     )
 
 
+def _reload_speed_positive_upper_bound(squad: CompiledSquad, actor: int) -> float:
+    """Conservative upper bound for beneficial reload speed on one actor.
+
+    ``cover_during_delay`` only changes Moris behavior once reload speed reaches
+    100%. Counting every possibly-targeting positive buff at maximum stack is an
+    intentionally loose bound: if even this stays below 100, the special branch
+    is provably unreachable for the squad.
+    """
+
+    total = 0.0
+    for effect in squad.effects:
+        if effect.effect_type != "buff" or (effect.stat or "") != "reload_speed_pct":
+            continue
+        if actor not in _possible_ally_targets(squad, effect):
+            continue
+        value = max(0.0, float(effect.value or 0.0))
+        if value <= 0.0:
+            continue
+        max_stack = effect.max_stack
+        if max_stack is not None and float(max_stack) < 0.0:
+            return inf
+        stacks = 1.0 if max_stack is None else max(1.0, float(max_stack))
+        total += value * stacks
+    return total
+
+
+def _charge_actor_score_safe(squad: CompiledSquad, actor: int) -> bool:
+    """Safety contract for per-shot dynamic SR/RL score ownership."""
+
+    member = squad.members[actor]
+    if str(member.weapon.get("fire_mode") or "") != "charge":
+        return False
+    if member.weapon.get("control") or member.weapon.get("is_clip"):
+        return False
+    if (
+        member.weapon.get("cover_during_delay")
+        and _reload_speed_positive_upper_bound(squad, actor) >= 100.0 - 1e-9
+    ):
+        return False
+
+    for effect in squad.effects:
+        if effect.effect_type == "weapon_change" and actor in _possible_ally_targets(squad, effect):
+            return False
+
+    if _actor_has_executable_core_count(squad, actor):
+        return False
+    if _actor_has_executable_event(
+        squad,
+        actor,
+        frozenset({"last_bullet_fire", "on_attack", "event:full_reload", "full_reload"}),
+    ):
+        return False
+    if _actor_has_executable_event(squad, actor, frozenset({"pellet_hit"})):
+        return False
+    return not _actor_has_unhandled_count_event(
+        squad, actor, frozenset({"hit_count"})
+    )
+
+
 def _rapid_actor_score_safe(
     squad: CompiledSquad,
     actor: int,
@@ -237,32 +296,9 @@ def _reload_recipient_score_safe(squad: CompiledSquad, actor: int) -> bool:
     mode = str(member.weapon.get("fire_mode") or "")
     if mode in {"auto", "auto_warmup"}:
         return _rapid_actor_score_safe(squad, actor)
-    if mode != "charge":
-        return False
-    if member.weapon.get("control") or member.weapon.get("is_clip"):
-        return False
-    if member.weapon.get("cover_during_delay"):
-        return False
-
-    for effect in squad.effects:
-        if effect.effect_type != "weapon_change":
-            continue
-        if actor in _possible_ally_targets(squad, effect):
-            return False
-
-    if _actor_has_executable_core_count(squad, actor):
-        return False
-    if _actor_has_executable_event(
-        squad,
-        actor,
-        frozenset({"last_bullet_fire", "on_attack", "event:full_reload", "full_reload"}),
-    ):
-        return False
-    if _actor_has_executable_event(squad, actor, frozenset({"pellet_hit"})):
-        return False
-    return not _actor_has_unhandled_count_event(
-        squad, actor, frozenset({"hit_count"})
-    )
+    if mode == "charge":
+        return _charge_actor_score_safe(squad, actor)
+    return False
 
 
 def _is_dynamic_reload_score_supported(squad: CompiledSquad, effect) -> bool:
@@ -290,6 +326,23 @@ def _dynamic_reload_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
     return tuple(sorted(actors))
 
 
+def _dynamic_charge_bullet_lifetime_score_actors(
+    squad: CompiledSquad,
+) -> tuple[int, ...]:
+    actors: set[int] = set()
+    for effect in squad.effects:
+        if effect.parameters.get("duration_bullets") is None:
+            continue
+        if not is_direct_damage_buff_runtime_supported(effect):
+            continue
+        if not TriggerDispatcher.is_executable_effect(effect):
+            continue
+        for actor in _possible_ally_targets(squad, effect):
+            if _charge_actor_score_safe(squad, actor):
+                actors.add(actor)
+    return tuple(sorted(actors))
+
+
 def _dynamic_charge_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
     actors: set[int] = set()
     charge = set(_charge_actor_indexes(squad))
@@ -303,6 +356,7 @@ def _dynamic_charge_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
         ):
             actors.update(charge)
     actors.update(charge & set(_dynamic_reload_score_actors(squad)))
+    actors.update(_dynamic_charge_bullet_lifetime_score_actors(squad))
     return tuple(sorted(actors))
 
 
@@ -375,6 +429,7 @@ def _direct_damage_buff_score_supported(squad: CompiledSquad, effect) -> bool:
     targets = _possible_ally_targets(squad, effect)
     return bool(targets) and all(
         static_bullet_lifetime_cadence_safe(squad, actor)
+        or _charge_actor_score_safe(squad, actor)
         for actor in targets
     )
 
