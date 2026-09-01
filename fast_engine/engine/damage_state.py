@@ -97,6 +97,7 @@ class DamageTermResolver:
             crit_rate_skill=min(1.0, 0.15 + general_crit_rate_pct / 100.0),
             crit_dmg_skill=general_crit_dmg,
             core_dmg_pct=self._sum(actor, "core_dmg_pct", now),
+            accuracy_pct=self._sum(actor, "accuracy_pct", now),
             normal_atk_dmg_pct=self._sum(actor, "normal_atk_dmg_pct", now),
             atk_dmg_pct=self._sum(actor, "atk_dmg_pct", now),
             burst_dmg_pct=self._sum(actor, "burst_dmg_pct", now),
