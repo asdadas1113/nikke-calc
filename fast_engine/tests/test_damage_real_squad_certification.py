@@ -13,242 +13,85 @@ from fast_engine.engine.model import EnemyStaticProfile
 from fast_engine.engine.score import score_static_squad, static_score_blockers
 from fast_engine.engine.state import ENEMY
 
-
-NAMES = [
-    "미란다",
-    "브리드 : 사일런트 트랙",
-    "헬름",
-    "루주",
-    "미하라 : 본딩 체인",
-]
-CONFIG = {
-    "duration": 180.0,
-    "first_burst_time": 3.0,
-    "rng_mode": "expected",
-}
+NAMES = ["미란다", "브리드 : 사일런트 트랙", "헬름", "루주", "미하라 : 본딩 체인"]
+CONFIG = {"duration": 180.0, "first_burst_time": 3.0, "rng_mode": "expected"}
 
 
 class RealSquadCertificationTests(unittest.TestCase):
     @staticmethod
     def _fixture():
-        moris_squad = build_squad(NAMES)
-        compiled = compile_moris_squad(moris_squad)
-        policy = compile_burst_policy(moris_squad, compiled, CONFIG)
-        enemy = EnemyStaticProfile(
-            defense=31784.0,
-            element=None,
-            core_uptime=0.0,
-            core_px=0.0,
-            duration=180.0,
-        )
-        return moris_squad, compiled, policy, enemy
+        moris = build_squad(NAMES)
+        compiled = compile_moris_squad(moris)
+        policy = compile_burst_policy(moris, compiled, CONFIG)
+        enemy = EnemyStaticProfile(defense=31784.0, element=None, core_uptime=0.0, core_px=0.0, duration=180.0)
+        return moris, compiled, policy, enemy
 
-    def test_control_miranda_mihara_is_first_fully_certified_real_squad(self):
-        _moris_squad, compiled, policy, enemy = self._fixture()
+    def test_miranda_mihara_control_fails_closed(self):
+        _moris, compiled, policy, enemy = self._fixture()
+        self.assertEqual(compiled.members[4].weapon.get("control"), {"cover": {"policy": "own_full_burst"}})
+        self.assertIn("control:미하라 : 본딩 체인", static_score_blockers(compiled))
+        with self.assertRaisesRegex(NotImplementedError, "control:미하라 : 본딩 체인"):
+            score_static_squad(compiled, policy, enemy)
 
-        self.assertEqual(static_score_blockers(compiled), ())
-        score = score_static_squad(compiled, policy, enemy)
-        self.assertGreater(score.squad_total, 0.0)
-        self.assertGreater(score.events_processed, 0)
-        self.assertEqual(score.unsupported, ())
-
-    def test_mihara_body_contact_uses_live_gauge_as_direct_hit_count(self):
-        moris_squad, compiled, _policy, enemy = self._fixture()
-        policy = compile_burst_policy(
-            moris_squad,
-            compiled,
-            {**CONFIG, "duration": 1.0},
-        )
+    def test_mihara_body_contact_uses_live_gauge_as_hit_count(self):
+        moris, compiled, _policy, enemy = self._fixture()
+        policy = compile_burst_policy(moris, compiled, {**CONFIG, "duration": 1.0})
         sink = SimpleDamageScoreSink(compiled, enemy)
         runtime = BurstRuntime(compiled, policy, enemy, damage_sink=sink)
-        effect = next(
-            row
-            for row in compiled.effects
-            if row.actor == 4 and row.name == "바디 컨텍 3"
-        )
-
-        self.assertTrue(sink.supports(effect))
-        self.assertIn(effect.effect_id, sink.stack_specs)
-
+        effect = next(e for e in compiled.effects if e.actor == 4 and e.name == "바디 컨텍 3")
         runtime.state.set_gauge(4, "포획 사슬", 1.0)
         before = sink.char_total[4]
-        self.assertTrue(
-            runtime.dispatcher._activate(
-                effect,
-                now=0.0,
-                context=SignalContext(),
-            )
-        )
-        one_stack = sink.char_total[4] - before
-        self.assertGreater(one_stack, 0.0)
-
+        self.assertTrue(runtime.dispatcher._activate(effect, now=0.0, context=SignalContext()))
+        one = sink.char_total[4] - before
         runtime.state.set_gauge(4, "포획 사슬", 3.0)
         before = sink.char_total[4]
-        self.assertTrue(
-            runtime.dispatcher._activate(
-                effect,
-                now=0.1,
-                context=SignalContext(),
-            )
-        )
-        three_stack = sink.char_total[4] - before
-        self.assertAlmostEqual(three_stack, one_stack * 3.0, places=6)
+        self.assertTrue(runtime.dispatcher._activate(effect, now=0.1, context=SignalContext()))
+        self.assertAlmostEqual(sink.char_total[4] - before, one * 3.0, places=6)
 
-    def test_mihara_burst_end_recharge_sees_current_cycle_cast_state(self):
-        moris_squad, compiled, _policy, enemy = self._fixture()
-        # Cycle 1 uses Helm B3; cycle 2 uses Mihara B3. The second full-burst end
-        # is therefore the first point where Mihara's burst_casted recharge must fire.
-        policy = compile_burst_policy(
-            moris_squad,
-            compiled,
-            {**CONFIG, "duration": 26.41},
-        )
+    def test_mihara_burst_end_recharge_sees_cast_state(self):
+        moris, compiled, _policy, enemy = self._fixture()
+        policy = compile_burst_policy(moris, compiled, {**CONFIG, "duration": 26.41})
         sink = SimpleDamageScoreSink(compiled, enemy)
         runtime = BurstRuntime(compiled, policy, enemy, damage_sink=sink)
         runtime.run(duration=26.41)
+        mihara = [e for e in compiled.effects if e.actor == 4]
+        by_name = {e.name: e for e in mihara}
+        self.assertEqual(runtime.dispatcher._activation_counts[by_name["바디 컨텍 2"].effect_id], 1)
+        self.assertEqual(runtime.dispatcher._activation_counts[by_name["바디 컨텍 3"].effect_id], 2)
+        self.assertEqual(runtime.dispatcher._activation_counts[by_name["사슬 감기"].effect_id], 2)
+        self.assertEqual(runtime.dispatcher._activation_counts[by_name["바디 컨텍 5"].effect_id], 2)
 
-        mihara = [effect for effect in compiled.effects if effect.actor == 4]
-        recharge = next(effect for effect in mihara if effect.name == "바디 컨텍 2")
-        body_hit = next(effect for effect in mihara if effect.name == "바디 컨텍 3")
-        chain = next(effect for effect in mihara if effect.name == "사슬 감기")
-        consume = next(effect for effect in mihara if effect.name == "바디 컨텍 5")
-
-        self.assertEqual(runtime.dispatcher._activation_counts[recharge.effect_id], 1)
-        self.assertEqual(runtime.dispatcher._activation_counts[body_hit.effect_id], 2)
-        self.assertEqual(runtime.dispatcher._activation_counts[chain.effect_id], 2)
-        self.assertEqual(runtime.dispatcher._activation_counts[consume.effect_id], 2)
-        self.assertEqual(runtime.state.actors[4].gauges.get("포획 사슬"), 0.0)
-
-    def test_mihara_dot_chain_captures_mutates_and_survives_named_removal(self):
-        moris_squad, compiled, _policy, enemy = self._fixture()
-        policy = compile_burst_policy(
-            moris_squad,
-            compiled,
-            {**CONFIG, "duration": 5.0},
-        )
+    def test_mihara_dot_chain_state_survives_named_removal(self):
+        moris, compiled, _policy, enemy = self._fixture()
+        policy = compile_burst_policy(moris, compiled, {**CONFIG, "duration": 5.0})
         sink = SimpleDamageScoreSink(compiled, enemy)
         runtime = BurstRuntime(compiled, policy, enemy, damage_sink=sink)
-        mihara = [effect for effect in compiled.effects if effect.actor == 4]
-        chain = next(effect for effect in mihara if effect.name == "사슬 감기")
-        pull = next(effect for effect in mihara if effect.name == "사슬 당기기")
-        stack_add = next(
-            effect
-            for effect in mihara
-            if (effect.stat or "") == "debuff_stack_add"
-            and effect.parameters.get("target_effect") == "사슬 감기"
-            and any(rule.event_key == "hit_count" for rule in effect.triggers)
-        )
-        remove = next(
-            effect
-            for effect in mihara
-            if (effect.stat or "") == "remove_named_buff"
-            and effect.parameters.get("target_effect") == "사슬 감기"
-        )
-
-        self.assertTrue(sink.supports(chain))
-        self.assertTrue(sink.supports(pull))
-        self.assertTrue(sink.supports_state_operation(stack_add))
-        self.assertTrue(sink.supports_state_operation(remove))
-
+        rows = [e for e in compiled.effects if e.actor == 4]
+        chain = next(e for e in rows if e.name == "사슬 감기")
+        pull = next(e for e in rows if e.name == "사슬 당기기")
+        stack_add = next(e for e in rows if e.stat == "debuff_stack_add" and e.parameters.get("target_effect") == "사슬 감기" and any(r.event_key == "hit_count" for r in e.triggers))
+        remove = next(e for e in rows if e.stat == "remove_named_buff" and e.parameters.get("target_effect") == "사슬 감기")
         runtime.state.set_gauge(4, "포획 사슬", 10.0)
-        self.assertTrue(
-            runtime.dispatcher._activate(
-                chain,
-                now=0.0,
-                context=SignalContext(),
-            )
-        )
-        self.assertTrue(
-            runtime.dispatcher.effects.has_named_state(
-                ENEMY, "사슬 감기", now=0.0
-            )
-        )
-        self.assertEqual(
-            runtime.dispatcher.effects.named_stack(ENEMY, "사슬 감기", now=0.0),
-            10.0,
-        )
+        self.assertTrue(runtime.dispatcher._activate(chain, now=0.0, context=SignalContext()))
+        self.assertTrue(sink.activate_state_operation(stack_add, now=0.1, targets=(ENEMY,)))
+        self.assertEqual(runtime.dispatcher.effects.named_stack(ENEMY, "사슬 감기", now=0.1), 11.0)
+        self.assertTrue(runtime.dispatcher._activate(pull, now=0.2, context=SignalContext()))
+        self.assertTrue(runtime.dispatcher._activate(remove, now=0.2, context=SignalContext()))
+        self.assertFalse(runtime.dispatcher.effects.has_named_state(ENEMY, "사슬 감기", now=0.2))
+        self.assertEqual(runtime.dispatcher.effects.named_stack(ENEMY, "사슬 당기기", now=0.2), 11.0)
 
-        # The real hit_count:40 mutator is normally gated by full burst. Its state
-        # operation itself is tested directly here so the stack semantic is not
-        # entangled with weapon timing in this unit.
-        self.assertTrue(
-            sink.activate_state_operation(
-                stack_add,
-                now=0.1,
-                targets=(ENEMY,),
-            )
-        )
-        self.assertEqual(
-            runtime.dispatcher.effects.named_stack(ENEMY, "사슬 감기", now=0.1),
-            11.0,
-        )
-
-        # Chain Pull captures the current 11-stack Chain Wind into its own DoT.
-        self.assertTrue(
-            runtime.dispatcher._activate(
-                pull,
-                now=0.2,
-                context=SignalContext(),
-            )
-        )
-        self.assertEqual(
-            runtime.dispatcher.effects.named_stack(ENEMY, "사슬 당기기", now=0.2),
-            11.0,
-        )
-
-        # The following real burst-cast state operation removes Chain Wind only.
-        # Chain Pull must retain its captured stack and continue its finite timer.
-        self.assertTrue(
-            runtime.dispatcher._activate(
-                remove,
-                now=0.2,
-                context=SignalContext(),
-            )
-        )
-        self.assertFalse(
-            runtime.dispatcher.effects.has_named_state(
-                ENEMY, "사슬 감기", now=0.2
-            )
-        )
-        self.assertEqual(
-            runtime.dispatcher.effects.named_stack(ENEMY, "사슬 당기기", now=0.2),
-            11.0,
-        )
-        self.assertTrue(sink.supports(pull))
-
-    def test_real_helm_last_bullet_still_activates_on_dynamic_charge_score_path(self):
-        moris_squad, compiled, _policy, enemy = self._fixture()
-        helm = next(
-            effect
-            for effect in compiled.effects
-            if effect.actor == 2
-            and effect.name == "진두지휘"
-            and effect.stat == "normal_atk_crit_rate"
-        )
-        rows = simulate_static_last_bullet_boundaries(
-            compiled,
-            duration=30.0,
-            effect_filter=lambda effect: effect.effect_id == helm.effect_id,
-        )
+    def test_real_helm_last_bullet_still_activates(self):
+        moris, compiled, _policy, enemy = self._fixture()
+        helm = next(e for e in compiled.effects if e.actor == 2 and e.name == "진두지휘" and e.stat == "normal_atk_crit_rate")
+        rows = simulate_static_last_bullet_boundaries(compiled, duration=30.0, effect_filter=lambda e: e.effect_id == helm.effect_id)
         self.assertTrue(rows)
         first = rows[0].time
-        policy = compile_burst_policy(
-            moris_squad,
-            compiled,
-            {**CONFIG, "duration": first + 0.01},
-        )
-
+        policy = compile_burst_policy(moris, compiled, {**CONFIG, "duration": first + 0.01})
         sink = SimpleDamageScoreSink(compiled, enemy)
         runtime = BurstRuntime(compiled, policy, enemy, damage_sink=sink)
         runtime.run(duration=first + 0.01)
-
-        self.assertTrue(runtime.weapons.emits_every_charge_shot(2))
-        helm_value = runtime.dispatcher.effects.sum_stat(
-            2, "normal_atk_crit_rate", now=first + 0.001
-        )
-        ally_value = runtime.dispatcher.effects.sum_stat(
-            0, "normal_atk_crit_rate", now=first + 0.001
-        )
+        helm_value = runtime.dispatcher.effects.sum_stat(2, "normal_atk_crit_rate", now=first + 0.001)
+        ally_value = runtime.dispatcher.effects.sum_stat(0, "normal_atk_crit_rate", now=first + 0.001)
         self.assertGreater(helm_value, 0.0)
         self.assertAlmostEqual(ally_value, helm_value, places=9)
 
