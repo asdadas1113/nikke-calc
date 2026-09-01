@@ -7,6 +7,7 @@ from fast_engine.engine.burst import compile_burst_policy
 from fast_engine.engine.burst_runtime import BurstRuntime
 from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.conditions import SignalContext
+from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_supported
 from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
 from fast_engine.engine.last_bullet import simulate_static_last_bullet_boundaries
 from fast_engine.engine.model import EnemyStaticProfile
@@ -32,6 +33,26 @@ class RealSquadCertificationTests(unittest.TestCase):
         self.assertIn("control:미하라 : 본딩 체인", static_score_blockers(compiled))
         with self.assertRaisesRegex(NotImplementedError, "control:미하라 : 본딩 체인"):
             score_static_squad(compiled, policy, enemy)
+
+    def test_miranda_wakeup_one_shot_crit_fails_closed_without_control_noise(self):
+        moris = build_squad(NAMES)
+        # Remove the independently unsupported Mihara cover control so this test
+        # isolates Miranda's target-side one-shot lifetime.
+        next(c for c in moris if c["name"] == "미하라 : 본딩 체인")["control"] = {}
+        compiled = compile_moris_squad(moris)
+        wakeup = next(
+            e for e in compiled.effects
+            if e.name == "웨이크업! 4" and e.stat == "crit_rate"
+        )
+
+        self.assertEqual(wakeup.parameters.get("duration_bullets"), 1)
+        self.assertIsNone(wakeup.duration)
+        self.assertEqual(wakeup.target, "allies_top_atk_excl:1")
+        self.assertFalse(is_direct_damage_buff_runtime_supported(wakeup))
+        self.assertIn(
+            "normal_delivery:미란다:웨이크업! 4:crit_rate",
+            static_score_blockers(compiled),
+        )
 
     def test_mihara_body_contact_uses_live_gauge_as_hit_count(self):
         moris, compiled, _policy, enemy = self._fixture()
