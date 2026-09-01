@@ -1,26 +1,40 @@
-# Fast Engine — greenfield architecture contract
+# Fast Engine — architecture contract
 
-Status: Phase 2 baseline. This document defines the production Fast Engine direction. The earlier Crown/Mast research engine was a controlled experiment only; its source/archive has been removed from Git and only reusable lessons remain in `fast_engine/research/LESSONS.md`.
+Status: Phase 2 active development. Canonical live state/checkpoint information is in `docs/OPTIMIZER_PROJECT_STATE.md`; this document defines the engineering contract.
 
 ## Objective
 
 Fast Engine is a **high-throughput theoretical ranking engine**, not a detailed combat calculator.
 
-Its output only needs enough consistency to answer:
+Its job is to cheaply answer:
 
 > Under the same theoretical 180-second static-target assumptions, which squads are likely stronger and therefore deserve expensive Moris verification?
+
+Production intent:
+
+```text
+thousands of plausible squads
+        ↓
+Fast broad ranking
+        ↓
+wide/protected shortlist
+        ↓
+Moris authoritative re-score
+        ↓
+exact non-overlap 5-team allocation
+```
 
 Moris remains the final damage authority.
 
 ## Priority order
 
-1. throughput
-2. Moris Top-N recall / low catastrophic false-negative rate
-3. stable relative ordering across team archetypes
-4. enough combat fidelity to preserve meaningful team synergies
-5. absolute Fast-vs-Moris damage accuracy
+1. throughput;
+2. Moris Top-N recall / low catastrophic false-negative rate;
+3. stable pairwise ordering across team archetypes;
+4. meaningful synergy preservation;
+5. absolute Fast-vs-Moris damage accuracy.
 
-A small absolute damage error is not a defect if ranking recall remains strong. A systematic error that removes a genuinely strong archetype from the shortlist is a defect even when mean absolute error is small.
+A small common absolute error can be acceptable. A systematic weapon/mechanic-specific bias is not acceptable even if average error is small.
 
 ## Compatibility boundary
 
@@ -34,165 +48,292 @@ context.spec.build_squad(...)      # Moris-owned
 Moris character dicts
         ↓
 Fast compile boundary
-  - calc_base_stats(char)          # compile-time reuse
-  - char_effects(name, stage)      # favorite-stage selection reuse
-  - parsed_nikke / parsed_skills   # source language
+  - calc_base_stats(char)
+  - active favorite-stage selection
+  - parsed_nikke / parsed_skills / weapon mechanics
         ↓
-immutable Fast IR / compiled squad
+immutable Fast IR
         ↓
 independent Fast runtime
 ```
 
-This keeps account growth, equipment, cube, collection/favorite, and variant-selection semantics compatible with Moris while leaving the expensive combat execution path independent.
-
-Fast must not call Moris `timeline.simulate()` during a normal Fast evaluation.
+Fast must not call `timeline.simulate()` during a normal evaluation.
 
 ## Time model
 
-The fight horizon defaults to **180 seconds**. The timestep is **not fixed**.
+The fight horizon defaults to 180 seconds and is treated as `[0, duration)`.
 
-Fast uses continuous-time event scheduling:
+There is **no global 1/60 loop**.
 
 ```text
 current state
   → next meaningful boundary
-  → aggregate unchanged interval
+  → aggregate unchanged span
   → process boundary
-  → repeat until 180 s
+  → repeat
 ```
 
-Meaningful boundaries include burst transitions, buff/state expiry, periodic effects, reload completion, weapon-mode changes, and shot/trigger thresholds that can change state.
+Equal-time semantic phases mirror the relevant Moris ordering:
 
-There is no default 1/60-second loop. Frame granularity may be used only for a mechanic that demonstrably needs it and should be isolated to that mechanic rather than turning the whole engine into a frame simulator.
+```text
+state expiry
+→ fixed periodic
+→ burst transitions/effects
+→ weapon/damage boundaries
+```
 
-## Aggregation rule
+Frame granularity may only be introduced for an isolated mechanic that demonstrably requires it. Do not turn the entire runtime into a frame simulator to erase harmless Moris quantization differences.
 
-If state relevant to damage/triggering is unchanged across an interval, repeated work may be collapsed.
+## Aggregation contract
 
-Examples:
+The fundamental rule is:
 
-- `N` identical normal shots → one expected-damage calculation × `N`.
-- expected crit/core counts may accumulate fractionally.
-- if an every-30-hit trigger exists, split the interval only at the hit-count boundary rather than per bullet.
-- identical DoT ticks may be batched until a state or trigger boundary interrupts them.
+> **If future-relevant state does not change, do not recalculate.**
 
-Accuracy is spent only where it protects ranking.
+Examples already used by the runtime:
 
-## Enemy model
+- `N` identical normal shots → one DealForm evaluation × `N`;
+- unchanged weapon spans → compressed shot blocks;
+- count triggers → materialize only threshold crossings;
+- raw `full_charge_hit` → only actors that actually consume it promote every charge shot;
+- damage-state snapshots → actor/enemy scoped version cache;
+- DoT → schedule actual meaningful ticks, not frames;
+- stale expiry/DoT schedules → generation-token no-op instead of heap deletion.
 
-Initial target is patternless and static:
+A global per-shot or per-pellet scheduler is prohibited unless a mechanic truly changes state at every such hit and no equivalent aggregation exists.
 
-- DEF
-- element/code
-- core expected exposure
-- duration
+## Weapon event semantics
+
+Keep event families distinct.
+
+Current Moris authority semantics include:
+
+- generic `hit_count`: one per ordinary weapon trigger pull/shot;
+- `pellet_hit`: one per pellet hit;
+- `full_charge_hit`: one per full-charge release;
+- `full_charge_count:N`: modulo threshold over full-charge hits.
+
+Do not infer that SG `hit_count` equals pellet count. Fast previously made this mistake and it can materially over-trigger SG count effects.
+
+## Runtime state / invalidation
+
+Runtime state should contain only values that can change future ranking score.
+
+Domains include:
+
+- active effects/named states/stacks/counters/gauges;
+- health/shield;
+- ammo/resource/cadence;
+- damage memory/accumulators;
+- burst state.
+
+Mutations increment actor/domain scoped versions. Hot caches should depend on the smallest relevant token rather than one global “state changed” flag.
+
+`DamageTermResolver`, for example, caches an actor's numeric damage state and should not invalidate because an unrelated ally's ammo changed.
+
+## Target/snapshot contract
+
+Target selection is a mechanic, not a character special case.
+
+Rank-based target cohorts should preserve Moris snapshot identity. Same caster + same activation time + same raw rank target should share the same selected cohort.
+
+Position/adjacency, B3-only rank selection, burst-cast history, weapon/class/element targets should be reusable target primitives.
+
+Do not encode “Rouge”, “Milk”, etc. into scheduler logic merely because those characters exposed the mechanic first.
+
+## Damage semantics
+
+Fast lowers Moris damage into three layers:
+
+1. **compiled hit/event shape** — coefficient, hit type, multi-hit count, DoT/pending flags;
+2. **cached derived numeric state** — `DamageTerms` such as ATK, crit, core, charge, received damage, element;
+3. **branch-light expected-value DealForm** — reused across many identical shots/ticks.
+
+Unknown derived states must block scoring if they can contaminate otherwise-supported hits.
+
+Unsupported damage events may be reported explicitly in `FastScore.unsupported`, but comparison-critical state delivery must fail closed rather than return a biased subtotal.
+
+## Expected-value policy
+
+Fast is deterministic by default.
+
+Expected-value treatment is preferred for repeated probabilistic mechanics when it preserves long-run ranking:
+
+- crit damage;
+- core damage;
+- repeated probabilistic proc counters.
+
+For count-triggered probabilistic events, use fractional accumulation and materialize only the threshold crossing that changes state.
+
+Do not use RNG noise for candidate ranking.
+
+## Core model
+
+Core handling is being upgraded from a squad-wide scalar to a weapon-aware model.
+
+Fallback static model:
 
 ```text
 effective_core_rate = core_uptime × core_hit_rate_when_open
 ```
 
-Core weighting must feed both expected core damage and core-hit-driven expected trigger progress where appropriate.
+When `core_px` is available, mirror Moris weapon accuracy geometry:
 
-Initial exclusions: immunity windows, elemental timing windows, boss attacks, stun, cover destruction, movement, boss AI, and timed part-break chronology. Moris handles final boss-pattern verification.
+```text
+D = max(base_diameter - acc_slope × accuracy_pct, 1)
+R = D / 2
+r_core = core_px / 2
+P_core = min(1, (r_core / R) ^ model_n)
+```
 
-## Runtime state budget
+Weapon parameters come from `data/weapon_mechanics.json`.
 
-Production state should contain only values that can change future score/order. The initial contract allows:
+Design requirement:
 
-- active states/buffs and expiries
-- stack/counter/gauge values
-- ammo/reload/charge/weapon mode
-- burst stage/full-burst state/cooldowns
-- character-owned HP/shield state
-- hit/crit/core expected trigger progress
-- last dealt damage when a later effect references it
-- damage accumulators when an effect stores and releases dealt damage
-- per-character and squad damage totals
+- compute probability from cached state, not per bullet;
+- normal-shot blocks reuse it while accuracy/core state is unchanged;
+- `core_hit_count:N` later consumes expected fractional progress and only emits threshold crossings.
 
-Full hit histories and verbose logs are diagnostic-only opt-ins.
+This is comparison-critical because AR/SMG/SG/MG/SR/RL can have very different core probabilities on the same boss.
 
-## State-version / cache invalidation model
+## Damage events
 
-Fast must not use one monolithic "state changed" flag for every hot-path cache. Runtime state is split into invalidation domains:
+Currently certified/partially certified generic event families include:
 
-- effect/state (named buffs, stacks, gauges, counters)
-- health (HP/shield)
-- resource/cadence (ammo, weapon mode)
-- damage memory (last dealt damage, delayed-damage accumulators)
-- burst state
+- simple immediate damage;
+- safe B3 pending `bonus_damage` slice;
+- fixed-tick DoT slice;
+- compressed normal attacks.
 
-Each mutation increments only the relevant domain version, with actor-scoped versions in addition to global domain versions. This lets a future buff snapshot depend only on the actors/domains it actually reads. For example, updating `last_dealt_damage` must not invalidate an ATK/crit buff cache unless that cache explicitly depends on damage memory.
+### B3 pending contract
 
-Named-state expiry uses generation tokens. Refreshing a state creates a new generation, so an old queued expiry becomes a cheap no-op instead of requiring deletion from the event heap.
+Only exact `stat == "bonus_damage"` uses the certified delayed B3 path. `bonus_damage:N` is immediate multi-hit.
 
-## Damage semantics
+Pending damage is evaluated after Full Burst start buffs settle. Complex source-order masks remain fail closed until explicitly represented.
 
-`calculator.damage.calc_damage()` is not the whole combat model. It is the final single-hit DealForm after runtime state has already derived many values.
+### Fixed DoT contract
 
-Before declaring broad runtime coverage, every Moris damage-affecting path must be classified as one of:
+Initial DoT support is intentionally narrow:
 
-- **Hit formula** — coefficient, ATK/DEF, crit/core/full burst, charge, typed damage, received damage, element.
-- **Derived state** — values derived from caster ATK/HP, ammo, gauge, etc. before damage is evaluated.
-- **Damage event** — bonus/DoT/sequential/fixed/accumulated/released damage.
-- **Cadence/timeline** — fire rate, ammo, reload, charge, burst and state timing.
-- **Moris NOP** — not currently reflected by Moris authority.
-- **Fast unsupported** — explicit Moris fallback/protected review until implemented.
+- fixed coefficient;
+- fixed tick interval;
+- fixed lifetime;
+- no dynamic stack/gauge coefficient scaling;
+- no same-target ramp;
+- no `dmg_scale_mag_pct` style dynamic magnification.
 
-Do not silently treat an unknown mechanism as zero.
+Refresh uses generation tokens. Moris immediate/default first-tick and expiry-boundary behavior must be preserved.
 
-## Character-name blindness
+## Character-name blindness and anomaly diagnosis
 
 Runtime core must not know named characters.
 
-Novel character behavior belongs in parsed/compiled effects or in a reusable generic primitive. A named special case is a last resort and should be capability-routed explicitly.
+When one character diverges, do not immediately change shared code.
 
-## Expected-value policy
+Diagnosis hierarchy:
 
-Fast is deterministic by default. RNG noise is not useful for candidate ranking.
+```text
+many characters fail similarly → common runtime/formula
+one mechanic cohort fails       → mechanic module
+one character fails             → character data/unique mechanic first
+```
 
-Expected-value treatment may be used for crit, core, hit-rate and repeated-proc behavior when it does not destroy the interaction being ranked. Expected counters may be fractional and only need to split execution when a threshold changes future state.
+Only after confirming a truly unique rule should a character-specific exception be considered.
 
-## Research-prototype policy
+## Static enemy model
 
-The controlled Crown/Mast prototype is no longer retained as source code or an archive inside this repository.
+Initial Fast target intentionally excludes detailed boss chronology.
 
-Only its general lessons are retained:
+Inputs may include:
 
-- event/buff/damage separation is useful;
-- repeated buff resolution is expensive;
-- unchanged spans should be aggregated;
-- a score-only runtime can discard Moris UI/history detail;
-- Crown/Maid Mast-specific roster/rotation assumptions must not leak into production abstractions.
+- DEF;
+- element/code;
+- core exposure/core size;
+- duration.
 
-See `fast_engine/research/LESSONS.md`. Production code must not depend on the removed prototype.
+Initial exclusions:
 
-## Validation
+- immunity windows;
+- element-restriction time scripts;
+- boss attacks/incoming-damage chronology;
+- stun;
+- cover destruction;
+- movement;
+- timed part-break chronology;
+- boss AI.
 
-Three gates precede production pruning:
+These remain Moris final-validation concerns unless a specific static approximation proves necessary for shortlist recall.
 
-1. **primitive correctness**: scheduler/state/damage primitives against synthetic or Moris-derived cases;
-2. **static-squad comparison**: same 180-second static conditions, comparing total damage, per-character damage, burst timing, shot counts and major state windows;
-3. **ranking recall**: Moris Top-N survival within widening Fast Top-K shortlists across real account/team samples.
+## Performance contract
 
-The primary production metric is shortlist recall, not exact damage equality.
+Fast exists to make **thousands of candidate scores practical**.
 
-## Phase 2 build order
+Rules:
 
-1. greenfield immutable compiled model + Moris compile boundary;
-2. continuous-time stable scheduler;
-3. damage-semantics inventory and capability manifest;
-4. generic state/stack/counter/gauge store + expiry dispatch;
-5. burst scheduler independent of character names;
-6. weapon cadence/ammo/reload/charge interval model;
-7. Fast damage kernel and derived-state resolver;
-8. damage-event primitives and accumulators;
-9. static enemy element/core integration;
-10. 5-person score-only vertical slice;
-11. Moris static-parity and ranking-recall harness;
-12. optimizer integration only after recall is measured.
+- no global frame loop;
+- no global per-shot objects;
+- no per-pellet scheduler for SG;
+- only actors with raw-event consumers get raw boundaries;
+- state-version caches must survive unrelated mutations;
+- batch identical shot/tick damage;
+- prefer threshold-crossing event counts to total hit counts.
 
-## Performance philosophy
+Initial milestone was <=1 s per 180 s five-person squad. Actual branch measurements are far below that, but benchmark fixtures differ, so optimize trends rather than worship one number.
 
-Do not preserve detail merely because Moris has it. Every hot-path object, lookup and event must justify itself by ranking quality.
+Keep a CI wall-clock regression gate and structural event-count tests.
 
-The initial milestone remains <= 1.0 s per 180-second 5-person squad, but this is a gate rather than a target ceiling. If interval aggregation can reach substantially lower latency without materially hurting recall, prefer the faster design.
+## Validation gates before production pruning
+
+### 1. Primitive correctness
+
+Synthetic/Moris-derived tests for:
+
+- scheduler phase ordering;
+- target snapshots;
+- cadence/count semantics;
+- damage layers;
+- DoT/pending boundaries;
+- expected probabilistic thresholds.
+
+### 2. Static Moris comparison
+
+Compare under equivalent static conditions:
+
+- squad/per-character damage;
+- burst timing;
+- shot/reload counts;
+- major buff windows;
+- trigger activation count/timing.
+
+### 3. Ranking recall
+
+Required before Fast is allowed to prune production candidates:
+
+- Moris Top-N recall within Fast Top-K;
+- pairwise ordering;
+- false-negative/tail rate;
+- archetype/weapon/mechanic bias;
+- unsupported frequency;
+- final 5-team Moris score after shortlist;
+- wall time and memory.
+
+Shortlist width must be measured, not guessed.
+
+## Current build direction
+
+The broad build order remains:
+
+1. compiled model/input boundary — established;
+2. event scheduler/state/effects — established;
+3. burst runtime — established for major generic paths;
+4. weapon cadence/count boundaries — substantial coverage;
+5. damage kernel/state resolver — established;
+6. normal + simple skill score vertical slice — established;
+7. B3 pending + selective raw charge + fixed DoT — implemented slices;
+8. weapon-aware core probability — **active WIP**;
+9. expected `core_hit_count:N` / `crit_hit_count:N` thresholds;
+10. widen dynamic cadence/derived-stat coverage;
+11. real-account/local ranking-recall harness;
+12. optimizer integration and heuristic reset audit.
+
+See `docs/OPTIMIZER_PROJECT_STATE.md` for exact HEAD, CI blockers and next actions.
