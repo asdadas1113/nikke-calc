@@ -30,6 +30,8 @@ class DamageTerms:
     burst_dmg_aoe_pct: float = 0.0
     pierce_dmg_pct: float = 0.0
     armor_break_dmg_pct: float = 0.0
+    pierce_enabled: bool = False
+    armor_break_enabled: bool = False
     dot_dmg_pct: float = 0.0
     projectile_explosion_dmg_pct: float = 0.0
     projectile_attachment_dmg_pct: float = 0.0
