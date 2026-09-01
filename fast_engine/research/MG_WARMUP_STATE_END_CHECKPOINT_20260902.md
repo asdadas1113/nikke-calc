@@ -156,6 +156,49 @@ Two real memberships now sit at raw 2 / conceptual 1:
 
 Both are blocked only by Crown `로얄 에타이어 4` through the deferred `heal_received` path.
 
+## State-end source safety hardening
+
+A follow-up review found that timing certification alone was not sufficient. A consumer of `event:state_end:<name>` could be syntactically executable even when the corresponding state ended through a source Fast does not emit, such as explicit removal, a bullet lifetime, or an unsupported group lifetime. That would create a fail-open coverage result even though the Asuka path itself was safe.
+
+The score gate now proves the source state for every state-end cadence consumer. Every matching provider must be:
+
+- owned by the same actor,
+- a `buff`,
+- self-targeted,
+- finite-duration with duration `>= 0`,
+- free of `duration_bullets`,
+- runtime executable.
+
+If the provider is missing, ambiguous, group-targeted, bullet-lifetime-driven, or otherwise unsupported, the consumer remains fail-closed.
+
+Safety implementation commit:
+
+`f1640611e0981f502405d648ee1f27d05725e954`
+
+Additional regressions verify that:
+
+- a state-end consumer backed by an unsupported provider remains a cadence blocker;
+- `force_reload` while a rapid actor is already reloading leaves the existing reload end time unchanged.
+
+The targeted safety workflow passed before the safety commit was pushed.
+
+### Frontier re-audit after the safety gate
+
+- workflow run: `33565485221`
+- job: `100047586948`
+- audit commit: `d4fe96f27b882cc4843fc67eb3722d88bdb181a1`
+- teams: 24
+- certified: 1
+- coverage gaps: 23
+
+The intended frontier is unchanged after closing the fail-open path:
+
+- `레이드_델타`: raw **2**, conceptual **1**, only Crown `로얄 에타이어 4`;
+- `스쿼드1`: raw **2**, conceptual **1**, only Crown `로얄 에타이어 4`;
+- `레이드_아스카루드밀라`: raw **7**, conceptual **4**; Asuka MG/state-end cadence blockers remain removed.
+
+This confirms that the coverage gain came from the certified timed-self state-end path rather than an overly broad named-event allowance.
+
 ## Ranking interpretation
 
 Certified public team count remains **1**. Therefore:
