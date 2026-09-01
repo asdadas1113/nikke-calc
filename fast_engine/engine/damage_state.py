@@ -1,0 +1,127 @@
+from __future__ import annotations
+
+from .damage import DamageTerms
+from .effects import ActiveEffectStore
+from .model import CompiledSquad, EnemyStaticProfile
+from .state import ENEMY, StateDomain, StateStore
+
+_CODE_ADVANTAGE = {
+    "전격": "수냉",
+    "수냉": "작열",
+    "작열": "풍압",
+    "풍압": "철갑",
+    "철갑": "전격",
+}
+
+
+class DamageTermResolver:
+    """Resolve active Fast effects into one cacheable numeric damage snapshot.
+
+    The hot path depends only on the scored actor's EFFECT lane and the enemy's
+    EFFECT lane. Unrelated ally mutations therefore do not invalidate this
+    actor's snapshot. Health/resource-derived stats are intentionally not folded
+    in yet; adding one requires explicitly widening this dependency token.
+    """
+
+    __slots__ = ("squad", "effects", "state", "enemy", "_cache")
+
+    def __init__(
+        self,
+        squad: CompiledSquad,
+        effects: ActiveEffectStore,
+        state: StateStore,
+        enemy: EnemyStaticProfile,
+    ) -> None:
+        self.squad = squad
+        self.effects = effects
+        self.state = state
+        self.enemy = enemy
+        self._cache: dict[int, tuple[tuple[int, ...], DamageTerms]] = {}
+
+    def _token(self, actor: int) -> tuple[int, ...]:
+        return self.state.dependency_token(
+            entities=(actor, ENEMY),
+            domains=(StateDomain.EFFECT,),
+        )
+
+    def _sum(self, actor: int, stat: str, now: float) -> float:
+        return self.effects.sum_stat(actor, stat, now=now)
+
+    def _personal_enemy_sum(self, actor: int, stat: str, now: float) -> float:
+        total = 0.0
+        for effect, active in self.effects.iter_stat(stat, now=now):
+            if active.target == ENEMY and active.source_actor == actor:
+                total += float(effect.value or 0.0) * active.stacks
+        return total
+
+    def _caster_based_atk_flat(self, actor: int, now: float) -> float:
+        total = 0.0
+        for effect, active in self.effects.iter_stat("atk_caster_based_pct", now=now):
+            if active.target != actor:
+                continue
+            caster_base = self.squad.members[active.source_actor].base_atk
+            total += caster_base * float(effect.value or 0.0) * active.stacks / 100.0
+        return total
+
+    def resolve(self, actor: int, *, now: float) -> DamageTerms:
+        token = self._token(actor)
+        cached = self._cache.get(actor)
+        if cached is not None and cached[0] == token:
+            return cached[1]
+
+        general_crit_rate_pct = self._sum(actor, "crit_rate", now)
+        normal_crit_rate_pct = self._sum(actor, "normal_atk_crit_rate", now)
+        general_crit_dmg = self._sum(actor, "crit_dmg", now)
+        normal_crit_dmg = self._sum(actor, "normal_atk_crit_dmg", now)
+
+        enemy_def_down = self.effects.sum_stat(ENEMY, "enemy_def_down_pct", now=now)
+        enemy_def_down += self._personal_enemy_sum(
+            actor, "personal_enemy_def_down_pct", now
+        )
+        received = self.effects.sum_stat(ENEMY, "received_dmg_pct", now=now)
+        received += self._personal_enemy_sum(
+            actor, "personal_received_dmg_pct", now
+        )
+
+        element = self.squad.members[actor].element
+        terms = DamageTerms(
+            atk_pct=self._sum(actor, "atk_pct", now),
+            atk_flat=(
+                self._sum(actor, "atk_flat", now)
+                + self._caster_based_atk_flat(actor, now)
+            ),
+            enemy_def_down_pct=enemy_def_down,
+            def_ignore_pct=self._sum(actor, "def_ignore_pct", now),
+            crit_rate=0.15 + (general_crit_rate_pct + normal_crit_rate_pct) / 100.0,
+            crit_dmg=general_crit_dmg + normal_crit_dmg,
+            crit_rate_skill=0.15 + general_crit_rate_pct / 100.0,
+            crit_dmg_skill=general_crit_dmg,
+            core_dmg_pct=self._sum(actor, "core_dmg_pct", now),
+            normal_atk_dmg_pct=self._sum(actor, "normal_atk_dmg_pct", now),
+            atk_dmg_pct=self._sum(actor, "atk_dmg_pct", now),
+            burst_dmg_pct=self._sum(actor, "burst_dmg_pct", now),
+            burst_dmg_aoe_pct=self._sum(actor, "burst_dmg_aoe_pct", now),
+            pierce_dmg_pct=self._sum(actor, "pierce_dmg_pct", now),
+            armor_break_dmg_pct=self._sum(actor, "armor_break_dmg_pct", now),
+            dot_dmg_pct=self._sum(actor, "dot_dmg_pct", now),
+            projectile_explosion_dmg_pct=self._sum(
+                actor, "projectile_explosion_dmg_pct", now
+            ),
+            projectile_attachment_dmg_pct=self._sum(
+                actor, "projectile_attachment_dmg_pct", now
+            ),
+            sequential_dmg_pct=self._sum(actor, "sequential_dmg_pct", now),
+            part_dmg_pct=self._sum(actor, "part_dmg_pct", now),
+            charge_dmg_pct=self._sum(actor, "charge_dmg_pct", now),
+            charge_dmg_mag_pct=self._sum(actor, "charge_dmg_mag_pct", now),
+            received_dmg_pct=received,
+            split_dmg_pct=self._sum(actor, "split_dmg_pct", now),
+            element_bonus_pct=self._sum(actor, "element_bonus_pct", now),
+            element_match=(
+                bool(element)
+                and bool(self.enemy.element)
+                and _CODE_ADVANTAGE.get(str(element)) == self.enemy.element
+            ),
+        )
+        self._cache[actor] = (token, terms)
+        return terms
