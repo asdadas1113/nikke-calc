@@ -207,6 +207,16 @@ class FirstCertifiedRealSquadParityProbe(unittest.TestCase):
                 "moris_count": len([
                     row for row in moris.log.burst_log if row.event == "full_burst 시작"
                 ]),
+                "fast_b3_casts": [
+                    {"t": float(t), "caster": compiled.names[actor]}
+                    for t, actor, stage in runtime_result.casts
+                    if stage == "3"
+                ],
+                "moris_b3_casts": [
+                    {"t": float(row.t), "event": row.event, "caster": row.caster}
+                    for row in moris.log.burst_log
+                    if "stage:3" in row.event
+                ],
             },
             "scenario": {
                 "optimizer_candidate_generation_used": False,
@@ -214,7 +224,7 @@ class FirstCertifiedRealSquadParityProbe(unittest.TestCase):
             },
         }
         self.fail(
-            "INTENTIONAL_MIHARA_TRIGGER_PROBE="
+            "INTENTIONAL_MIHARA_B3_SEQUENCE_PROBE="
             + json.dumps(report, ensure_ascii=False, sort_keys=True)
         )
 
