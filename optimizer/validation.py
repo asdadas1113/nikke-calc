@@ -206,12 +206,13 @@ def run_exhaustive_validation(
 class RankingObservation:
     """One candidate scored by Moris and, when safe, by Fast.
 
-    ``fast_score=None`` means Fast deliberately failed closed.  That is kept
-    distinct from a low numeric score because a blocked strong team must be
-    protected/fallback-scored rather than pruned as weak.
+    A row is *certified* for Fast ranking only when it has a numeric ``fast_score``
+    and both ``blockers`` and ``unsupported`` are empty. A numeric subtotal with
+    unresolved mechanics is useful diagnostics, but must not silently enter the
+    ranking as if it were a complete score.
 
     ``groups`` are caller-owned diagnostic labels such as ``weapon:MG``,
-    ``mechanic:core`` or ``archetype:charge``.  The validation core never assigns
+    ``mechanic:core`` or ``archetype:charge``. The validation core never assigns
     game-specific meaning to those labels.
     """
 
@@ -221,6 +222,10 @@ class RankingObservation:
     blockers: tuple[str, ...] = ()
     unsupported: tuple[str, ...] = ()
     groups: tuple[str, ...] = ()
+
+    @property
+    def certified(self) -> bool:
+        return self.fast_score is not None and not self.blockers and not self.unsupported
 
 
 @dataclass(frozen=True)
@@ -238,6 +243,7 @@ class GroupRankingMetrics:
 @dataclass(frozen=True)
 class RankingValidationMetrics:
     candidate_count: int
+    fast_numeric_count: int
     fast_scored_count: int
     blocked_count: int
     top_n: int
@@ -246,11 +252,17 @@ class RankingValidationMetrics:
     top_n_recall: float
     top_n_blocked: int
     top_n_ranked_out: int
+    top_n_coverage_gap_rate: float
+    overall_top_n_miss_rate: float
     catastrophic_false_negative_rate: float
     pairwise_accuracy: float | None
     comparable_pairs: int
     best_missed_true_rank: int | None
     best_missed_team: tuple[str, ...] | None
+    best_coverage_gap_true_rank: int | None
+    best_coverage_gap_team: tuple[str, ...] | None
+    best_ranked_out_true_rank: int | None
+    best_ranked_out_team: tuple[str, ...] | None
     blocker_counts: tuple[tuple[str, int], ...]
     unsupported_counts: tuple[tuple[str, int], ...]
     groups: tuple[GroupRankingMetrics, ...]
@@ -303,18 +315,24 @@ def analyze_fast_moris_ranking(
     top_n: int,
     top_k: int,
 ) -> RankingValidationMetrics:
-    """Measure whether Fast preserves the Moris ranking that pruning cares about.
+    """Measure Fast ranking without conflating coverage gaps with score errors.
 
-    Ranking is deterministic on ties via ``members``.  Pairwise accuracy excludes
-    Moris ties (there is no true ordering to preserve); a Fast tie on a comparable
-    pair receives half credit.  Blocked candidates never receive an artificial
-    numeric score and are reported separately from scored candidates that merely
-    fall below Fast Top-K.
+    Ranking is deterministic on ties via ``members``. Pairwise accuracy excludes
+    Moris ties; a Fast tie on a comparable pair receives half credit.
 
-    ``mean_rank_percentile_error`` is scale-free.  Positive means the scored group
-    is, on average, pushed *down* by Fast relative to Moris; negative means Fast
-    promotes it.  Blocked rows are excluded from this signed error and exposed via
-    ``blocked_count`` instead.
+    Only certified observations enter the Fast ranking. Rows with a numeric Fast
+    subtotal but any blocker/unsupported mechanic remain coverage gaps. This is
+    deliberate: a partial subtotal must not be mistaken for a weak complete team.
+
+    ``catastrophic_false_negative_rate`` is specifically the fraction of Moris
+    Top-N that Fast *certified and scored* but then pushed outside Fast Top-K. It
+    excludes fail-closed coverage gaps. ``overall_top_n_miss_rate`` retains the
+    broader end-to-end miss rate, while ``top_n_coverage_gap_rate`` exposes the
+    portion attributable to certification coverage.
+
+    ``mean_rank_percentile_error`` is scale-free. Positive means the certified
+    group is, on average, pushed down by Fast relative to Moris; negative means
+    Fast promotes it. Uncertified rows are excluded from signed ranking error.
     """
 
     if top_n <= 0 or top_k <= 0:
@@ -322,7 +340,8 @@ def analyze_fast_moris_ranking(
     rows = _validate_ranking_observations(observations)
 
     moris_ranked = sorted(rows, key=lambda row: (-row.moris_score, row.members))
-    scored = tuple(row for row in rows if row.fast_score is not None)
+    numeric = tuple(row for row in rows if row.fast_score is not None)
+    scored = tuple(row for row in rows if row.certified)
     fast_ranked = sorted(
         scored,
         key=lambda row: (-float(row.fast_score), row.members),
@@ -333,10 +352,15 @@ def analyze_fast_moris_ranking(
     fast_top_keys = {row.members for row in fast_top}
 
     recalled = sum(row.members in fast_top_keys for row in true_top)
-    top_blocked = sum(row.fast_score is None for row in true_top)
-    top_ranked_out = len(true_top) - recalled - top_blocked
+    top_blocked = sum(not row.certified for row in true_top)
+    top_ranked_out = sum(
+        row.certified and row.members not in fast_top_keys
+        for row in true_top
+    )
     recall = recalled / len(true_top)
-    catastrophic = 1.0 - recall
+    coverage_gap_rate = top_blocked / len(true_top)
+    overall_miss_rate = 1.0 - recall
+    catastrophic = top_ranked_out / len(true_top)
 
     pair_score = 0.0
     comparable = 0
@@ -352,16 +376,27 @@ def analyze_fast_moris_ranking(
             pair_score += 1.0
     pairwise = pair_score / comparable if comparable else None
 
-    missed = [row for row in true_top if row.members not in fast_top_keys]
     moris_rank_by_team = {
         row.members: rank
         for rank, row in enumerate(moris_ranked, start=1)
     }
-    best_missed = min(
-        missed,
-        key=lambda row: moris_rank_by_team[row.members],
-        default=None,
-    )
+    missed = [row for row in true_top if row.members not in fast_top_keys]
+    coverage_gaps = [row for row in true_top if not row.certified]
+    ranked_out = [
+        row for row in true_top
+        if row.certified and row.members not in fast_top_keys
+    ]
+
+    def best(rows_in):
+        return min(
+            rows_in,
+            key=lambda row: moris_rank_by_team[row.members],
+            default=None,
+        )
+
+    best_missed = best(missed)
+    best_gap = best(coverage_gaps)
+    best_ranked_out = best(ranked_out)
 
     blocker_counter: Counter[str] = Counter()
     unsupported_counter: Counter[str] = Counter()
@@ -378,7 +413,7 @@ def analyze_fast_moris_ranking(
     group_rows: list[GroupRankingMetrics] = []
     for group in all_groups:
         members = tuple(row for row in rows if group in row.groups)
-        group_scored = tuple(row for row in members if row.fast_score is not None)
+        group_scored = tuple(row for row in members if row.certified)
         group_true_top = tuple(row for row in members if row.members in true_top_keys)
         group_recalled = sum(row.members in fast_top_keys for row in group_true_top)
         errors = [
@@ -409,6 +444,7 @@ def analyze_fast_moris_ranking(
 
     return RankingValidationMetrics(
         candidate_count=len(rows),
+        fast_numeric_count=len(numeric),
         fast_scored_count=len(scored),
         blocked_count=len(rows) - len(scored),
         top_n=len(true_top),
@@ -417,6 +453,8 @@ def analyze_fast_moris_ranking(
         top_n_recall=recall,
         top_n_blocked=top_blocked,
         top_n_ranked_out=top_ranked_out,
+        top_n_coverage_gap_rate=coverage_gap_rate,
+        overall_top_n_miss_rate=overall_miss_rate,
         catastrophic_false_negative_rate=catastrophic,
         pairwise_accuracy=pairwise,
         comparable_pairs=comparable,
@@ -426,6 +464,20 @@ def analyze_fast_moris_ranking(
             else None
         ),
         best_missed_team=(best_missed.members if best_missed is not None else None),
+        best_coverage_gap_true_rank=(
+            moris_rank_by_team[best_gap.members]
+            if best_gap is not None
+            else None
+        ),
+        best_coverage_gap_team=(best_gap.members if best_gap is not None else None),
+        best_ranked_out_true_rank=(
+            moris_rank_by_team[best_ranked_out.members]
+            if best_ranked_out is not None
+            else None
+        ),
+        best_ranked_out_team=(
+            best_ranked_out.members if best_ranked_out is not None else None
+        ),
         blocker_counts=tuple(
             sorted(blocker_counter.items(), key=lambda row: (-row[1], row[0]))
         ),
