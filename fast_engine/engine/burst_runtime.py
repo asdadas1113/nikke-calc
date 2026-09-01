@@ -238,18 +238,16 @@ class BurstRuntime:
     ) -> BurstRuntimeResult:
         """Run scheduled combat boundaries, optionally feeding a score observer.
 
-        Equal-time scoring follows Moris frame semantics:
-        expiry/periodic/burst state applies before the weapon shot at that time,
-        while weapon-trigger effects apply after that shot. Scheduler phases
-        below 30 are therefore processed before the observer consumes ``=t``;
-        phase-30+ events consume the shot first and only then dispatch hit-based
-        effects. This prevents a hit-triggered buff from retroactively boosting
-        the shot that created it.
+        Equal-time scoring follows Moris frame semantics: DoT damage is evaluated
+        before expiry; expiry/periodic/burst state applies before the weapon shot;
+        weapon-trigger effects apply after that shot. Scheduler phases below 30
+        are therefore processed before the observer consumes ``=t``; phase-30+
+        events consume the shot first and only then dispatch hit-based effects.
 
         The combat interval is half-open: ``[0, horizon)``. Moris' 60 Hz loop
         likewise has its final processed frame immediately before the nominal
-        duration (for 180s, 179.9833...), so an event scheduled exactly at
-        ``horizon`` must not contribute damage or trigger state for ranking.
+        duration, so an event scheduled exactly at ``horizon`` does not contribute
+        damage or trigger state for ranking.
         """
 
         horizon = (
@@ -310,6 +308,12 @@ class BurstRuntime:
                 continue
 
             self.weapons.advance_to(event.time, inclusive=False)
+
+            if event.kind is EventKind.DAMAGE_TICK:
+                if self.damage_sink is not None:
+                    self.damage_sink.handle_scheduled_tick(event)
+                score_end_of_time(event.time)
+                continue
 
             if event.kind is EventKind.STATE_EXPIRE:
                 self.dispatcher.handle_expiry(event)
