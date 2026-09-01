@@ -13,42 +13,60 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect nearest blockers
+      - name: Inspect first certified squad parity
         run: |
           python - <<'PY'
+          from calculator.timeline import DEFAULT_ENEMY, simulate
           from context import spec
+          from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.engine.model import EnemyStaticProfile
+          from fast_engine.engine.score import score_static_squad, static_score_blockers
 
-          members = ['미란다', '브리드 : 사일런트 트랙', '헬름', '루주', '미하라 : 본딩 체인']
-          squad = compile_moris_squad(spec.build_squad(members))
-          print('BLOCKERS', static_score_blockers(squad))
-          for i, member in enumerate(squad.members):
-              print('MEMBER', i, member.name, 'weapon_type=', member.weapon_type, 'weapon=', member.weapon)
-              for effect in member.effects:
-                  if effect.name in {'웨이크업! 4', '이지스 캐논 3'} or effect.stat in {'crit_rate', 'charge_dmg_mag_pct'}:
-                      print('EFFECT', member.name, {
-                          'id': effect.effect_id,
-                          'name': effect.name,
-                          'type': effect.effect_type,
-                          'stat': effect.stat,
-                          'value': effect.value,
-                          'duration': effect.duration,
-                          'max_stack': effect.max_stack,
-                          'max_trigger': effect.max_trigger,
-                          'target': effect.target,
-                          'target_mode': effect.target_spec.mode.value,
-                          'target_arg': effect.target_spec.arg,
-                          'target_count': effect.target_spec.count,
-                          'triggers': [(r.raw, r.event_key, r.mode.value, r.threshold, r.trigger_count_reducible) for r in effect.triggers],
-                          'conditions': [(r.raw, r.mode.value, r.key, r.threshold) for r in effect.condition_rules],
-                          'parameters': effect.parameters,
-                          'capability': {
-                              'disposition': effect.capability.disposition.value,
-                              'blockers': effect.capability.blockers,
-                              'timing': effect.capability.timing_families,
-                              'conditions': effect.capability.condition_families,
-                              'target': effect.capability.target_family,
-                          },
-                      })
+          names = ['미란다', '브리드 : 사일런트 트랙', '헬름', '루주', '미하라 : 본딩 체인']
+          config = {'duration': 180.0, 'first_burst_time': 3.0, 'rng_mode': 'expected'}
+
+          def run(label, disable_control=False):
+              squad = spec.build_squad(names)
+              if disable_control:
+                  next(c for c in squad if c['name'] == '미하라 : 본딩 체인')['control'] = {}
+              compiled = compile_moris_squad(squad)
+              policy = compile_burst_policy(squad, compiled, dict(config))
+              blockers = static_score_blockers(compiled)
+              print(label, 'BLOCKERS', blockers)
+              moris = simulate(
+                  squad,
+                  config=spec.build_config(squad, dict(config)),
+                  enemy=dict(DEFAULT_ENEMY),
+                  seed=42,
+                  verbose=False,
+              )
+              fast = score_static_squad(
+                  compiled,
+                  policy,
+                  EnemyStaticProfile(
+                      defense=float(DEFAULT_ENEMY.get('def', 31784.0)),
+                      element=DEFAULT_ENEMY.get('code'),
+                      core_uptime=0.0,
+                      core_px=float(DEFAULT_ENEMY.get('core_px', 0.0) or 0.0),
+                      duration=180.0,
+                  ),
+              )
+              print(label, 'TOTAL', {
+                  'moris': moris.squad_total,
+                  'fast': fast.squad_total,
+                  'rel': fast.squad_total / moris.squad_total - 1.0,
+                  'events': fast.events_processed,
+              })
+              for i, name in enumerate(names):
+                  m = moris.char_total.get(name, 0)
+                  f = fast.char_total[i]
+                  print(label, 'CHAR', name, {
+                      'moris': m,
+                      'fast': f,
+                      'rel': None if not m else f / m - 1.0,
+                  })
+
+          run('CONTROL_ON', disable_control=False)
+          run('CONTROL_OFF', disable_control=True)
           PY
