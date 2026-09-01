@@ -202,6 +202,29 @@ def _actor_has_executable_event(
     )
 
 
+def _actor_has_unhandled_count_event(
+    squad: CompiledSquad,
+    actor: int,
+    event_keys: frozenset[str],
+) -> bool:
+    """Whether a count consumer cannot use the compressed reducible bridge."""
+
+    for effect in squad.members[actor].effects:
+        if not TriggerDispatcher.is_executable_effect(effect):
+            continue
+        for rule in effect.triggers:
+            if rule.event_key not in event_keys:
+                continue
+            threshold = int(rule.threshold or 0)
+            if (
+                rule.mode is not TriggerMode.MODULO
+                or not rule.trigger_count_reducible
+                or threshold <= 0
+            ):
+                return True
+    return False
+
+
 def _actor_has_executable_core_count(squad: CompiledSquad, actor: int) -> bool:
     return any(
         TriggerDispatcher.is_executable_effect(effect)
@@ -238,18 +261,24 @@ def _reload_recipient_score_safe(squad: CompiledSquad, actor: int) -> bool:
         return False
 
     if mode == "charge":
-        # Dynamic charge already owns hit_count/full_charge_hit and post-shot
-        # last_bullet, but it does not emit pellet_hit for multi-hit charge shots.
-        return not _actor_has_executable_event(squad, actor, frozenset({"pellet_hit"}))
+        # Dynamic charge owns reducible hit_count/full_charge_hit and exact
+        # post-shot last_bullet, but it does not emit pellet_hit for multi-hit
+        # charge shots and raw/non-reducible hit_count remains uncertified.
+        if _actor_has_executable_event(squad, actor, frozenset({"pellet_hit"})):
+            return False
+        return not _actor_has_unhandled_count_event(
+            squad, actor, frozenset({"hit_count"})
+        )
 
-    # Until BurstRuntime skips its static weapon planners for rapid actors, keep
-    # raw/reducible rapid weapon-trigger consumers fail-closed. The reload scorer
-    # itself stays fully compressed for these score-only actors.
-    if _actor_has_executable_event(
-        squad,
-        actor,
-        frozenset({"hit_count", "pellet_hit", "last_bullet"}),
+    # BurstRuntime now excludes rapid dynamic actors from the old static weapon
+    # planner. The compressed runtime may therefore own reducible hit_count and
+    # pellet_hit thresholds without duplicate/stale trigger boundaries. Raw or
+    # non-reducible count rules still fail closed.
+    if _actor_has_unhandled_count_event(
+        squad, actor, frozenset({"hit_count", "pellet_hit"})
     ):
+        return False
+    if _actor_has_executable_event(squad, actor, frozenset({"last_bullet"})):
         return False
 
     # A global squad-body-hit consumer would need every physical rapid shot to be
