@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable, Iterable, TYPE_CHECKING
 
+from .scheduler import EventKind, EventScheduler, ScheduledEvent
 from .triggers import TriggerMode
 
 if TYPE_CHECKING:
+    from .effects import ActiveEffectStore
     from .model import CompiledEffect
+    from .state import StateStore
 
 from .model import CompiledCharacter, CompiledSquad
 
@@ -25,13 +28,7 @@ def _quantize(value: float, step: float) -> float:
 
 @dataclass(frozen=True, slots=True)
 class StaticCadenceModifiers:
-    """Permanent, unconditional cadence modifiers known at compile time.
-
-    This is intentionally a narrow first slice. Dynamic skill buffs remain in
-    TriggerDispatcher/ActiveEffectStore and are not silently folded into this
-    snapshot. The weapon runtime can later become piecewise-dynamic without
-    changing the compiled weapon representation.
-    """
+    """Permanent, unconditional cadence modifiers known at compile time."""
 
     max_ammo_pct: float = 0.0
     max_ammo_flat: float = 0.0
@@ -52,8 +49,6 @@ def compile_static_cadence_modifiers(character: CompiledCharacter) -> StaticCade
     for effect in character.effects:
         if effect.effect_type != "buff" or effect.stat not in _STATIC_STATS:
             continue
-        # Only permanent unconditional self effects are compile-time constants.
-        # Finite/dynamic effects stay in the event runtime.
         if effect.target != "self" or effect.condition_rules:
             continue
         if effect.duration not in (None, -1):
@@ -64,16 +59,9 @@ def compile_static_cadence_modifiers(character: CompiledCharacter) -> StaticCade
     return StaticCadenceModifiers(**values)
 
 
-
-
 @dataclass(frozen=True, slots=True)
 class WeaponTriggerBoundary:
-    """One meaningful count boundary reached by an aggregated weapon span.
-
-    `count_increment` is the number of base events skipped since the previous
-    dispatched boundary for the same actor/event key.  The dispatcher therefore
-    sees the same absolute event count without receiving every bullet.
-    """
+    """One meaningful count boundary reached by an aggregated weapon span."""
 
     time: float
     actor: int
@@ -107,9 +95,6 @@ class _WeaponBoundaryCollector:
                 if rule.event_key not in {"hit_count", "full_charge_hit", "pellet_hit"}:
                     continue
                 if rule.mode is not TriggerMode.MODULO or not rule.trigger_count_reducible:
-                    # The first fast-forward slice is deliberately limited to
-                    # reducible modulo counters.  Other count semantics stay
-                    # explicit until they get their own correctness rule.
                     continue
                 n = int(rule.threshold or 0)
                 if n > 0:
@@ -186,7 +171,13 @@ class _Accumulator:
     last_shot: float | None = None
 
     def add_shots(
-        self, first_t: float, count: int, *, interval: float, hits: int, full_charge: bool = False,
+        self,
+        first_t: float,
+        count: int,
+        *,
+        interval: float,
+        hits: int,
+        full_charge: bool = False,
         pellet_events: bool = False,
     ) -> None:
         if count <= 0:
@@ -209,21 +200,25 @@ class _Accumulator:
         self.last_shot = first_t + (count - 1) * interval
 
     def shot(
-        self, t: float, *, hits: int, full_charge: bool = False, pellet_events: bool = False
+        self,
+        t: float,
+        *,
+        hits: int,
+        full_charge: bool = False,
+        pellet_events: bool = False,
     ) -> None:
         self.add_shots(
-            t, 1, interval=0.0, hits=hits, full_charge=full_charge, pellet_events=pellet_events
+            t,
+            1,
+            interval=0.0,
+            hits=hits,
+            full_charge=full_charge,
+            pellet_events=pellet_events,
         )
 
 
 class WeaponCadenceMachine:
-    """Score-only weapon timing model without a frame loop or damage objects.
-
-    Phase-2A scope is deliberately narrow: base weapon mechanics plus permanent
-    unconditional cadence modifiers. Dynamic cadence buffs, weapon changes and
-    manual-control policies are explicit later gates. The point of this slice is
-    to validate shot/reload/charge counts independently from damage semantics.
-    """
+    """Score-only static weapon timing model without a frame loop."""
 
     __slots__ = ("actor", "character", "mods", "duration", "weapon")
 
@@ -236,9 +231,6 @@ class WeaponCadenceMachine:
 
     def _full_ammo(self) -> int:
         base = int(self.weapon["max_ammo"])
-        # First Fast approximation: permanent compile-time sources are summed,
-        # then converted to bullets once. Source-by-source Moris quantization is
-        # a later parity refinement if it changes ranking/shot counts materially.
         pct_gain = _round_half_up(base * self.mods.max_ammo_pct / 100.0)
         flat = _round_half_up(self.mods.max_ammo_flat)
         return max(1, base + pct_gain + flat)
@@ -271,7 +263,10 @@ class WeaponCadenceMachine:
         if fixed > 0:
             pellets = max(1, _round_half_up(fixed))
         else:
-            pellets = max(1, int(self.weapon.get("pellets", 1)) + _round_half_up(self.mods.pellet_count))
+            pellets = max(
+                1,
+                int(self.weapon.get("pellets", 1)) + _round_half_up(self.mods.pellet_count),
+            )
         return pellets * max(1, int(self.weapon.get("muzzles", 1)))
 
     def _fixed_rate(self) -> float:
@@ -294,7 +289,6 @@ class WeaponCadenceMachine:
                 break
             acc.last_bullet_fire += 1
             acc.last_bullet += 1
-            # Moris discovers the empty magazine at the next scheduled fire.
             reload_probe = start + full * inter
             if reload_probe > self.duration + _EPS:
                 break
@@ -306,7 +300,6 @@ class WeaponCadenceMachine:
         cap = float(self.weapon.get("warmup_bullets") or 1.0)
         base = fr_min + (fr_max - fr_min) * min(warmup, cap) / cap
         rate = base * max(0.01, 1.0 + self.mods.attack_speed_pct / 100.0)
-        # Preserve the real 60fps one-shot-per-frame weapon cap without a frame loop.
         return min(_FRAME_RATE_CAP, max(0.01, rate))
 
     def _run_mg(self, acc: _Accumulator) -> None:
@@ -322,8 +315,6 @@ class WeaponCadenceMachine:
         last_inter = 0.0
         ammo = full
         while t <= self.duration + _EPS:
-            # Warmup is the only per-shot section. Once the 60fps weapon cap is
-            # reached, the remaining magazine is one constant-rate interval.
             while ammo > 0 and t <= self.duration + _EPS:
                 rate = self._mg_rate(warmup)
                 inter = 1.0 / rate
@@ -375,7 +366,11 @@ class WeaponCadenceMachine:
         cycle = charge + post
         first = charge
         while first <= self.duration + _EPS:
-            fit = int(math.floor((self.duration - first) / cycle + _EPS)) + 1 if cycle > 0 else full
+            fit = (
+                int(math.floor((self.duration - first) / cycle + _EPS)) + 1
+                if cycle > 0
+                else full
+            )
             n = min(full, max(0, fit))
             acc.add_shots(first, n, interval=cycle, hits=hits, full_charge=True)
             if n < full:
@@ -419,7 +414,9 @@ class WeaponCadenceMachine:
         )
 
 
-def simulate_static_weapon_cadence(squad: CompiledSquad, *, duration: float) -> tuple[WeaponCadenceResult, ...]:
+def simulate_static_weapon_cadence(
+    squad: CompiledSquad, *, duration: float
+) -> tuple[WeaponCadenceResult, ...]:
     return tuple(
         WeaponCadenceMachine(actor, character, duration=duration).run()
         for actor, character in enumerate(squad.members)
@@ -432,14 +429,6 @@ def simulate_static_weapon_trigger_boundaries(
     duration: float,
     effect_filter: Callable[["CompiledEffect"], bool],
 ) -> tuple[WeaponTriggerBoundary, ...]:
-    """Plan only meaningful reducible weapon-count boundaries.
-
-    The cadence pass still computes every magazine/constant-rate span, but it
-    materializes scheduler events only where an executable effect can observe a
-    count threshold.  This is the bridge from interval aggregation to runtime
-    trigger dispatch.
-    """
-
     out: list[WeaponTriggerBoundary] = []
     for actor, character in enumerate(squad.members):
         collector = _WeaponBoundaryCollector.from_character(
@@ -451,3 +440,350 @@ def simulate_static_weapon_trigger_boundaries(
         out.extend(collector.boundaries)
     out.sort(key=lambda row: (row.time, row.actor, row.event_key))
     return tuple(out)
+
+
+# ── Dynamic charge-cadence slice ──────────────────────────────────────────
+
+@dataclass(slots=True)
+class _ChargeActorState:
+    actor: int
+    ammo: int
+    phase: str
+    phase_end: float
+    charge_start: float
+    full_charge_count: int = 0
+    dispatched_count: int = 0
+    generation: int = 0
+    scheduled_time: float | None = None
+    signature: tuple[float, ...] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicWeaponToken:
+    actor: int
+    generation: int
+    expected_full_charge_count: int
+
+
+class DynamicChargeCadenceRuntime:
+    """Piecewise SR/RL cadence planner exposing only meaningful boundaries.
+
+    State-changing Fast events invalidate one actor's future plan by generation.
+    Ordinary full-charge shots stay inside this runtime unless a reducible
+    full-charge counter or the auxiliary squad-body-hit bridge can observe them.
+    """
+
+    __slots__ = (
+        "squad", "effects", "state", "scheduler", "duration", "effect_filter",
+        "actors", "emits_each_charge_hit", "_thresholds", "_states",
+    )
+
+    def __init__(
+        self,
+        squad: CompiledSquad,
+        effects: "ActiveEffectStore",
+        state: "StateStore",
+        scheduler: EventScheduler,
+        *,
+        duration: float,
+        effect_filter: Callable[["CompiledEffect"], bool],
+    ) -> None:
+        self.squad = squad
+        self.effects = effects
+        self.state = state
+        self.scheduler = scheduler
+        self.duration = float(duration)
+        self.effect_filter = effect_filter
+
+        thresholds: dict[int, tuple[int, ...]] = {}
+        for actor, character in enumerate(squad.members):
+            vals: set[int] = set()
+            for effect in character.effects:
+                if not effect_filter(effect):
+                    continue
+                for rule in effect.triggers:
+                    if (
+                        rule.event_key == "full_charge_hit"
+                        and rule.mode is TriggerMode.MODULO
+                        and rule.trigger_count_reducible
+                    ):
+                        n = int(rule.threshold or 0)
+                        if n > 0:
+                            vals.add(n)
+            if vals:
+                thresholds[actor] = tuple(sorted(vals))
+
+        self.emits_each_charge_hit = any(
+            effect_filter(effect)
+            and any(rule.event_key == "squad_body_hit" for rule in effect.triggers)
+            for effect in squad.effects
+        )
+        self.actors = tuple(
+            actor
+            for actor, member in enumerate(squad.members)
+            if str(member.weapon.get("fire_mode") or "") == "charge"
+            and (actor in thresholds or self.emits_each_charge_hit)
+        )
+        self._thresholds = thresholds
+        self._states: dict[int, _ChargeActorState] = {}
+
+    def _active_sum(self, actor: int, stat: str, now: float) -> float:
+        return self.effects.sum_stat(actor, stat, now=now)
+
+    def _caster_based_charge_speed(self, actor: int, now: float) -> float:
+        target_base = float(self.squad.members[actor].weapon.get("charge_time") or 0.0)
+        if target_base <= _EPS:
+            return 0.0
+        total = 0.0
+        for effect, active in self.effects.iter_stat(
+            "charge_speed_caster_based_pct", now=now
+        ):
+            if active.target != actor:
+                continue
+            caster_base = float(
+                self.squad.members[active.source_actor].weapon.get("charge_time") or 0.0
+            )
+            total += (
+                caster_base
+                * float(effect.value or 0.0)
+                * active.stacks
+                / target_base
+            )
+        return total
+
+    def _signature(self, actor: int, now: float) -> tuple[float, ...]:
+        return (
+            self._active_sum(actor, "max_ammo_pct", now),
+            self._active_sum(actor, "max_ammo_flat", now),
+            self._active_sum(actor, "reload_speed_pct", now),
+            self._active_sum(actor, "charge_speed_pct", now)
+            + self._caster_based_charge_speed(actor, now),
+            self._active_sum(actor, "charge_time_flat", now),
+        )
+
+    def _full_ammo(self, actor: int, now: float) -> int:
+        member = self.squad.members[actor]
+        base = int(member.weapon["max_ammo"])
+        pct = self._active_sum(actor, "max_ammo_pct", now)
+        flat = self._active_sum(actor, "max_ammo_flat", now)
+        return max(
+            1,
+            base
+            + _round_half_up(base * pct / 100.0)
+            + _round_half_up(flat),
+        )
+
+    def _reload_factor(self, actor: int, now: float) -> float:
+        return max(0.0, 1.0 - self._active_sum(actor, "reload_speed_pct", now) / 100.0)
+
+    def _reload_duration_from_empty(self, actor: int, now: float) -> float:
+        member = self.squad.members[actor]
+        weapon = member.weapon
+        factor = self._reload_factor(actor, now)
+        one = float(weapon["reload_time"]) * factor
+        if not weapon.get("is_clip"):
+            return one
+        full = self._full_ammo(actor, now)
+        gain = max(1, _round_half_up(full / 3.0))
+        clips = max(1, math.ceil(full / gain))
+        return one * clips
+
+    def _effective_charge_time(self, actor: int, now: float) -> float:
+        member = self.squad.members[actor]
+        base = float(member.weapon.get("charge_time") or 0.0)
+        speed = (
+            self._active_sum(actor, "charge_speed_pct", now)
+            + self._caster_based_charge_speed(actor, now)
+        )
+        cut = _quantize(base * speed / 100.0, 0.01)
+        flat = self._active_sum(actor, "charge_time_flat", now)
+        return max(0.0, max(0.0, base - cut) + flat)
+
+    def _shot_is_boundary(self, actor: int, absolute_count: int) -> bool:
+        if self.emits_each_charge_hit:
+            return True
+        return any(
+            absolute_count % threshold == 0
+            for threshold in self._thresholds.get(actor, ())
+        )
+
+    def _enter_charge(self, st: _ChargeActorState, at: float, now_for_mods: float) -> None:
+        st.phase = "charging"
+        st.charge_start = at
+        st.phase_end = at + self._effective_charge_time(st.actor, now_for_mods)
+
+    def _after_shot(self, st: _ChargeActorState, shot_time: float) -> None:
+        st.ammo -= 1
+        st.full_charge_count += 1
+        st.phase = "post_fire_reload" if st.ammo <= 0 else "post_fire"
+        st.phase_end = shot_time + float(
+            self.squad.members[st.actor].weapon.get("post_fire_delay", 0.0)
+        )
+
+    def _finish_nonshot_phase(
+        self, st: _ChargeActorState, transition_time: float, now_for_mods: float
+    ) -> None:
+        actor = st.actor
+        weapon = self.squad.members[actor].weapon
+        if st.phase == "post_fire":
+            self._enter_charge(st, transition_time, now_for_mods)
+            return
+        if st.phase == "post_fire_reload":
+            factor = self._reload_factor(actor, now_for_mods)
+            st.phase = "reloading"
+            st.phase_end = (
+                transition_time
+                + float(weapon.get("reload_start_delay", 0.0)) * factor
+                + self._reload_duration_from_empty(actor, now_for_mods)
+            )
+            return
+        if st.phase == "reloading":
+            # Moris resolves the magazine size at reload completion. The reload
+            # duration itself was fixed when reloading began.
+            st.ammo = self._full_ammo(actor, now_for_mods)
+            factor = self._reload_factor(actor, now_for_mods)
+            delay = float(weapon.get("post_reload_delay", 0.0)) * factor
+            if delay > _EPS:
+                st.phase = "post_reload"
+                st.phase_end = transition_time + delay
+            else:
+                self._enter_charge(st, transition_time, now_for_mods)
+            return
+        if st.phase == "post_reload":
+            self._enter_charge(st, transition_time, now_for_mods)
+            return
+        raise RuntimeError(f"unexpected dynamic charge phase: {st.phase!r}")
+
+    def _advance_actor_to(
+        self, actor: int, t: float, *, inclusive: bool
+    ) -> None:
+        st = self._states[actor]
+        while True:
+            due = st.phase_end <= t + _EPS if inclusive else st.phase_end < t - _EPS
+            if not due:
+                return
+            when = st.phase_end
+            if when > self.duration + _EPS:
+                return
+            if st.phase == "charging":
+                next_count = st.full_charge_count + 1
+                if self._shot_is_boundary(actor, next_count):
+                    # A meaningful shot belongs to the global scheduler.
+                    return
+                self._after_shot(st, when)
+                continue
+            self._finish_nonshot_phase(st, when, when)
+
+    def advance_to(self, t: float, *, inclusive: bool = False) -> None:
+        for actor in self.actors:
+            self._advance_actor_to(actor, t, inclusive=inclusive)
+
+    def _predict_next_boundary(
+        self, actor: int, now: float
+    ) -> tuple[float, int] | None:
+        src = self._states[actor]
+        st = replace(src)
+        # Prediction assumes cadence state is unchanged until the next global
+        # event. Any real state mutation calls sync() and invalidates this plan.
+        while st.phase_end <= self.duration + _EPS:
+            when = st.phase_end
+            if st.phase == "charging":
+                next_count = st.full_charge_count + 1
+                if self._shot_is_boundary(actor, next_count):
+                    return when, next_count
+                self._after_shot(st, when)
+                continue
+            self._finish_nonshot_phase(st, when, now)
+        return None
+
+    def _invalidate(self, st: _ChargeActorState) -> None:
+        st.generation += 1
+        st.scheduled_time = None
+
+    def _plan(self, actor: int, now: float) -> None:
+        st = self._states[actor]
+        if st.scheduled_time is not None:
+            return
+        row = self._predict_next_boundary(actor, now)
+        if row is None:
+            return
+        when, expected = row
+        when = max(float(now), float(when))
+        if when > self.duration + _EPS:
+            return
+        st.generation += 1
+        st.scheduled_time = when
+        self.scheduler.schedule(
+            when,
+            EventKind.WEAPON_BOUNDARY,
+            actor=actor,
+            payload=DynamicWeaponToken(actor, st.generation, expected),
+        )
+
+    def start(self, now: float = 0.0) -> None:
+        for actor in self.actors:
+            full = self._full_ammo(actor, now)
+            charge = self._effective_charge_time(actor, now)
+            st = _ChargeActorState(
+                actor=actor,
+                ammo=full,
+                phase="charging",
+                phase_end=float(now) + charge,
+                charge_start=float(now),
+                signature=self._signature(actor, now),
+            )
+            self._states[actor] = st
+            self.state.set_ammo(actor, full)
+            self._plan(actor, now)
+
+    def sync(self, now: float) -> None:
+        for actor in self.actors:
+            st = self._states[actor]
+            # Complete non-shot transitions that are exactly on this boundary.
+            while st.phase != "charging" and st.phase_end <= now + _EPS:
+                self._finish_nonshot_phase(st, st.phase_end, now)
+
+            signature = self._signature(actor, now)
+            changed = signature != st.signature
+            if changed:
+                st.signature = signature
+                self._invalidate(st)
+                if st.phase == "charging":
+                    # Moris recomputes the full-charge threshold from the
+                    # original charge start when charge speed changes mid-charge.
+                    st.phase_end = st.charge_start + self._effective_charge_time(actor, now)
+            if st.scheduled_time is None:
+                self._plan(actor, now)
+            self.state.set_ammo(actor, st.ammo)
+
+    def handle_boundary(
+        self, event: ScheduledEvent
+    ) -> tuple[int, str, int] | None:
+        token = event.payload
+        if not isinstance(token, DynamicWeaponToken):
+            return None
+        st = self._states.get(token.actor)
+        if st is None:
+            return None
+        if token.generation != st.generation:
+            return None
+        if st.scheduled_time is None or abs(st.scheduled_time - event.time) > 1e-7:
+            return None
+
+        # Keep every actor current to immediately before this global boundary.
+        self.advance_to(event.time, inclusive=False)
+        st = self._states[token.actor]
+        while st.phase != "charging" and st.phase_end <= event.time + _EPS:
+            self._finish_nonshot_phase(st, st.phase_end, event.time)
+        if st.phase != "charging" or st.phase_end > event.time + 1e-7:
+            return None
+
+        next_count = st.full_charge_count + 1
+        if next_count != token.expected_full_charge_count:
+            return None
+        self._after_shot(st, event.time)
+        st.scheduled_time = None
+        increment = st.full_charge_count - st.dispatched_count
+        st.dispatched_count = st.full_charge_count
+        self.state.set_ammo(token.actor, st.ammo)
+        return token.actor, "full_charge_hit", increment

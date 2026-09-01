@@ -4,7 +4,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .conditions import ConditionEvaluator, SignalContext
+from .capabilities import CapabilityDisposition
+from .conditions import ConditionEvaluator, ConditionMode, SignalContext
 from .effects import ActiveEffectStore
 from .state import ENEMY, StateStore
 from .targets import TargetResolver
@@ -23,23 +24,30 @@ class DispatchResult:
 
 
 class TriggerDispatcher:
-    """Fast effect dispatcher over precompiled actor-scoped trigger buckets.
-
-    It deliberately executes only a small certified stat surface for now. Every
-    other parsed effect remains present in IR but is skipped, so adding the
-    scheduler cannot accidentally claim broad combat coverage.
-    """
+    """Fast effect dispatcher over precompiled actor-scoped trigger buckets."""
 
     __slots__ = (
         "squad", "state", "enemy", "burst", "scheduler", "effects", "targets",
         "conditions", "_effect_table", "_event_counts", "_conditional_counts",
-        "_activation_counts",
+        "_activation_counts", "_state_dependency_names",
     )
+
+    _AUXILIARY_STATS = frozenset({
+        "atk_pct",
+        "atk_flat",
+        "atk_caster_based_pct",
+    })
 
     _EXECUTABLE_STATS = frozenset({
         "burst_cooldown_reduce",
         "burst_cooldown",
         "fullburst_duration",
+        "reload_speed_pct",
+        "charge_speed_pct",
+        "charge_speed_caster_based_pct",
+        "max_ammo_pct",
+        "max_ammo_flat",
+        "charge_time_flat",
     })
 
     def __init__(
@@ -62,14 +70,46 @@ class TriggerDispatcher:
         self._event_counts: dict[tuple[int, str], int] = defaultdict(int)
         self._conditional_counts: dict[tuple[int, str], tuple[int, int]] = {}
         self._activation_counts: dict[int, int] = defaultdict(int)
+        state_modes = {
+            ConditionMode.SELF_STATE, ConditionMode.NOT_SELF_STATE,
+            ConditionMode.TARGET_STATE, ConditionMode.NOT_TARGET_STATE,
+            ConditionMode.SELF_STACK_AT_LEAST, ConditionMode.TARGET_STACK_AT_LEAST,
+        }
+        self._state_dependency_names = frozenset(
+            rule.key
+            for effect in self._effect_table
+            if self.is_executable_effect(effect)
+            for rule in effect.condition_rules
+            if rule.mode in state_modes and rule.key
+        )
 
     @staticmethod
     def is_executable_effect(effect: "CompiledEffect") -> bool:
         stat = effect.stat or ""
+        if stat in TriggerDispatcher._AUXILIARY_STATS:
+            return (
+                effect.effect_type == "buff"
+                and effect.target_spec.runtime_supported
+                and all(rule.is_runtime_supported for rule in effect.condition_rules)
+            )
+        if effect.capability.disposition is not CapabilityDisposition.READY:
+            return False
         return stat in TriggerDispatcher._EXECUTABLE_STATS or stat.startswith("burst_stage_override:")
 
-    # Backward-compatible internal spelling while call sites migrate.
     _is_executable = is_executable_effect
+
+    def _is_state_dependency(self, effect: "CompiledEffect") -> bool:
+        """Track otherwise-unsupported named buffs needed by certified conditions."""
+        return (
+            effect.effect_type == "buff"
+            and bool(effect.name)
+            and effect.name in self._state_dependency_names
+            and effect.target_spec.runtime_supported
+            and all(rule.is_runtime_supported for rule in effect.condition_rules)
+        )
+
+    def can_activate_effect(self, effect: "CompiledEffect") -> bool:
+        return self.is_executable_effect(effect) or self._is_state_dependency(effect)
 
     def _rule_matches(
         self,
@@ -94,8 +134,6 @@ class TriggerDispatcher:
         if rule.mode is TriggerMode.VALUE_AT_LEAST:
             return context.value is not None and context.value >= float(rule.threshold or 0.0)
         if rule.mode in {TriggerMode.CONDITIONAL_AT_LEAST, TriggerMode.CONDITIONAL_MODULO}:
-            # Moris counts only base events whose condition passes, and multiple
-            # effects in the same group must not double-increment the count.
             if not self.conditions.evaluate_all(
                 effect.condition_rules,
                 effect_id=effect.effect_id,
@@ -118,9 +156,9 @@ class TriggerDispatcher:
 
     def _activate(
         self, effect: "CompiledEffect", *, now: float, context: SignalContext,
-        conditions_prechecked: bool = False,
+        conditions_prechecked: bool = False, target_owner_actor: int | None = None,
     ) -> bool:
-        if not self._is_executable(effect):
+        if not self.can_activate_effect(effect):
             return False
         if effect.max_trigger is not None and self._activation_counts[effect.effect_id] >= effect.max_trigger:
             return False
@@ -136,7 +174,11 @@ class TriggerDispatcher:
         ):
             return False
 
-        targets = self.targets.resolve(effect.target_spec, owner_actor=effect.actor, now=now)
+        targets = self.targets.resolve(
+            effect.target_spec,
+            owner_actor=(effect.actor if target_owner_actor is None else target_owner_actor),
+            now=now,
+        )
         stat = effect.stat or ""
         value = float(effect.value or 0.0)
 
@@ -148,8 +190,7 @@ class TriggerDispatcher:
             else:
                 return False
         elif effect.effect_type == "buff":
-            for target in targets:
-                self.effects.activate(effect, target, now, self.scheduler)
+            self.effects.activate_group(effect, targets, now, self.scheduler)
             if stat.startswith("burst_stage_override:"):
                 suffix = stat.split(":", 1)[1]
                 if suffix.startswith("reenter"):
@@ -179,11 +220,49 @@ class TriggerDispatcher:
             if not self._rule_matches(effect, indexed.rule_index, event_key=event_key,
                                       event_count=event_count, context=context, now=signal.time):
                 continue
-            # Moris stops after the first matching timing for one effect.
             seen_effects.add(effect.effect_id)
-            if self._is_executable(effect):
+            if self.can_activate_effect(effect):
                 if self._activate(
                     effect, now=signal.time, context=context,
+                    conditions_prechecked=effect.triggers[indexed.rule_index].mode in {
+                        TriggerMode.CONDITIONAL_AT_LEAST, TriggerMode.CONDITIONAL_MODULO
+                    },
+                ):
+                    activated.append(effect.effect_id)
+            else:
+                skipped.append(effect.effect_id)
+        return DispatchResult(tuple(activated), tuple(skipped))
+
+    def dispatch_team_hit(
+        self, event_key: str, *, time: float, attacker: int,
+        context: SignalContext = SignalContext(), count_increment: int = 1,
+    ) -> DispatchResult:
+        """Moris-style squad part/body hit broadcast.
+
+        The event counter is squad-global and conditions are evaluated for the
+        effect owner, while target `self` resolves to the actual attacker.
+        """
+        if count_increment <= 0:
+            raise ValueError("count_increment must be > 0")
+        counter_key = (-1, event_key)
+        self._event_counts[counter_key] += int(count_increment)
+        event_count = self._event_counts[counter_key]
+        activated: list[int] = []
+        skipped: list[int] = []
+        seen_effects: set[int] = set()
+        for indexed in self.squad.trigger_index.for_event(event_key):
+            effect = self._effect_table[indexed.effect_id]
+            if effect.effect_id in seen_effects:
+                continue
+            if not self._rule_matches(
+                effect, indexed.rule_index, event_key=event_key, event_count=event_count,
+                context=context, now=time,
+            ):
+                continue
+            seen_effects.add(effect.effect_id)
+            if self.can_activate_effect(effect):
+                if self._activate(
+                    effect, now=time, context=context, target_owner_actor=attacker,
                     conditions_prechecked=effect.triggers[indexed.rule_index].mode in {
                         TriggerMode.CONDITIONAL_AT_LEAST, TriggerMode.CONDITIONAL_MODULO
                     },
@@ -203,8 +282,6 @@ class TriggerDispatcher:
             caster = effect.actor
             if caster in seen_casters:
                 continue
-            # Match Moris: a burst_cast-owned duration applies only when that
-            # caster is this cycle's B3 user.
             if any(rule.raw == "burst_cast" for rule in effect.triggers) and caster != b3_actor:
                 continue
             total += float(effect.value or 0.0) * active.stacks
@@ -217,7 +294,6 @@ class TriggerDispatcher:
             return
         stat = expired.stat or ""
         if stat.startswith("burst_stage_override:"):
-            # Recompute both lanes from surviving overrides for this caster.
             stage = None
             reenter = None
             for effect, _active in self.effects.iter_stat_prefix("burst_stage_override:", now=event.time):

@@ -30,6 +30,10 @@ class TargetMode(str, Enum):
     WITH_BUFF = "with_buff"
     WITHOUT_BUFF = "without_buff"
     BURST3 = "burst3"
+    BURST_CASTED = "burst_casted"
+    BURST_NOT_CASTED = "burst_not_casted"
+    BURST_CASTED_B3 = "burst_casted_b3"
+    BURST_CASTED_WEAPON = "burst_casted_weapon"
     TOP_ATK = "top_atk"
     TOP_ATK_EXCL_SELF = "top_atk_excl_self"
     LOWEST_HP = "lowest_hp"
@@ -59,7 +63,11 @@ def _counted(raw: str, prefix: str) -> int:
 
 def compile_target(raw: Any, *, actor_by_name: dict[str, int]) -> TargetSpec:
     if isinstance(raw, list):
-        return TargetSpec(raw, TargetMode.COMPOSITE, children=tuple(compile_target(x, actor_by_name=actor_by_name) for x in raw))
+        return TargetSpec(
+            raw,
+            TargetMode.COMPOSITE,
+            children=tuple(compile_target(x, actor_by_name=actor_by_name) for x in raw),
+        )
     if raw is None:
         raw = "self"
     if not isinstance(raw, str):
@@ -72,11 +80,9 @@ def compile_target(raw: Any, *, actor_by_name: dict[str, int]) -> TargetSpec:
         return TargetSpec(raw, TargetMode.ALL_ALLIES_EXCL_SELF)
     if raw in actor_by_name:
         return TargetSpec(raw, TargetMode.NAMED_ACTOR, count=actor_by_name[raw])
-    if raw in {"enemy", "target", "all_enemies", "target_body", "target_and_nearby"} or raw.startswith((
-        "enemy", "enemies", "same_target", "target",
-    )):
-        # Patternless Fast has one static enemy. Enemy rank/range/random selectors
-        # intentionally collapse to that singleton.
+    if raw in {"enemy", "target", "all_enemies", "target_body", "target_and_nearby"} or raw.startswith(
+        ("enemy", "enemies", "same_target", "target")
+    ):
         return TargetSpec(raw, TargetMode.ENEMY)
     if raw.startswith("allies_adjacent:"):
         return TargetSpec(raw, TargetMode.ADJACENT, count=_counted(raw, "allies_adjacent:"))
@@ -97,14 +103,32 @@ def compile_target(raw: Any, *, actor_by_name: dict[str, int]) -> TargetSpec:
         return TargetSpec(raw, TargetMode.WITH_BUFF, arg=raw.split(":", 1)[1])
     if raw.startswith("allies_without_buff:"):
         return TargetSpec(raw, TargetMode.WITHOUT_BUFF, arg=raw.split(":", 1)[1])
-    if raw.startswith(("allies_burst3", "all_allies_burst_", "allies_burst_casted_")):
+
+    # Burst-history selectors use the current cycle's BurstMachine.casted lane.
+    # Do not collapse them to "all B3"; the target cohort is part of buff identity.
+    if raw == "all_allies_burst_casted":
+        return TargetSpec(raw, TargetMode.BURST_CASTED)
+    if raw == "all_allies_burst_not_casted":
+        return TargetSpec(raw, TargetMode.BURST_NOT_CASTED)
+    if raw == "allies_burst_casted_burst3":
+        return TargetSpec(raw, TargetMode.BURST_CASTED_B3)
+    if raw.startswith("allies_burst_casted_weapon:"):
+        return TargetSpec(raw, TargetMode.BURST_CASTED_WEAPON, arg=raw.split(":", 1)[1])
+    if raw.startswith("allies_burst3"):
         return TargetSpec(raw, TargetMode.BURST3)
+
     if raw.startswith("allies_top_atk_excl:"):
-        return TargetSpec(raw, TargetMode.TOP_ATK_EXCL_SELF, count=_counted(raw, "allies_top_atk_excl:"))
+        return TargetSpec(
+            raw, TargetMode.TOP_ATK_EXCL_SELF, count=_counted(raw, "allies_top_atk_excl:")
+        )
     if raw.startswith("allies_top_atk:"):
         return TargetSpec(raw, TargetMode.TOP_ATK, count=_counted(raw, "allies_top_atk:"))
     if raw.startswith("allies_lowest_hp_excl:"):
-        return TargetSpec(raw, TargetMode.LOWEST_HP_EXCL_SELF, count=_counted(raw, "allies_lowest_hp_excl:"))
+        return TargetSpec(
+            raw,
+            TargetMode.LOWEST_HP_EXCL_SELF,
+            count=_counted(raw, "allies_lowest_hp_excl:"),
+        )
     if raw.startswith("allies_lowest_hp:"):
         return TargetSpec(raw, TargetMode.LOWEST_HP, count=_counted(raw, "allies_lowest_hp:"))
     if raw.startswith("allies_top_def:"):
@@ -119,7 +143,13 @@ def compile_target(raw: Any, *, actor_by_name: dict[str, int]) -> TargetSpec:
 class TargetResolver:
     __slots__ = ("squad", "state", "effects", "burst")
 
-    def __init__(self, squad: "CompiledSquad", state: "StateStore", effects: "ActiveEffectStore", burst: "BurstMachine") -> None:
+    def __init__(
+        self,
+        squad: "CompiledSquad",
+        state: "StateStore",
+        effects: "ActiveEffectStore",
+        burst: "BurstMachine",
+    ) -> None:
         self.squad = squad
         self.state = state
         self.effects = effects
@@ -146,46 +176,91 @@ class TargetResolver:
                         out.append(actor)
             return tuple(out)
         if mode is TargetMode.ADJACENT:
-            # Current Moris `allies_adjacent:2` means immediate left/right around caster.
             k = max(0, spec.count or 0)
             cand = [i for i in range(n) if i != owner_actor]
             cand.sort(key=lambda i: (abs(i - owner_actor), i))
             return tuple(cand[:k])
         if mode in {TargetMode.WEAPON, TargetMode.WEAPON_EXCL_SELF}:
-            return tuple(i for i, m in enumerate(self.squad.members)
-                         if m.weapon_type == spec.arg and (mode is TargetMode.WEAPON or i != owner_actor))
+            return tuple(
+                i
+                for i, member in enumerate(self.squad.members)
+                if member.weapon_type == spec.arg
+                and (mode is TargetMode.WEAPON or i != owner_actor)
+            )
         if mode is TargetMode.CHARACTER_CLASS:
             aliases = {"공격": "화력형", "방어": "방어형", "지원": "지원형"}
             cls = aliases.get(spec.arg or "", spec.arg)
-            return tuple(i for i, m in enumerate(self.squad.members) if m.character_class == cls)
+            return tuple(
+                i for i, member in enumerate(self.squad.members)
+                if member.character_class == cls
+            )
         if mode is TargetMode.ELEMENT:
-            return tuple(i for i, m in enumerate(self.squad.members) if m.element == spec.arg)
+            return tuple(
+                i for i, member in enumerate(self.squad.members)
+                if member.element == spec.arg
+            )
         if mode is TargetMode.ELEMENT_WEAPON:
             code, weapon = (spec.arg or ":").split(":", 1)
-            return tuple(i for i, m in enumerate(self.squad.members) if m.element == code and m.weapon_type == weapon)
+            return tuple(
+                i for i, member in enumerate(self.squad.members)
+                if member.element == code and member.weapon_type == weapon
+            )
         if mode is TargetMode.SAME_SQUAD:
             group = self.squad.members[owner_actor].squad_group
-            return tuple(i for i, m in enumerate(self.squad.members) if group and m.squad_group == group)
+            return tuple(
+                i for i, member in enumerate(self.squad.members)
+                if group and member.squad_group == group
+            )
         if mode is TargetMode.WITH_BUFF:
-            return tuple(i for i in range(n) if self.effects.has_named_state(i, spec.arg or "", now=now))
+            return tuple(
+                i for i in range(n)
+                if self.effects.has_named_state(i, spec.arg or "", now=now)
+            )
         if mode is TargetMode.WITHOUT_BUFF:
-            return tuple(i for i in range(n) if not self.effects.has_named_state(i, spec.arg or "", now=now))
+            return tuple(
+                i for i in range(n)
+                if not self.effects.has_named_state(i, spec.arg or "", now=now)
+            )
         if mode is TargetMode.BURST3:
             return tuple(i for i in range(n) if self.burst.stage_for(i) == "3")
+        if mode is TargetMode.BURST_CASTED:
+            return tuple(i for i in range(n) if self.burst.casted[i])
+        if mode is TargetMode.BURST_NOT_CASTED:
+            return tuple(i for i in range(n) if not self.burst.casted[i])
+        if mode is TargetMode.BURST_CASTED_B3:
+            caster = self.burst.full_burst_caster
+            return () if caster is None else (caster,)
+        if mode is TargetMode.BURST_CASTED_WEAPON:
+            return tuple(
+                i for i in range(n)
+                if self.burst.casted[i] and self.squad.members[i].weapon_type == spec.arg
+            )
         if mode in {TargetMode.TOP_ATK, TargetMode.TOP_ATK_EXCL_SELF}:
-            cand = [i for i in range(n) if mode is TargetMode.TOP_ATK or i != owner_actor]
-            cand.sort(key=lambda i: (-self.squad.members[i].base_atk, i))
+            cand = [
+                i for i in range(n)
+                if mode is TargetMode.TOP_ATK or i != owner_actor
+            ]
+            cand.sort(key=lambda i: (-self.effects.effective_atk(i, now=now), i))
             return tuple(cand[: max(0, spec.count or 0)])
         if mode in {TargetMode.LOWEST_HP, TargetMode.LOWEST_HP_EXCL_SELF}:
-            cand = [i for i in range(n) if mode is TargetMode.LOWEST_HP or i != owner_actor]
-            cand.sort(key=lambda i: (self.state.actors[i].hp / max(self.squad.members[i].base_hp, 1.0), i))
+            cand = [
+                i for i in range(n)
+                if mode is TargetMode.LOWEST_HP or i != owner_actor
+            ]
+            cand.sort(
+                key=lambda i: (
+                    self.state.actors[i].hp / max(self.squad.members[i].base_hp, 1.0),
+                    i,
+                )
+            )
             return tuple(cand[: max(0, spec.count or 0)])
         if mode is TargetMode.TOP_DEF:
-            cand = sorted(range(n), key=lambda i: (-self.squad.members[i].base_def, i))
+            cand = sorted(
+                range(n), key=lambda i: (-self.squad.members[i].base_def, i)
+            )
             return tuple(cand[: max(0, spec.count or 0)])
         if mode is TargetMode.RANDOM:
-            # Deterministic expected Fast cannot choose an actual random target. For
-            # effects that eventually certify this target, caller must define the
-            # expected-value distribution rather than silently picking one.
-            raise NotImplementedError(f"expected random target not certified: {spec.raw!r}")
+            raise NotImplementedError(
+                f"expected random target not certified: {spec.raw!r}"
+            )
         raise NotImplementedError(f"Fast target not supported: {spec.raw!r}")
