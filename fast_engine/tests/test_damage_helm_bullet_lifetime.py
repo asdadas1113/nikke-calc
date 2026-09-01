@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import unittest
 
 from context.spec import build_squad
@@ -8,7 +9,7 @@ from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.conditions import SignalContext
 from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_supported
 from fast_engine.engine.dispatcher import TriggerDispatcher
-from fast_engine.engine.model import EnemyStaticProfile
+from fast_engine.engine.model import CompiledSquad, EnemyStaticProfile
 from fast_engine.engine.scheduler import EventKind, EventScheduler
 from fast_engine.engine.score import static_score_blockers
 from fast_engine.engine.shot_blocks import next_static_shot_after
@@ -78,7 +79,7 @@ class HelmTenShotLifetimeTests(unittest.TestCase):
             0.0,
         )
 
-    def test_unrelated_control_does_not_poison_self_bullet_lifetime(self):
+    def test_dynamic_bullet_target_is_deferred_to_activation_snapshot(self):
         squad = build_squad(NAMES)
         compiled = compile_moris_squad(squad)
         policy = compile_burst_policy(
@@ -104,10 +105,15 @@ class HelmTenShotLifetimeTests(unittest.TestCase):
             "skill_state_delivery:헬름:이지스 캐논 3:charge_dmg_mag_pct",
             blockers,
         )
-        self.assertIn(
+        self.assertNotIn(
             "normal_delivery:미란다:웨이크업! 4:crit_rate",
             blockers,
         )
+        self.assertNotIn(
+            "skill_state_delivery:미란다:웨이크업! 4:crit_rate",
+            blockers,
+        )
+        self.assertIn("control:미하라 : 본딩 체인", blockers)
 
         dispatcher = TriggerDispatcher(
             compiled,
@@ -117,7 +123,46 @@ class HelmTenShotLifetimeTests(unittest.TestCase):
             EventScheduler(),
         )
         self.assertTrue(dispatcher.is_runtime_executable_effect(helm))
-        self.assertFalse(dispatcher.is_runtime_executable_effect(miranda))
+        self.assertTrue(dispatcher.is_runtime_executable_effect(miranda))
+
+    def test_dynamic_bullet_target_fails_atomically_if_snapshot_is_unsafe(self):
+        squad = build_squad(NAMES)
+        compiled = compile_moris_squad(squad)
+        policy = compile_burst_policy(
+            squad,
+            compiled,
+            {"duration": 180.0, "first_burst_time": 3.0, "rng_mode": "expected"},
+        )
+        miranda = next(
+            e for e in compiled.effects
+            if e.actor == 0 and e.name == "웨이크업! 4" and e.stat == "crit_rate"
+        )
+
+        members = list(compiled.members)
+        peak = max(member.base_atk for member in members)
+        members[4] = replace(members[4], base_atk=peak * 100.0)
+        unsafe = CompiledSquad(tuple(members), compiled.trigger_index)
+        scheduler = EventScheduler()
+        dispatcher = TriggerDispatcher(
+            unsafe,
+            StateStore.from_compiled_squad(unsafe),
+            EnemyStaticProfile(defense=31784.0, duration=180.0),
+            BurstMachine(unsafe, policy),
+            scheduler,
+        )
+
+        self.assertTrue(dispatcher.is_runtime_executable_effect(miranda))
+        with self.assertRaisesRegex(
+            NotImplementedError,
+            "duration_bullets resolved target cadence not static: 미하라 : 본딩 체인",
+        ):
+            dispatcher._activate(miranda, now=3.0, context=SignalContext())
+
+        self.assertEqual(
+            dispatcher.effects.sum_stat(4, "crit_rate", now=3.0),
+            0.0,
+        )
+        self.assertFalse(scheduler)
 
     def test_reactivation_resets_ten_shot_generation(self):
         compiled, policy, helm = self._fixture()
