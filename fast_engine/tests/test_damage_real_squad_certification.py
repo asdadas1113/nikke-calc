@@ -28,17 +28,18 @@ class RealSquadCertificationTests(unittest.TestCase):
         enemy = EnemyStaticProfile(defense=31784.0, element=None, core_uptime=0.0, core_px=0.0, duration=180.0)
         return moris, compiled, policy, enemy
 
-    def test_miranda_mihara_control_fails_closed(self):
+    def test_miranda_mihara_control_is_certified(self):
         _moris, compiled, policy, enemy = self._fixture()
         self.assertEqual(compiled.members[4].weapon.get("control"), {"cover": {"policy": "own_full_burst"}})
-        self.assertIn("control:미하라 : 본딩 체인", static_score_blockers(compiled))
-        with self.assertRaisesRegex(NotImplementedError, "control:미하라 : 본딩 체인"):
-            score_static_squad(compiled, policy, enemy)
+        self.assertNotIn("control:미하라 : 본딩 체인", static_score_blockers(compiled))
+        score = score_static_squad(compiled, policy, enemy, duration=30.0)
+        self.assertGreater(score.squad_total, 0.0)
 
     def test_miranda_wakeup_one_shot_crit_expires_after_recipient_shot(self):
         moris = build_squad(NAMES)
-        # Remove the independently unsupported Mihara cover control so this test
-        # isolates Miranda's target-side one-shot lifetime.
+        # Remove cover control here to keep the legacy static-lifetime contract
+        # independently covered. The controlled variant is exercised by the
+        # certification test above and the rapid-control suite.
         next(c for c in moris if c["name"] == "미하라 : 본딩 체인")["control"] = {}
         compiled = compile_moris_squad(moris)
         wakeup = next(
