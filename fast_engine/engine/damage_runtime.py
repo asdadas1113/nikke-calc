@@ -54,7 +54,7 @@ class SimpleDamageScoreSink:
 
     __slots__ = (
         "squad", "enemy", "specs", "pending_specs", "unsupported_effect_ids",
-        "char_total", "runtime", "resolver", "_pending_effect_ids",
+        "char_total", "runtime", "resolver", "_pending_effect_ids", "_effect_actor",
     )
 
     def __init__(self, squad: "CompiledSquad", enemy: "EnemyStaticProfile") -> None:
@@ -67,6 +67,9 @@ class SimpleDamageScoreSink:
         self.runtime: "BurstRuntime | None" = None
         self.resolver: DamageTermResolver | None = None
         self._pending_effect_ids: list[int] = []
+        self._effect_actor = {
+            effect.effect_id: effect.actor for effect in squad.effects
+        }
 
         downstream_keys = set(squad.trigger_index.by_event)
         scaled_names = {
@@ -156,10 +159,9 @@ class SimpleDamageScoreSink:
         spec = self.specs.get(effect_id) or self.pending_specs.get(effect_id)
         runtime = self.runtime
         resolver = self.resolver
-        if spec is None or runtime is None or resolver is None:
+        actor = self._effect_actor.get(effect_id)
+        if spec is None or runtime is None or resolver is None or actor is None:
             return False
-        effect = runtime.squad.effects[effect_id]
-        actor = effect.actor
         terms = resolver.resolve(actor, now=now)
         self.char_total[actor] += expected_damage_event(
             spec,
