@@ -196,7 +196,13 @@ class SimpleDamageEventTests(unittest.TestCase):
         self.assertFalse(pending.hit.is_burst_damage)
         self.assertFalse(pending.hit.is_normal_atk)
 
-        # The Moris special case is base B3 + bonus_damage + burst_cast only.
+        # Moris special-cases only the exact stat `bonus_damage`.
+        multi = _effect(stat="bonus_damage:5", value=123.0, burst_cast=True)
+        immediate = compile_simple_damage_event(multi, char)
+        self.assertIsNotNone(immediate)
+        self.assertEqual(immediate.hit_count, 5)
+        self.assertIsNone(compile_pending_b3_bonus_damage_event(multi, char))
+
         self.assertIsNone(
             compile_pending_b3_bonus_damage_event(
                 effect, _character(burst_stage="2")
