@@ -86,6 +86,11 @@ class WinterGuillotineCoreHitBuffParityTests(unittest.TestCase):
             enemy,
         )
         runtime._broadcast(0.0, "battle_start")
+        base_atk_pct = runtime.dispatcher.effects.sum_stat(
+            actor,
+            "atk_pct",
+            now=0.0,
+        )
 
         boundaries = simulate_static_expected_core_boundaries(
             compiled,
@@ -120,7 +125,8 @@ class WinterGuillotineCoreHitBuffParityTests(unittest.TestCase):
             "atk_pct",
             now=first.time,
         )
-        self.assertAlmostEqual(fast_atk_pct, float(effect.value or 0.0), places=12)
+        core_contribution = fast_atk_pct - base_atk_pct
+        self.assertAlmostEqual(core_contribution, float(effect.value or 0.0), places=12)
 
         authority = self._simulate_moris_with_core_count_alias(moris_squad)
         moris_events = [
@@ -135,7 +141,7 @@ class WinterGuillotineCoreHitBuffParityTests(unittest.TestCase):
 
         self.assertAlmostEqual(first.time, first_moris.t, delta=(1.0 / 60.0) + 1e-9)
         self.assertEqual(first_moris.stack, 1)
-        self.assertAlmostEqual(fast_atk_pct, float(first_moris.value or 0.0), places=12)
+        self.assertAlmostEqual(core_contribution, float(first_moris.value or 0.0), places=12)
 
 
 if __name__ == "__main__":
