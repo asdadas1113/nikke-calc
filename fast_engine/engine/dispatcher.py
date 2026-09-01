@@ -21,6 +21,9 @@ if TYPE_CHECKING:
     from .scheduler import EventScheduler
 
 
+_INTERNAL_BULLET_CONSUME_EVENT = "__fast_consume_dynamic_bullet_lifetime__"
+
+
 @dataclass(frozen=True, slots=True)
 class DispatchResult:
     activated_effect_ids: tuple[int, ...]
@@ -136,7 +139,6 @@ class TriggerDispatcher:
         )
 
     def enable_strict_score_delivery(self) -> None:
-        """Make comparison-critical runtime delivery fail closed instead of skip."""
         self._strict_score_delivery = True
 
     @classmethod
@@ -454,6 +456,10 @@ class TriggerDispatcher:
     ) -> DispatchResult:
         owner = signal.owner_actor
         event_key = signal.event_key
+        if event_key == _INTERNAL_BULLET_CONSUME_EVENT:
+            self.effects.consume_dynamic_bullet(owner, now=signal.time, count=1)
+            return DispatchResult(())
+
         counter_key = (owner, event_key)
         self._event_counts[counter_key] += int(getattr(signal, "count_increment", 1))
         event_count = self._event_counts[counter_key]
