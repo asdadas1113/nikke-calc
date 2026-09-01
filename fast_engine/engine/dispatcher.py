@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from .capabilities import CapabilityDisposition
 from .conditions import ConditionEvaluator, ConditionMode, SignalContext
+from .damage_policy import is_direct_damage_buff_runtime_supported
 from .effects import ActiveEffectStore
 from .state import ENEMY, StateStore
 from .targets import TargetResolver
@@ -107,6 +108,8 @@ class TriggerDispatcher:
                 and effect.target_spec.runtime_supported
                 and all(rule.is_runtime_supported for rule in effect.condition_rules)
             )
+        if is_direct_damage_buff_runtime_supported(effect):
+            return True
         capability_ok = (
             effect.capability.disposition is CapabilityDisposition.READY
             or TriggerDispatcher._periodic_timing_is_only_blocker(effect)
