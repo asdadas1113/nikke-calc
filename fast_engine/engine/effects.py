@@ -68,8 +68,6 @@ class ActiveEffectStore:
 
     @staticmethod
     def _cohort(targets: Iterable[int]) -> tuple[int, ...]:
-        # Target order is not part of buff identity. Canonicalizing also keeps
-        # repeated composite selectors deterministic.
         return tuple(sorted(set(int(target) for target in targets)))
 
     def _index_add(self, effect: "CompiledEffect", key: ActiveKey) -> None:
@@ -117,16 +115,10 @@ class ActiveEffectStore:
         else:
             initial = max(0.0, float(initial_stacks))
             if old is None:
-                # Moris scaling_ref DoTs capture the reference count directly at
-                # registration, even when the nominal max_stack is 1.
                 stacks = initial
             elif max_stack == 1:
-                # Exact Moris branch order: max_stack==1 refreshes duration but
-                # keeps the previously captured stack instead of recapturing.
                 stacks = old.stacks
             elif reset_scaled_stack:
-                # scaling_ref + max_stack>1 reactivation resets to the fresh
-                # reference value instead of incrementing the previous stack.
                 stacks = initial
             else:
                 stacks = old.stacks + 1.0
@@ -159,9 +151,8 @@ class ActiveEffectStore:
 
         duration_bullets = effect.parameters.get("duration_bullets")
         if duration_bullets is not None:
-            # Phase 2 certifies exactly one target-side ammo-consuming shot. The
-            # policy keeps every other shape fail-closed before activation.
-            if float(duration_bullets) != 1.0:
+            bullets = float(duration_bullets)
+            if bullets < 1.0 or not bullets.is_integer():
                 raise NotImplementedError(
                     f"Fast duration_bullets={duration_bullets!r} not certified"
                 )
@@ -169,7 +160,14 @@ class ActiveEffectStore:
                 raise NotImplementedError(
                     "Fast duration_bullets enemy-target lifetime not certified"
                 )
-            consume_at = next_static_shot_after(self.squad, target, now)
+            # Moris decrements once per recipient shot and removes the state only
+            # after the consuming shot has been damaged. Locate the Nth static
+            # shot without scheduling per-shot events; one post-shot expiry is
+            # enough. Reactivation gets a new generation, invalidating the old
+            # expiry and thereby resetting the lifetime to N shots.
+            consume_at = float(now)
+            for _ in range(int(bullets)):
+                consume_at = next_static_shot_after(self.squad, target, consume_at)
             scheduler.schedule(
                 consume_at,
                 EventKind.STATE_EXPIRE,
@@ -232,7 +230,6 @@ class ActiveEffectStore:
         now: float,
         scheduler: EventScheduler,
     ) -> ActiveEffect:
-        # Compatibility helper for tests/single-target callers.
         return self._activate_one(effect, target, (target,), now, scheduler)
 
     def handle_expiry(self, event: ScheduledEvent) -> "CompiledEffect | None":
@@ -286,12 +283,6 @@ class ActiveEffectStore:
         *,
         now: float,
     ) -> tuple[int, ...]:
-        """Apply Moris target_effect stack mutation to active named states.
-
-        Explicitly named debuffs may reach zero without being removed; that is
-        Moris' debuff_stack_add/remove behavior. Expiry generations are not
-        changed because stack mutation does not refresh duration.
-        """
         changed: list[int] = []
         for key in self._active_keys(self._by_target_name, target, name, now):
             active = self._active[key]
@@ -313,7 +304,6 @@ class ActiveEffectStore:
         *,
         now: float,
     ) -> tuple[int, ...]:
-        """Remove all currently active states with ``name`` from one target."""
         removed: list[int] = []
         for key in self._active_keys(self._by_target_name, target, name, now):
             active = self._active.pop(key, None)
@@ -338,7 +328,6 @@ class ActiveEffectStore:
         return total
 
     def effective_atk(self, actor: int, *, now: float) -> float:
-        """Auxiliary Moris-style final ATK used only for dynamic target ranking."""
         base = float(self.squad.members[actor].base_atk)
         atk_pct = self.sum_stat(actor, "atk_pct", now=now)
         atk_flat = self.sum_stat(actor, "atk_flat", now=now)
