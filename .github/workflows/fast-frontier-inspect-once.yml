@@ -22,6 +22,8 @@ jobs:
         run: |
           python fast_engine/research/_apply_mg_warmup_patch_once.py
           python fast_engine/research/_fix_mg_warmup_patch_once.py
+      - name: Inspect Asuka MG safety
+        run: python fast_engine/research/_inspect_asuka_mg_once.py
       - name: Targeted Fast regressions
         run: |
           python -m unittest \
