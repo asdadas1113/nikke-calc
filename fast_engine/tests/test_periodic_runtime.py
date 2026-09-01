@@ -49,6 +49,17 @@ class PeriodicRuntimeTests(unittest.TestCase):
             )
         }
 
+    @staticmethod
+    def _milk_active_cohorts(runtime: BurstRuntime, now: float) -> set[tuple[int, ...]]:
+        # ActiveEffectStore stores one row per target while keeping the whole
+        # activation cohort on every row. Deduplicate cohorts before asserting
+        # activation count/target count.
+        return {
+            active.cohort
+            for effect, active in runtime.dispatcher.effects.iter_stat("atk_pct", now=now)
+            if effect.name == "밀크에겐 맡겨!"
+        }
+
     def test_milk_favorite_stage_selects_one_periodic_target_variant(self):
         _s0, compiled0 = self._compiled(favorite_stage=0)
         _s1, compiled1 = self._compiled(favorite_stage=1)
@@ -77,18 +88,13 @@ class PeriodicRuntimeTests(unittest.TestCase):
         base = self._runtime(20.1, favorite_stage=0)
         favorite = self._runtime(20.1, favorite_stage=3)
 
-        base_cohorts = [
-            active.cohort
-            for effect, active in base.dispatcher.effects.iter_stat("atk_pct", now=20.1)
-            if effect.name == "밀크에겐 맡겨!"
-        ]
-        favorite_cohorts = [
-            active.cohort
-            for effect, active in favorite.dispatcher.effects.iter_stat("atk_pct", now=20.1)
-            if effect.name == "밀크에겐 맡겨!"
-        ]
-        self.assertEqual([len(cohort) for cohort in base_cohorts], [2])
-        self.assertEqual([len(cohort) for cohort in favorite_cohorts], [3])
+        base_cohorts = self._milk_active_cohorts(base, 20.1)
+        favorite_cohorts = self._milk_active_cohorts(favorite, 20.1)
+
+        self.assertEqual(len(base_cohorts), 1)
+        self.assertEqual(len(favorite_cohorts), 1)
+        self.assertEqual(len(next(iter(base_cohorts))), 2)
+        self.assertEqual(len(next(iter(favorite_cohorts))), 3)
 
     def test_auxiliary_periodic_atk_does_not_overclaim_fast_capability(self):
         _squad, compiled = self._compiled()
