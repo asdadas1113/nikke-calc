@@ -8,11 +8,12 @@ from .model import CompiledCharacter, CompiledEffect, EnemyStaticProfile
 
 @dataclass(frozen=True, slots=True)
 class DamageEventSpec:
-    """One compile-time scoreable damage effect without dynamic scaling.
+    """One scoreable damage shape with compile-time hit semantics.
 
     Several physical hits may share one spec. Fast evaluates the deterministic
     DealForm once per cache-valid state and multiplies by ``hit_count`` instead
-    of allocating one HitEvent per hit.
+    of allocating one HitEvent per hit. Runtime-scaled variants keep their live
+    multiplier in a separate wrapper rather than mutating this immutable shape.
     """
 
     effect_id: int
@@ -20,6 +21,19 @@ class DamageEventSpec:
     hit_count: int
     hit: HitSpec
     normal_formula: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class StackCountDamageSpec:
+    """Immediate non-DoT damage whose Moris hit count comes from one gauge.
+
+    Moris treats ``scaling: stack_count`` differently for direct damage and DoT:
+    direct damage repeats the physical hit ``ref_count`` times, while DoT scales
+    the per-tick coefficient. This wrapper is deliberately only the former.
+    """
+
+    damage: DamageEventSpec
+    ref: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +79,7 @@ def _compile_damage_event(
     *,
     allow_pending_b3_bonus: bool,
     allow_tick_interval: bool = False,
+    allowed_dynamic_parameter_keys: frozenset[str] = frozenset(),
 ) -> DamageEventSpec | None:
     if effect.effect_type != "damage" or effect.value is None:
         return None
@@ -72,7 +87,10 @@ def _compile_damage_event(
         return None
 
     params = effect.parameters
-    if any(key in params for key in _UNSAFE_DYNAMIC_PARAMETER_KEYS):
+    dynamic_keys = {
+        key for key in _UNSAFE_DYNAMIC_PARAMETER_KEYS if key in params
+    }
+    if not dynamic_keys.issubset(allowed_dynamic_parameter_keys):
         return None
     if params.get("tick_start") is not None and not allow_tick_interval:
         return None
@@ -163,6 +181,43 @@ def compile_simple_damage_event(
     )
 
 
+def compile_stack_count_damage_event(
+    effect: CompiledEffect,
+    character: CompiledCharacter,
+) -> StackCountDamageSpec | None:
+    """Lower Moris' non-DoT ``scaling:stack_count`` hit-repeat primitive.
+
+    This first slice accepts exactly one unsuffixed immediate damage stat whose
+    repeat count is read from ``scaling_ref``. Named-stack/DoT semantics remain
+    separate; runtime additionally requires the ref to be a certified Fast gauge
+    family before the effect is considered supported.
+    """
+
+    if effect.effect_type != "damage" or effect.tick_interval is not None:
+        return None
+    params = effect.parameters
+    if params.get("scaling") != "stack_count":
+        return None
+    ref = params.get("scaling_ref")
+    if not isinstance(ref, str) or not ref:
+        return None
+    stat = effect.stat or "damage"
+    if ":" in stat or stat.split(":", 1)[0] == "dot_damage":
+        # Moris gives explicit stat suffixes precedence over stack_count when
+        # choosing hit_count. Do not multiply both interpretations together.
+        return None
+
+    damage = _compile_damage_event(
+        effect,
+        character,
+        allow_pending_b3_bonus=False,
+        allowed_dynamic_parameter_keys=frozenset({"scaling", "scaling_ref"}),
+    )
+    if damage is None or damage.hit.is_dot:
+        return None
+    return StackCountDamageSpec(damage=damage, ref=ref)
+
+
 def compile_pending_b3_bonus_damage_event(
     effect: CompiledEffect,
     character: CompiledCharacter,
@@ -244,6 +299,7 @@ def expected_damage_event(
     terms: DamageTerms,
     *,
     full_burst: bool,
+    hit_count: int | None = None,
 ) -> float:
     """Score a simple damage effect in one DealForm call × aggregated hit count."""
 
@@ -263,4 +319,5 @@ def expected_damage_event(
         terms=terms,
         hit=hit,
     )
-    return per_hit * spec.hit_count
+    count = spec.hit_count if hit_count is None else max(0, int(hit_count))
+    return per_hit * count
