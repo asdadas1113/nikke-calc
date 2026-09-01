@@ -34,7 +34,7 @@ class TriggerDispatcher:
         "squad", "state", "enemy", "burst", "scheduler", "effects", "targets",
         "conditions", "damage_sink", "_effect_table", "_event_counts", "_conditional_counts",
         "_activation_counts", "_state_dependency_names", "_gauge_maxima",
-        "_unsafe_gauge_families",
+        "_unsafe_gauge_families", "_strict_score_delivery",
     )
 
     _AUXILIARY_STATS = frozenset({
@@ -106,6 +106,7 @@ class TriggerDispatcher:
         self._conditional_counts: dict[tuple[int, str], tuple[int, int]] = {}
         self._activation_counts: dict[int, int] = defaultdict(int)
         self._gauge_maxima: dict[tuple[int, str], float] = {}
+        self._strict_score_delivery = False
 
         unsafe_gauges: set[tuple[int, str]] = set()
         for effect in self._effect_table:
@@ -133,6 +134,10 @@ class TriggerDispatcher:
             for rule in effect.condition_rules
             if rule.mode in state_modes and rule.key
         )
+
+    def enable_strict_score_delivery(self) -> None:
+        """Make comparison-critical runtime delivery fail closed instead of skip."""
+        self._strict_score_delivery = True
 
     @classmethod
     def _gauge_family(cls, effect: "CompiledEffect") -> tuple[int, str] | None:
@@ -223,13 +228,6 @@ class TriggerDispatcher:
     _is_executable = is_executable_effect
 
     def _bullet_lifetime_runtime_safe(self, effect: "CompiledEffect") -> bool:
-        """Apply the squad-dependent half of duration_bullets certification.
-
-        Immutable target cohorts are certified before runtime. Dynamic rank,
-        state, and burst-history cohorts defer cadence validation until the
-        activation-time target snapshot has been resolved.
-        """
-
         if effect.parameters.get("duration_bullets") is None:
             return True
         if not target_scope_is_static(effect.target_spec):
@@ -357,12 +355,14 @@ class TriggerDispatcher:
                 and not static_bullet_lifetime_cadence_safe(self.squad, target)
             )
             if unsafe_targets:
-                names = ", ".join(
-                    self.squad.members[target].name for target in unsafe_targets
-                )
-                raise NotImplementedError(
-                    "Fast duration_bullets resolved target cadence not static: " + names
-                )
+                if self._strict_score_delivery:
+                    names = ", ".join(
+                        self.squad.members[target].name for target in unsafe_targets
+                    )
+                    raise NotImplementedError(
+                        "Fast duration_bullets resolved target cadence not static: " + names
+                    )
+                return False
 
         stat = effect.stat or ""
         value = float(effect.value or 0.0)
@@ -497,7 +497,6 @@ class TriggerDispatcher:
         time: float,
         context: SignalContext = SignalContext(),
     ) -> DispatchResult:
-        """Activate one precompiled every:N rule at its scheduler boundary."""
         effect = self._effect_table[effect_id]
         rule = effect.triggers[rule_index]
         if rule.mode is not TriggerMode.PERIODIC or rule.interval is None:
@@ -519,11 +518,6 @@ class TriggerDispatcher:
         context: SignalContext = SignalContext(),
         count_increment: int = 1,
     ) -> DispatchResult:
-        """Moris-style squad part/body hit broadcast.
-
-        The event counter is squad-global and conditions are evaluated for the
-        effect owner, while target `self` resolves to the actual attacker.
-        """
         if count_increment <= 0:
             raise ValueError("count_increment must be > 0")
         counter_key = (-1, event_key)
