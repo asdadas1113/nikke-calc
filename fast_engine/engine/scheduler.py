@@ -17,6 +17,7 @@ class EventKind(IntEnum):
     BURST_END_FINALIZE = 15
     DAMAGE_TICK = 19
     STATE_EXPIRE = 20
+    BULLET_EXPIRE = 21
     PERIODIC_TICK = 30
     RELOAD_DONE = 40
     WEAPON_BOUNDARY = 50
@@ -41,6 +42,10 @@ _EVENT_PHASE: dict[EventKind, int] = {
     EventKind.RELOAD_DONE: 30,
     EventKind.WEAPON_BOUNDARY: 30,
     EventKind.TRIGGER_BOUNDARY: 30,
+    # Moris decrements duration_bullets after the damage/hit notifications for
+    # the consuming shot. Keep expiry at the same timestamp but strictly after
+    # all phase-30 weapon/trigger work, without materializing every shot.
+    EventKind.BULLET_EXPIRE: 40,
     EventKind.CUSTOM: 100,
 }
 
