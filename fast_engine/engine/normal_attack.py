@@ -83,6 +83,8 @@ def expected_normal_shot_damage(
             is_full_burst=is_full_burst,
             is_optimal_range=is_optimal_range,
             is_full_charge=spec.is_full_charge,
+            is_pierce_damage=terms.pierce_enabled,
+            is_armor_break_damage=terms.armor_break_enabled,
         ),
     )
     return per_hit * spec.hits_per_shot * spec.normal_hit_coeff
