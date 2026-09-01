@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, TYPE_CHECKING
 
+from .dynamic_reload import DynamicRapidReloadRuntime
 from .scheduler import EventScheduler, ScheduledEvent
 from .state import StateStore
 from .triggers import TriggerMode
@@ -27,25 +28,17 @@ class DynamicChargeBoundary:
 
 
 class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
-    """Dynamic SR/RL cadence with several signals on one physical shot.
+    """Composite dynamic weapon runtime for the currently certified slices.
 
-    The base runtime already fast-forwards unchanged charge/reload spans and
-    materializes only meaningful full-charge boundaries. This layer adds generic
-    ``hit_count:N`` thresholds and an actor-selective literal
-    ``full_charge_hit`` producer. The latter promotes every full-charge shot only
-    for actors that actually own an executable raw consumer; unrelated charge
-    actors remain aggregated and no global every-shot loop is introduced.
+    Charge weapons keep the existing generation-based SR/RL cadence runtime.
+    Selected non-clip auto/MG actors may additionally use a compressed live
+    reload-speed runtime. The two paths share the scheduler but never share actor
+    state: charge actors remain in the base runtime while rapid actors live in
+    ``_rapid_reload``.
 
-    The score path may additionally promote selected charge actors to every-shot
-    boundaries. That promotion is opt-in and installed before ``start()``. The
-    score callback runs after the physical shot has advanced ammo state but before
-    post-shot ``full_charge_hit`` / ``hit_count`` effects are dispatched, matching
-    Moris' damage-before-hit-notify ordering without teaching the generic runtime
-    about damage formulas.
-
-    Moris ``hit_count`` advances once per charge attack, independent of pellet or
-    muzzle multiplicity. ``pellet_hit`` is the separate per-hit stream, so a
-    multi-hit charge weapon does not need intra-shot hit_count expansion here.
+    Score callbacks run after a physical shot has advanced ammo state but before
+    post-shot hit/full-charge/last-bullet effects are dispatched. This preserves
+    Moris' damage-before-hit-notify ordering without introducing a frame loop.
     """
 
     __slots__ = (
@@ -53,6 +46,7 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         "_raw_full_charge_actors",
         "_score_actors",
         "_score_shot_sink",
+        "_rapid_reload",
     )
 
     def __init__(
@@ -112,6 +106,14 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         self._raw_full_charge_actors = frozenset(raw_full_charge_actors)
         self._score_actors: frozenset[int] = frozenset()
         self._score_shot_sink: Callable[[int, float], None] | None = None
+        self._rapid_reload = DynamicRapidReloadRuntime(
+            squad,
+            effects,
+            state,
+            scheduler,
+            duration=duration,
+            effect_filter=effect_filter,
+        )
 
         # A charge actor may be interesting only because of generic hit_count or
         # a literal full_charge_hit consumer. Add it before start() initializes
@@ -122,17 +124,16 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
                 actors.add(actor)
         self.actors = tuple(sorted(actors))
 
+    @property
+    def all_dynamic_actors(self) -> tuple[int, ...]:
+        return tuple(sorted(set(self.actors) | set(self._rapid_reload.actors)))
+
     def attach_score_shot_sink(
         self,
         actors: tuple[int, ...] | frozenset[int],
         sink: Callable[[int, float], None],
     ) -> None:
-        """Promote selected charge actors to physical-shot score boundaries.
-
-        This must be installed before ``start()`` so no early shot can be
-        fast-forwarded under the old boundary set. Only charge weapons are
-        accepted; auto/MG dynamic scoring is deliberately a separate slice.
-        """
+        """Promote selected charge actors to physical-shot score boundaries."""
 
         if self._states:
             raise RuntimeError("Fast score shot sink must be attached before weapon start")
@@ -150,13 +151,32 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         if selected:
             self.actors = tuple(sorted(set(self.actors) | set(selected)))
 
+    def attach_score_block_sink(
+        self,
+        actors: tuple[int, ...] | frozenset[int],
+        sink: Callable[[int, int, float], None],
+    ) -> None:
+        """Attach compressed normal-score delivery for non-clip auto/MG actors."""
+
+        self._rapid_reload.attach_score_sink(actors, sink)
+
     def emits_every_charge_shot(self, actor: int) -> bool:
-        """Whether this runtime materializes every physical charge shot for actor."""
         return actor in self.actors and (
             self.emits_each_charge_hit
             or actor in self._raw_full_charge_actors
             or actor in self._score_actors
         )
+
+    def supports_dynamic_last_bullet(self, actor: int) -> bool:
+        if actor in self._rapid_reload.actors:
+            return True
+        return self.emits_every_charge_shot(actor)
+
+    def emits_squad_body_hit(self, actor: int) -> bool:
+        # ``emits_each_charge_hit`` is a charge-only bridge. Rapid auto/MG actors
+        # must not accidentally inherit that global flag merely because another
+        # charge actor exists in the same squad.
+        return actor in self.actors and self.emits_each_charge_hit
 
     def _shot_is_boundary(self, actor: int, absolute_count: int) -> bool:
         if actor in self._score_actors or actor in self._raw_full_charge_actors:
@@ -168,7 +188,30 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
             for threshold in self._hit_thresholds.get(actor, ())
         )
 
+    def start(self, now: float = 0.0) -> None:
+        super().start(now)
+        self._rapid_reload.start(now)
+
+    def advance_to(self, t: float, *, inclusive: bool = False) -> None:
+        super().advance_to(t, inclusive=inclusive)
+        self._rapid_reload.advance_to(t, inclusive=inclusive)
+
+    def sync(self, now: float) -> None:
+        super().sync(now)
+        self._rapid_reload.sync(now)
+
     def handle_boundary(self, event: ScheduledEvent) -> DynamicChargeBoundary | None:
+        rapid = self._rapid_reload.handle_boundary(event)
+        if rapid is not None:
+            return DynamicChargeBoundary(
+                rapid.actor,
+                tuple(
+                    DynamicCountSignal(row.event_key, row.count_increment)
+                    for row in rapid.signals
+                ),
+                is_last_bullet=rapid.is_last_bullet,
+            )
+
         row = super().handle_boundary(event)
         if row is None:
             return None
@@ -177,8 +220,6 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         if actor in self._score_actors:
             if self._score_shot_sink is None:
                 raise RuntimeError("Fast dynamic score actor has no shot sink")
-            # Score every physical charge shot before any post-shot trigger can
-            # mutate damage-facing state for the next shot.
             self._score_shot_sink(actor, float(event.time))
 
         signals: list[DynamicCountSignal] = []
