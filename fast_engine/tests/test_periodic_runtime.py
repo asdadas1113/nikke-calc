@@ -10,6 +10,7 @@ from fast_engine.engine.burst_runtime import BurstRuntime
 from fast_engine.engine.capabilities import CapabilityDisposition
 from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.dispatcher import TriggerDispatcher
+from fast_engine.engine.weapon import DynamicChargeCadenceRuntime
 
 FRAME = 1.0 / 60.0
 
@@ -100,6 +101,60 @@ class PeriodicRuntimeTests(unittest.TestCase):
         self.assertEqual(len(favorite_cohorts), 1)
         self.assertEqual(len(next(iter(base_cohorts))), 2)
         self.assertEqual(len(next(iter(favorite_cohorts))), 3)
+
+    def test_milk_individual_full_charge_times_show_where_drift_starts(self):
+        duration = 30.0
+        moris_squad, compiled = self._compiled(favorite_stage=3)
+        policy = compile_burst_policy(moris_squad, compiled, {"duration": duration})
+
+        fast_shots: list[float] = []
+        original_dispatch = TriggerDispatcher.dispatch
+        original_boundary = DynamicChargeCadenceRuntime._shot_is_boundary
+
+        def every_milk_shot_is_boundary(runtime, actor, absolute_count):
+            if actor == 0:
+                return True
+            return original_boundary(runtime, actor, absolute_count)
+
+        def traced_dispatch(dispatcher, signal, *args, **kwargs):
+            if signal.owner_actor == 0 and signal.event_key == "full_charge_hit":
+                increment = int(getattr(signal, "count_increment", 1))
+                # With every Milk shot materialized, the increment should be 1.
+                fast_shots.extend([signal.time] * increment)
+            return original_dispatch(dispatcher, signal, *args, **kwargs)
+
+        with (
+            patch.object(
+                DynamicChargeCadenceRuntime,
+                "_shot_is_boundary",
+                new=every_milk_shot_is_boundary,
+            ),
+            patch.object(TriggerDispatcher, "dispatch", new=traced_dispatch),
+        ):
+            BurstRuntime(compiled, policy).run(duration=duration)
+
+        moris = simulate(
+            moris_squad,
+            config={"duration": duration, "rng_mode": "expected"},
+            verbose=True,
+        )
+        moris_shots = [
+            ev.t
+            for ev in moris.hits
+            if ev.caster == "밀크" and "full_charge_hit" in ev.hit_tag
+        ]
+
+        pairs = list(zip(fast_shots[:20], moris_shots[:20]))
+        self.assertGreaterEqual(len(pairs), 10)
+        detail = ", ".join(
+            f"{i}:F={f:.6f}/M={m:.6f}/d={f-m:+.6f}"
+            for i, (f, m) in enumerate(pairs, start=1)
+        )
+        self.assertLessEqual(
+            max(abs(f - m) for f, m in pairs),
+            FRAME + 1e-8,
+            detail,
+        )
 
     def test_milk_every_tenth_full_charge_boundary_tracks_moris(self):
         duration = 80.0
