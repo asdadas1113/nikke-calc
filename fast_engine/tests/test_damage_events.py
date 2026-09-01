@@ -5,6 +5,7 @@ import unittest
 from calculator.damage import calc_damage_avg, default_hit_type
 from fast_engine.engine.damage import DamageTerms
 from fast_engine.engine.damage_events import (
+    compile_fixed_dot_damage_event,
     compile_pending_b3_bonus_damage_event,
     compile_simple_damage_event,
     expected_damage_event,
@@ -45,6 +46,8 @@ def _effect(
     target="enemy",
     burst_cast: bool = False,
     tick_interval: float | None = None,
+    duration: float | None = None,
+    max_stack: float | None = None,
     parameters: dict | None = None,
 ) -> CompiledEffect:
     triggers = (
@@ -68,8 +71,8 @@ def _effect(
         condition_rules=(),
         triggers=triggers,
         value=value,
-        duration=None,
-        max_stack=None,
+        duration=duration,
+        max_stack=max_stack,
         max_trigger=None,
         tick_interval=tick_interval,
         parameters=parameters or {},
@@ -211,6 +214,82 @@ class SimpleDamageEventTests(unittest.TestCase):
         self.assertIsNone(
             compile_pending_b3_bonus_damage_event(
                 _effect(stat="burst_damage", burst_cast=True), char
+            )
+        )
+
+    def test_fixed_dot_compiler_keeps_only_finite_non_scaling_slice(self):
+        char = _character()
+        delayed = _effect(
+            stat="dot_damage",
+            value=150.0,
+            tick_interval=1.0,
+            duration=5.0,
+            max_stack=1,
+        )
+        spec = compile_fixed_dot_damage_event(delayed, char)
+        self.assertIsNotNone(spec)
+        self.assertEqual(spec.interval, 1.0)
+        self.assertEqual(spec.duration, 5.0)
+        self.assertFalse(spec.immediate)
+        self.assertTrue(spec.damage.hit.is_dot)
+
+        immediate = compile_fixed_dot_damage_event(
+            _effect(
+                stat="dot_damage",
+                tick_interval=0.5,
+                duration=2.0,
+                max_stack=1,
+                parameters={"tick_start": "immediate"},
+            ),
+            char,
+        )
+        self.assertIsNotNone(immediate)
+        self.assertTrue(immediate.immediate)
+
+        self.assertIsNone(
+            compile_fixed_dot_damage_event(
+                _effect(
+                    stat="dot_damage",
+                    tick_interval=1.0,
+                    duration=5.0,
+                    max_stack=2,
+                ),
+                char,
+            )
+        )
+        self.assertIsNone(
+            compile_fixed_dot_damage_event(
+                _effect(
+                    stat="dot_damage",
+                    tick_interval=1.0,
+                    duration=-1.0,
+                    max_stack=1,
+                ),
+                char,
+            )
+        )
+        self.assertIsNone(
+            compile_fixed_dot_damage_event(
+                _effect(
+                    stat="dot_damage",
+                    tick_interval=1.0,
+                    duration=5.0,
+                    max_stack=1,
+                    parameters={"scaling": "stack_count", "scaling_ref": "x"},
+                ),
+                char,
+            )
+        )
+        self.assertIsNone(
+            compile_fixed_dot_damage_event(
+                _effect(
+                    stat="dot_damage",
+                    target="same_target:paired",
+                    tick_interval=1.0,
+                    duration=5.0,
+                    max_stack=1,
+                ),
+                char,
             )
         )
 
