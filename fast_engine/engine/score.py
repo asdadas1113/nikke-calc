@@ -3,7 +3,11 @@ from __future__ import annotations
 from math import inf, nextafter
 from typing import TYPE_CHECKING
 
-from .damage_policy import DIRECT_DAMAGE_STATE_STATS, is_direct_damage_buff_runtime_supported
+from .damage_policy import (
+    DIRECT_DAMAGE_STATE_STATS,
+    is_direct_damage_buff_runtime_supported,
+    is_static_element_override_score_supported,
+)
 from .damage_state import DamageTermResolver
 from .model import CompiledSquad, EnemyStaticProfile, FastScore
 from .normal_attack import compile_normal_attack_spec, expected_normal_block_damage
@@ -79,7 +83,6 @@ _UNRESOLVED_NORMAL_DAMAGE_STATS = frozenset({
     "dmg_scale_mag_pct",
     "armor_break_enabled",
     "pierce_enabled",
-    "element_code_override",
 })
 
 # A fixed periodic ATK state is the one deliberate exception outside the direct
@@ -205,6 +208,11 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
         if stat in _CADENCE_OR_SHAPE_STATS:
             if not _is_folded_static_self_modifier(effect):
                 blockers.append(f"cadence:{label}")
+            continue
+
+        if stat == "element_code_override":
+            if not is_static_element_override_score_supported(effect):
+                blockers.append(f"normal_state:{label}")
             continue
 
         if stat in _UNRESOLVED_NORMAL_DAMAGE_STATS:
