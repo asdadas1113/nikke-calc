@@ -36,6 +36,12 @@ class BurstRuntime:
         "dispatcher", "weapons",
     )
 
+    _STATIC_LAST_BULLET_INVALIDATORS = frozenset({
+        "reload_speed_pct",
+        "max_ammo_pct",
+        "max_ammo_flat",
+    })
+
     def __init__(
         self,
         squad: CompiledSquad,
@@ -87,16 +93,40 @@ class BurstRuntime:
                 ),
             )
 
+    @staticmethod
+    def _is_static_permanent_self_cadence(effect) -> bool:
+        """Match the permanent self modifiers already folded into static cadence."""
+        return (
+            effect.effect_type == "buff"
+            and effect.target_spec.mode.value == "self"
+            and effect.duration in (None, -1.0)
+            and not effect.condition_rules
+            and bool(effect.triggers)
+            and all(rule.event_key == "battle_start" for rule in effect.triggers)
+        )
+
+    @staticmethod
+    def _effect_may_target_actor(effect, actor: int) -> bool:
+        mode = effect.target_spec.mode.value
+        if mode == "self":
+            return effect.actor == actor
+        if mode == "named_actor":
+            return effect.target_spec.count == actor
+        if mode in {"enemy", "model_excluded", "unsupported"}:
+            return False
+        # Dynamic ranks/filters are intentionally conservative: if the cohort can
+        # change later, static last-bullet planning must assume this actor may enter it.
+        return True
+
     def _schedule_static_last_bullets(
         self, horizon: float, dynamic_actors: set[int]
     ) -> None:
         """Expose exact magazine-ending shots without widening to every weapon hit.
 
-        Static actors are safe because their cadence plan cannot be invalidated by
-        live charge/ammo/reload modifiers. A dynamic charge actor that also owns
-        an executable last-bullet effect needs one physical shot to emit both the
-        dynamic cadence signal and `last_bullet_fire`; that multi-signal boundary
-        is deliberately not guessed here.
+        Static actors are safe only while their reload/max-ammo cadence cannot be
+        changed by live effects. Dynamic charge actors and potentially-targeting
+        runtime cadence modifiers fail closed instead of leaving stale magazine
+        boundaries in the scheduler.
         """
         interested = {
             effect.actor
@@ -104,11 +134,36 @@ class BurstRuntime:
             if self.dispatcher.is_executable_effect(effect)
             and any(rule.event_key == "last_bullet_fire" for rule in effect.triggers)
         }
+        if not interested:
+            return
+
         unsupported = interested & dynamic_actors
         if unsupported:
             names = ", ".join(self.squad.members[actor].name for actor in sorted(unsupported))
             raise NotImplementedError(
                 "Fast dynamic charge + last_bullet_fire boundary not certified: " + names
+            )
+
+        invalidators: list[tuple[int, str]] = []
+        for effect in self.squad.effects:
+            if not self.dispatcher.is_executable_effect(effect):
+                continue
+            if (effect.stat or "") not in self._STATIC_LAST_BULLET_INVALIDATORS:
+                continue
+            if self._is_static_permanent_self_cadence(effect):
+                continue
+            for actor in interested:
+                if self._effect_may_target_actor(effect, actor):
+                    invalidators.append((actor, effect.name or effect.stat or "?"))
+
+        if invalidators:
+            detail = ", ".join(
+                f"{self.squad.members[actor].name}<-{name}"
+                for actor, name in invalidators[:8]
+            )
+            raise NotImplementedError(
+                "Fast static last_bullet_fire cadence can be invalidated by live weapon modifiers: "
+                + detail
             )
 
         from .burst import BurstSignal
