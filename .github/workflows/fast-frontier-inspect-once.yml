@@ -1,0 +1,47 @@
+name: Fast ammo charge patch once
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Apply ammo charge runtime patch
+        run: python fast_engine/research/_apply_ammo_charge_patch_once.py
+      - name: Targeted Fast regressions
+        run: |
+          python -m unittest \
+            fast_engine.tests.test_damage_dynamic_ammo_charge \
+            fast_engine.tests.test_damage_dynamic_charge_scoring \
+            fast_engine.tests.test_damage_dynamic_reload_scoring \
+            fast_engine.tests.test_damage_helm_bullet_lifetime \
+            fast_engine.tests.test_damage_real_squad_certification
+      - name: Commit implementation if changed
+        run: |
+          if git diff --quiet; then
+            echo 'No implementation changes to commit.'
+            exit 0
+          fi
+          git config user.name 'fast-engine-bot'
+          git config user.email 'fast-engine-bot@users.noreply.github.com'
+          git add \
+            fast_engine/engine/capabilities.py \
+            fast_engine/engine/dispatcher.py \
+            fast_engine/engine/dynamic_weapon.py \
+            fast_engine/engine/score.py \
+            fast_engine/tests/test_damage_dynamic_ammo_charge.py
+          git diff --cached --check
+          git commit -m 'impl: dynamic ammo charge runtime'
+          git push origin HEAD:fast-engine-phase2-20260901
