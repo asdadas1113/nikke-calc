@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import copy
 import unittest
 
+import calculator.buff_manager as moris_buff_manager
 from calculator.timeline import simulate
 from context.spec import build_squad
 from fast_engine.engine.burst import BurstPolicy, BurstSignal
@@ -39,8 +41,54 @@ class WinterLudmillaCoreHitParityTests(unittest.TestCase):
     EFFECT_NAME = "눈보라"
     DURATION = 10.0
 
-    def test_first_real_core_hit_count_damage_matches_moris(self):
-        """Certify the first real parsed core-count activation end to end.
+    def _simulate_moris_with_core_count_alias(self, moris_squad):
+        """Run the intended Moris mechanic without changing calculator authority.
+
+        parsed_skills uses the canonical ``core_hit_count:60`` spelling and
+        timeline._notify_frac explicitly documents that spelling, but the current
+        BuffManager matcher only accepts the older ``core_hit:60`` spelling. Keep
+        that authority gap isolated to this test boundary: clone only Winter
+        Ludmilla's registered effects, alias Snowstorm's timing for this run, then
+        restore the module table immediately.
+        """
+        original = moris_buff_manager._PARSED_SKILLS[self.NAME]
+        aliased = copy.deepcopy(original)
+        changed = 0
+        for candidate in aliased:
+            if candidate.get("name") != self.EFFECT_NAME:
+                continue
+            timings = candidate.get("trigger", {}).get("timing", [])
+            if timings == ["core_hit_count:60"]:
+                candidate["trigger"]["timing"] = ["core_hit:60"]
+                changed += 1
+        self.assertEqual(changed, 1)
+
+        moris_buff_manager._PARSED_SKILLS[self.NAME] = aliased
+        try:
+            return simulate(
+                moris_squad,
+                config={
+                    "duration": self.DURATION,
+                    "rng_mode": "expected",
+                    "first_burst_time": self.DURATION,
+                    "max_burst_count": 0,
+                },
+                enemy={
+                    "def": 31784,
+                    "code": None,
+                    "core_px": 1_000_000.0,
+                    "has_parts": False,
+                    "optimal_range_weapons": [],
+                    "immune_windows": [],
+                    "element_windows": [],
+                },
+                verbose=True,
+            )
+        finally:
+            moris_buff_manager._PARSED_SKILLS[self.NAME] = original
+
+    def test_first_real_core_hit_count_damage_matches_intended_moris_semantics(self):
+        """Compare the first real Snowstorm activation against Moris mechanics.
 
         Winter Ludmilla also refills ammo on ``hit_count:60``. Moris notifies
         ``core_hit`` inside the physical-hit loop before the shot-level hit-count
@@ -116,26 +164,7 @@ class WinterLudmillaCoreHitParityTests(unittest.TestCase):
         self.assertEqual(len(fast_events), 1)
         _, fast_time, fast_damage = fast_events[0]
 
-        config = {
-            "duration": self.DURATION,
-            "rng_mode": "expected",
-            "first_burst_time": self.DURATION,
-            "max_burst_count": 0,
-        }
-        authority = simulate(
-            moris_squad,
-            config=config,
-            enemy={
-                "def": 31784,
-                "code": None,
-                "core_px": 1_000_000.0,
-                "has_parts": False,
-                "optimal_range_weapons": [],
-                "immune_windows": [],
-                "element_windows": [],
-            },
-            verbose=True,
-        )
+        authority = self._simulate_moris_with_core_count_alias(moris_squad)
         moris_hits = [
             hit
             for hit in authority.hits
