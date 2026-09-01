@@ -2,6 +2,9 @@
 # **PR과 그 밖의 브랜치**만 맡는다 — 지금까지 그쪽이 통째로 비어 있었다.
 # (master를 여기서도 돌리면 같은 7분짜리 스냅샷을 두 번 태우게 된다)
 #
+# Fast Engine 장기 개발 브랜치는 PR 없이 checkpoint를 쌓으므로 해당 브랜치 push도
+# 직접 검증한다. master push는 여전히 pages.yml만 담당한다.
+#
 # 통과 여부만으로는 리뷰가 안 된다. 계산기를 고치면 baseline도 같이 고쳐 PR에 넣으므로
 # **회귀는 초록불로 지나가기 때문**이다. 실제로 읽어야 할 것은 마지막 단계가 PR 요약에
 # 붙이는 **변동 표**다 — 한 캐릭터를 고쳤는데 29개 스쿼드가 다 흔들렸다면 초록불이어도
@@ -12,6 +15,9 @@ name: CI
 on:
   pull_request:
   workflow_dispatch:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
 
 # 연달아 push하면 앞 실행은 취소한다. 스냅샷이 길어 쌓이면 큐가 밀린다.
 concurrency:
@@ -51,6 +57,9 @@ jobs:
         run: |
           python -m unittest discover -s calculator -p 'test_*.py'
           python calculator/damage.py
+
+      - name: Fast Engine 단위 테스트
+        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
 
       - name: 옵티마이저 단위 테스트
         run: python -m unittest discover -s tests -p 'test_optimizer_*.py'
