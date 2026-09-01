@@ -10,6 +10,7 @@ from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_suppo
 from fast_engine.engine.dispatcher import TriggerDispatcher
 from fast_engine.engine.model import EnemyStaticProfile
 from fast_engine.engine.scheduler import EventKind, EventScheduler
+from fast_engine.engine.score import static_score_blockers
 from fast_engine.engine.shot_blocks import next_static_shot_after
 from fast_engine.engine.state import StateStore
 
@@ -76,6 +77,47 @@ class HelmTenShotLifetimeTests(unittest.TestCase):
             dispatcher.effects.sum_stat(2, "charge_dmg_mag_pct", now=tenth),
             0.0,
         )
+
+    def test_unrelated_control_does_not_poison_self_bullet_lifetime(self):
+        squad = build_squad(NAMES)
+        compiled = compile_moris_squad(squad)
+        policy = compile_burst_policy(
+            squad,
+            compiled,
+            {"duration": 180.0, "first_burst_time": 3.0, "rng_mode": "expected"},
+        )
+        helm = next(
+            e for e in compiled.effects
+            if e.actor == 2 and e.name == "이지스 캐논 3" and e.stat == "charge_dmg_mag_pct"
+        )
+        miranda = next(
+            e for e in compiled.effects
+            if e.actor == 0 and e.name == "웨이크업! 4" and e.stat == "crit_rate"
+        )
+
+        blockers = static_score_blockers(compiled)
+        self.assertNotIn(
+            "normal_delivery:헬름:이지스 캐논 3:charge_dmg_mag_pct",
+            blockers,
+        )
+        self.assertNotIn(
+            "skill_state_delivery:헬름:이지스 캐논 3:charge_dmg_mag_pct",
+            blockers,
+        )
+        self.assertIn(
+            "normal_delivery:미란다:웨이크업! 4:crit_rate",
+            blockers,
+        )
+
+        dispatcher = TriggerDispatcher(
+            compiled,
+            StateStore.from_compiled_squad(compiled),
+            EnemyStaticProfile(defense=31784.0, duration=180.0),
+            BurstMachine(compiled, policy),
+            EventScheduler(),
+        )
+        self.assertTrue(dispatcher.is_runtime_executable_effect(helm))
+        self.assertFalse(dispatcher.is_runtime_executable_effect(miranda))
 
     def test_reactivation_resets_ten_shot_generation(self):
         compiled, policy, helm = self._fixture()
