@@ -48,6 +48,7 @@ _NORMAL_DIRECT_DAMAGE_STATS = frozenset({
     "crit_dmg",
     "normal_atk_crit_dmg",
     "core_dmg_pct",
+    "accuracy_pct",
     "normal_atk_dmg_pct",
     "atk_dmg_pct",
     "charge_dmg_pct",
@@ -270,7 +271,6 @@ class StaticNormalAttackObserver:
 
         eval_time = float(time) if inclusive else nextafter(float(time), -inf)
         full_burst = self.runtime.machine.phase == "full_burst"
-        core_prob = self.runtime.enemy.effective_core_rate
 
         for actor, cursor in enumerate(self.cursors):
             count = cursor.consume_until(time, inclusive=inclusive)
@@ -278,6 +278,10 @@ class StaticNormalAttackObserver:
                 continue
             member = self.runtime.squad.members[actor]
             terms = self.resolver.resolve(actor, now=eval_time)
+            core_prob = self.runtime.enemy.core_rate_for_weapon(
+                member.weapon,
+                accuracy_pct=terms.accuracy_pct,
+            )
             self.char_total[actor] += expected_normal_block_damage(
                 self.specs[actor],
                 shot_count=count,
