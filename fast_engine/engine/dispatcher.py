@@ -9,7 +9,7 @@ from .conditions import ConditionEvaluator, ConditionMode, SignalContext
 from .damage_policy import is_direct_damage_buff_runtime_supported
 from .effects import ActiveEffectStore
 from .state import ENEMY, StateStore
-from .targets import TargetResolver
+from .targets import TargetMode, TargetResolver
 from .triggers import TriggerMode
 
 if TYPE_CHECKING:
@@ -31,7 +31,8 @@ class TriggerDispatcher:
     __slots__ = (
         "squad", "state", "enemy", "burst", "scheduler", "effects", "targets",
         "conditions", "damage_sink", "_effect_table", "_event_counts", "_conditional_counts",
-        "_activation_counts", "_state_dependency_names",
+        "_activation_counts", "_state_dependency_names", "_gauge_maxima",
+        "_unsafe_gauge_families",
     )
 
     _AUXILIARY_STATS = frozenset({
@@ -50,6 +51,38 @@ class TriggerDispatcher:
         "max_ammo_pct",
         "max_ammo_flat",
         "charge_time_flat",
+    })
+
+    _GAUGE_STATS = frozenset({"gauge_charge", "gauge_consume"})
+    _GAUGE_ADVANCED_STATS = frozenset({
+        "gauge_max_add",
+        "gauge_charge_enabled",
+        "gauge_consume_as_ammo",
+    })
+    _GAUGE_SAFE_CONDITIONS = frozenset({
+        ConditionMode.DURING_FULL_BURST,
+        ConditionMode.NOT_DURING_FULL_BURST,
+        ConditionMode.BURST_CASTED,
+        ConditionMode.BURST_NOT_CASTED,
+        ConditionMode.GAUGE_AT_LEAST,
+        ConditionMode.GAUGE_BELOW,
+        ConditionMode.GAUGE_EQUAL,
+        ConditionMode.GAUGE_MOD,
+    })
+    _GAUGE_SAFE_EVENT_KEYS = frozenset({
+        "battle_start",
+        "burst_cast",
+        "full_burst_start",
+        "full_burst_end",
+    })
+    # The initial Fast enemy never kills/downs anything and never attacks the
+    # squad. A writer reachable only through these signals cannot change a gauge
+    # under the current static-target scoring contract, so it need not poison an
+    # otherwise-complete lifecycle/burst gauge family.
+    _PATTERNLESS_UNREACHABLE_GAUGE_EVENTS = frozenset({
+        "enemy_death",
+        "received_hit",
+        "event:self_down",
     })
 
     def __init__(
@@ -74,6 +107,21 @@ class TriggerDispatcher:
         self._event_counts: dict[tuple[int, str], int] = defaultdict(int)
         self._conditional_counts: dict[tuple[int, str], tuple[int, int]] = {}
         self._activation_counts: dict[int, int] = defaultdict(int)
+        self._gauge_maxima: dict[tuple[int, str], float] = {}
+
+        unsafe_gauges: set[tuple[int, str]] = set()
+        for effect in self._effect_table:
+            family = self._gauge_family(effect)
+            stat = effect.stat or ""
+            if family is None:
+                gauge_id = effect.parameters.get("gauge_id")
+                if gauge_id and stat in self._GAUGE_ADVANCED_STATS:
+                    unsafe_gauges.add((effect.actor, str(gauge_id)))
+                continue
+            if not self._gauge_shape_supported(effect) and not self._gauge_patternless_unreachable(effect):
+                unsafe_gauges.add(family)
+        self._unsafe_gauge_families = frozenset(unsafe_gauges)
+
         state_modes = {
             ConditionMode.SELF_STATE, ConditionMode.NOT_SELF_STATE,
             ConditionMode.TARGET_STATE, ConditionMode.NOT_TARGET_STATE,
@@ -85,6 +133,54 @@ class TriggerDispatcher:
             if self.is_runtime_executable_effect(effect)
             for rule in effect.condition_rules
             if rule.mode in state_modes and rule.key
+        )
+
+    @classmethod
+    def _gauge_family(cls, effect: "CompiledEffect") -> tuple[int, str] | None:
+        if effect.effect_type != "instant" or (effect.stat or "") not in cls._GAUGE_STATS:
+            return None
+        gauge_id = effect.parameters.get("gauge_id")
+        if not isinstance(gauge_id, str) or not gauge_id:
+            return None
+        if effect.target_spec.mode is not TargetMode.SELF:
+            return None
+        return effect.actor, gauge_id
+
+    @classmethod
+    def _gauge_shape_supported(cls, effect: "CompiledEffect") -> bool:
+        family = cls._gauge_family(effect)
+        if family is None or effect.value is None or not effect.triggers:
+            return False
+        value = float(effect.value)
+        if (effect.stat or "") == "gauge_charge" and value < 0.0:
+            return False
+        if (effect.stat or "") == "gauge_consume" and value < 0.0 and value != -1.0:
+            return False
+        if any(rule.mode not in cls._GAUGE_SAFE_CONDITIONS for rule in effect.condition_rules):
+            return False
+        for rule in effect.triggers:
+            if rule.mode is not TriggerMode.EVENT:
+                return False
+            event_key = rule.event_key or ""
+            if event_key in cls._GAUGE_SAFE_EVENT_KEYS:
+                continue
+            if event_key.startswith("burst_enter:") or event_key.startswith("squad_burst_cast:"):
+                continue
+            return False
+        gauge_max = effect.parameters.get("gauge_max")
+        if gauge_max is not None and float(gauge_max) < 0.0:
+            return False
+        return True
+
+    @classmethod
+    def _gauge_patternless_unreachable(cls, effect: "CompiledEffect") -> bool:
+        return (
+            cls._gauge_family(effect) is not None
+            and bool(effect.triggers)
+            and all(
+                (rule.event_key or "") in cls._PATTERNLESS_UNREACHABLE_GAUGE_EVENTS
+                for rule in effect.triggers
+            )
         )
 
     @staticmethod
@@ -130,9 +226,17 @@ class TriggerDispatcher:
         """Return effects executable in this dispatcher instance.
 
         Score-only damage support is deliberately opt-in through ``damage_sink``.
-        The static predicate above remains unchanged so existing burst/cadence
-        runtimes cannot silently widen merely because the score bridge exists.
+        Lifecycle/burst gauge writers are also instance-scoped because a gauge
+        family is certified only after scanning the whole squad for unsupported
+        reachable writers or advanced gauge-capacity mechanics.
         """
+        family = self._gauge_family(effect)
+        if (
+            family is not None
+            and family not in self._unsafe_gauge_families
+            and self._gauge_shape_supported(effect)
+        ):
+            return True
         if self.is_executable_effect(effect):
             return True
         return bool(self.damage_sink is not None and self.damage_sink.supports(effect))
@@ -238,6 +342,36 @@ class TriggerDispatcher:
                 for target in targets:
                     if target != ENEMY:
                         self.burst.adjust_cooldown(target, value, now, self.scheduler)
+            elif stat in self._GAUGE_STATS:
+                family = self._gauge_family(effect)
+                if family is None or family in self._unsafe_gauge_families:
+                    return False
+                gauge_id = family[1]
+                for target in targets:
+                    if target == ENEMY:
+                        return False
+                    target_family = (target, gauge_id)
+                    if stat == "gauge_charge":
+                        gauge_max = effect.parameters.get("gauge_max")
+                        if gauge_max is not None:
+                            self._gauge_maxima[target_family] = float(gauge_max)
+                        maximum = self._gauge_maxima.get(target_family, float("inf"))
+                        self.state.add_gauge(
+                            target,
+                            gauge_id,
+                            value,
+                            maximum=maximum,
+                        )
+                    else:
+                        current = self.state.actors[target].gauges.get(gauge_id, 0.0)
+                        if value == -1.0:
+                            self.state.set_gauge(target, gauge_id, 0.0)
+                        else:
+                            self.state.set_gauge(
+                                target,
+                                gauge_id,
+                                max(0.0, current - value),
+                            )
             else:
                 return False
         elif effect.effect_type == "buff":
