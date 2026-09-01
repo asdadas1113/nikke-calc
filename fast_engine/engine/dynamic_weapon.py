@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, TYPE_CHECKING
+from typing import Callable, Sequence, TYPE_CHECKING
 
-from .dynamic_reload import DynamicRapidReloadRuntime
+from .dynamic_rapid import DynamicRapidCadenceRuntime
 from .scheduler import EventScheduler, ScheduledEvent
 from .state import StateStore
 from .triggers import TriggerMode
@@ -31,10 +31,11 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
     """Composite dynamic weapon runtime for the currently certified slices.
 
     Charge weapons keep the existing generation-based SR/RL cadence runtime.
-    Selected non-clip auto/MG actors may additionally use a compressed live
-    reload-speed runtime. The two paths share the scheduler but never share actor
-    state: charge actors remain in the base runtime while rapid actors live in
-    ``_rapid_reload``.
+    Selected non-clip auto/MG actors use a compressed rapid cadence runtime that
+    supports live reload speed and the first exact player-control interval
+    (``cover.policy == own_full_burst``). The two paths share the scheduler but
+    never share actor state: charge actors remain in the base runtime while rapid
+    actors live in ``_rapid_reload``.
 
     Score callbacks run after a physical shot has advanced ammo state but before
     post-shot hit/full-charge/last-bullet effects are dispatched. This preserves
@@ -106,7 +107,7 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         self._raw_full_charge_actors = frozenset(raw_full_charge_actors)
         self._score_actors: frozenset[int] = frozenset()
         self._score_shot_sink: Callable[[int, float], None] | None = None
-        self._rapid_reload = DynamicRapidReloadRuntime(
+        self._rapid_reload = DynamicRapidCadenceRuntime(
             squad,
             effects,
             state,
@@ -160,6 +161,16 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
 
         self._rapid_reload.attach_score_sink(actors, sink)
 
+    def begin_full_burst(
+        self,
+        now: float,
+        casted: Sequence[bool],
+        full_burst_end: float,
+    ) -> tuple[int, ...]:
+        """Apply supported own-full-burst cover after burst-start effects land."""
+
+        return self._rapid_reload.begin_full_burst(now, casted, full_burst_end)
+
     def emits_every_charge_shot(self, actor: int) -> bool:
         return actor in self.actors and (
             self.emits_each_charge_hit
@@ -169,8 +180,8 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
 
     def supports_dynamic_last_bullet(self, actor: int) -> bool:
         # Charge score actors already materialize every shot and therefore know
-        # exact magazine end. Rapid reload actors deliberately stay compressed
-        # across magazine boundaries unless a reducible hit/pellet crossing is
+        # exact magazine end. Rapid actors deliberately stay compressed across
+        # ordinary magazine boundaries unless a reducible hit/pellet crossing is
         # needed, so post-shot last_bullet remains fail-closed for that path.
         if actor in self._rapid_reload.actors:
             return False
