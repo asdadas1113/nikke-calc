@@ -22,6 +22,7 @@ class DamageTerms:
     crit_rate_skill: float | None = None
     crit_dmg_skill: float | None = None
     core_dmg_pct: float = 0.0
+    accuracy_pct: float = 0.0
 
     normal_atk_dmg_pct: float = 0.0
     atk_dmg_pct: float = 0.0
@@ -168,12 +169,8 @@ def expected_damage(
         f6 += terms.split_dmg_pct / 100.0
 
     # ⑦ elemental advantage
-    f7 = (
-        1.1 + terms.element_bonus_pct / 100.0
-        if terms.element_match
-        else 1.0
-    )
+    f7 = 1.0
+    if terms.element_match:
+        f7 += 0.1 + terms.element_bonus_pct / 100.0
 
-    # Moris guarantees minimum 1 damage per hit. Fast keeps expectation as float
-    # so a later interval can multiply this once by an aggregated hit count.
-    return max((f1 / 100.0) * f2 * f3 * f4 * f5 * f6 * f7, 1.0)
+    return f1 / 100.0 * f2 * f3 * f4 * f5 * f6 * f7
