@@ -17,7 +17,6 @@ class EventKind(IntEnum):
     BURST_END_FINALIZE = 15
     DAMAGE_TICK = 19
     STATE_EXPIRE = 20
-    BULLET_EXPIRE = 21
     PERIODIC_TICK = 30
     RELOAD_DONE = 40
     WEAPON_BOUNDARY = 50
@@ -42,10 +41,6 @@ _EVENT_PHASE: dict[EventKind, int] = {
     EventKind.RELOAD_DONE: 30,
     EventKind.WEAPON_BOUNDARY: 30,
     EventKind.TRIGGER_BOUNDARY: 30,
-    # Moris decrements duration_bullets after the damage/hit notifications for
-    # the consuming shot. Keep expiry at the same timestamp but strictly after
-    # all phase-30 weapon/trigger work, without materializing every shot.
-    EventKind.BULLET_EXPIRE: 40,
     EventKind.CUSTOM: 100,
 }
 
@@ -85,9 +80,15 @@ class EventScheduler:
     def schedule(self, time: float, kind: EventKind, actor: int = -1, payload: Any = None) -> None:
         if time < self.now:
             raise ValueError(f"cannot schedule event in the past: now={self.now}, time={time}")
+        phase = _EVENT_PHASE.get(kind, 100)
+        # duration_bullets expires only after the consuming shot's damage and
+        # hit notifications. Reuse STATE_EXPIRE handling, but place tagged
+        # expiry tokens after all phase-30 weapon/trigger work at the same time.
+        if kind is EventKind.STATE_EXPIRE and getattr(payload, "post_shot", False):
+            phase = 40
         event = ScheduledEvent(
             float(time),
-            _EVENT_PHASE.get(kind, 100),
+            phase,
             self._sequence,
             kind,
             actor,
