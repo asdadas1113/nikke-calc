@@ -19,7 +19,9 @@ jobs:
         with:
           python-version: '3.13'
       - name: Apply charge bullet lifetime slice
-        run: python fast_engine/research/_apply_charge_bullet_patch_once.py
+        run: |
+          python fast_engine/research/_apply_charge_bullet_patch_once.py
+          python fast_engine/research/_fix_charge_patch_test_once.py
       - name: Targeted Fast regressions
         run: |
           python -m unittest \
