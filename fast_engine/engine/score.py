@@ -303,6 +303,50 @@ def _actor_has_live_max_ammo_mutation(squad: CompiledSquad, actor: int) -> bool:
     return False
 
 
+def _timed_self_state_end_source_score_safe(squad: CompiledSquad, effect) -> bool:
+    """Prove every state-end trigger comes from Fast's certified source bridge.
+
+    Dispatcher may parse a narrow ``event:state_end:*`` consumer, but score
+    certification must additionally prove that the named source state is one
+    Fast actually emits: an executable finite-duration self buff owned by the
+    same actor, with an ordinary time lifetime.  Any ambiguous/unsupported
+    provider keeps the consumer fail-closed.
+    """
+
+    keys = tuple(
+        rule.event_key
+        for rule in effect.triggers
+        if (rule.event_key or "").startswith("event:state_end:")
+    )
+    if not keys:
+        return True
+    if len(keys) != len(effect.triggers):
+        return False
+
+    for key in keys:
+        name = key[len("event:state_end:"):]
+        if not name:
+            return False
+        providers = tuple(
+            provider
+            for provider in squad.members[effect.actor].effects
+            if provider.effect_id != effect.effect_id and provider.name == name
+        )
+        if not providers:
+            return False
+        for provider in providers:
+            if (
+                provider.effect_type != "buff"
+                or provider.target_spec.mode.value != "self"
+                or provider.duration is None
+                or float(provider.duration) < 0.0
+                or provider.parameters.get("duration_bullets") is not None
+                or not TriggerDispatcher.is_executable_effect(provider)
+            ):
+                return False
+    return True
+
+
 def _ammo_charge_named_event_safe(squad: CompiledSquad, effect) -> bool:
     if not effect.name:
         return True
@@ -361,6 +405,8 @@ def _is_dynamic_mg_warmup_score_supported(squad: CompiledSquad, effect) -> bool:
         return False
     if not TriggerDispatcher.is_executable_effect(effect):
         return False
+    if not _timed_self_state_end_source_score_safe(squad, effect):
+        return False
     mg_targets = tuple(
         actor
         for actor in _possible_ally_targets(squad, effect)
@@ -410,6 +456,8 @@ def _is_dynamic_reload_score_supported(squad: CompiledSquad, effect) -> bool:
         return False
     if not TriggerDispatcher.is_executable_effect(effect):
         return False
+    if not _timed_self_state_end_source_score_safe(squad, effect):
+        return False
     targets = _possible_ally_targets(squad, effect)
     return bool(targets) and all(_reload_recipient_score_safe(squad, actor) for actor in targets)
 
@@ -418,6 +466,8 @@ def _is_dynamic_force_reload_score_supported(squad: CompiledSquad, effect) -> bo
     if (effect.stat or "") != "force_reload" or effect.effect_type != "instant":
         return False
     if not TriggerDispatcher.is_executable_effect(effect):
+        return False
+    if not _timed_self_state_end_source_score_safe(squad, effect):
         return False
     targets = _possible_ally_targets(squad, effect)
     return bool(targets) and all(_rapid_actor_score_safe(squad, actor) for actor in targets)

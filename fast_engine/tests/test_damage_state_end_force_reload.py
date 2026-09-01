@@ -96,6 +96,57 @@ class StateEndForceReloadTests(unittest.TestCase):
         self.assertEqual(st.hit_count, 3)
         self.assertFalse(runtime.dispatcher.effects.has_stat(0, "reload_speed_pct", now=3.01))
 
+    def test_unsupported_state_end_provider_keeps_force_reload_blocked(self):
+        from dataclasses import replace
+
+        provider = replace(
+            _provider(),
+            target="all_allies",
+            target_spec=compile_target(
+                "all_allies",
+                actor_by_name={"synthetic-reload": 0},
+            ),
+        )
+        force = _force()
+        effects = (provider, force)
+        member = _member(effects, fire_mode="auto", weapon_type="AR")
+        squad = CompiledSquad(
+            (member,),
+            TriggerIndex.from_effects(effects, actor_count=1),
+        )
+        self.assertIn(
+            "cadence:synthetic-reload:force:force_reload",
+            static_normal_score_blockers(squad),
+        )
+
+    def test_force_reload_is_ignored_while_already_reloading(self):
+        effects = ()
+        member = _member(effects, fire_mode="auto", weapon_type="AR")
+        from dataclasses import replace
+        weapon = dict(member.weapon)
+        weapon.update(max_ammo=1, fire_rate=2.0, reload_time=2.0, reload_start_delay=0.0)
+        member = replace(member, weapon=weapon)
+        squad = CompiledSquad(
+            (member,),
+            TriggerIndex.from_effects(effects, actor_count=1),
+        )
+        runtime = BurstRuntime(
+            squad,
+            BurstPolicy(duration=3.0, first_burst_time=10.0),
+            EnemyStaticProfile(defense=0.0, duration=3.0),
+        )
+        runtime.weapons.attach_score_block_sink((0,), lambda _actor, _count, _time: None)
+        runtime.start(duration=3.0)
+        # First shot at 0.0 leaves reload_wait; advance through the 0.5 reload
+        # probe so a 2.0s reload is already fixed to end at 2.5.
+        runtime.weapons.advance_to(0.6, inclusive=True)
+        st = runtime.weapons._rapid_reload._states[0]
+        self.assertEqual(st.phase, "reloading")
+        before = st.phase_end
+        self.assertTrue(runtime.weapons.apply_force_reload((0,), 1.0))
+        self.assertEqual(st.phase, "reloading")
+        self.assertEqual(st.phase_end, before)
+
     def test_asuka_state_end_cadence_bundle_is_certified(self):
         from context.spec import build_squad
         from fast_engine.engine.compiler import compile_moris_squad
