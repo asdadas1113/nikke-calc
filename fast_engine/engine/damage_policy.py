@@ -83,6 +83,7 @@ _SAFE_TARGETS = frozenset({
     TargetMode.BURST_CASTED_WEAPON,
     TargetMode.TOP_ATK,
     TargetMode.TOP_ATK_EXCL_SELF,
+    TargetMode.LOWEST_ATK_BURST3,
     TargetMode.TOP_DEF,
 })
 
