@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 import json
 import unittest
 
 from calculator.timeline import DEFAULT_ENEMY, simulate
 from context import spec
 from fast_engine.engine.burst import compile_burst_policy
+from fast_engine.engine.burst_runtime import BurstRuntime
 from fast_engine.engine.compiler import compile_moris_squad
+from fast_engine.engine.damage_state import DamageTermResolver
 from fast_engine.engine.model import EnemyStaticProfile
+from fast_engine.engine.normal_attack import compile_normal_attack_spec, expected_normal_shot_damage
 from fast_engine.engine.score import score_static_normal_squad
 from fast_engine.engine.shot_blocks import compile_static_shot_blocks
 
@@ -36,17 +40,37 @@ class MiharaNoControlProbe(unittest.TestCase):
         )
         fast = score_static_normal_squad(compiled, policy, fast_enemy)
         actor = compiled.names.index("미하라 : 본딩 체인")
+        member = compiled.members[actor]
         blocks = compile_static_shot_blocks(compiled, duration=policy.duration)[actor]
         fast_shots = sum(block.count for block in blocks if block.first_time < policy.duration)
         moris_hits = [h for h in moris.hits if h.caster == "미하라 : 본딩 체인" and h.skill_name == "기본 공격"]
         moris_total = sum(int(h.damage) for h in moris_hits)
         fast_total = float(fast.char_total[actor])
+
+        runtime = BurstRuntime(compiled, policy, fast_enemy)
+        runtime.start(duration=policy.duration)
+        resolver = DamageTermResolver(compiled, runtime.dispatcher.effects, runtime.state, fast_enemy)
+        terms0 = resolver.resolve(actor, now=0.0)
+        normal_spec = compile_normal_attack_spec(member)
+        fast_t0 = expected_normal_shot_damage(
+            normal_spec,
+            base_atk=member.base_atk,
+            enemy_def=fast_enemy.defense,
+            terms=terms0,
+            core_prob=0.0,
+            is_full_burst=False,
+            is_optimal_range=False,
+        )
+
         report = {
             "control": next(c["control"] for c in moris_squad if c["name"] == "미하라 : 본딩 체인"),
-            "moris": {"hits": len(moris_hits), "total": moris_total, "mean": moris_total / len(moris_hits)},
-            "fast": {"shots": fast_shots, "total": fast_total, "mean": fast_total / fast_shots},
-            "ratios": {"shots": fast_shots / len(moris_hits), "mean": (fast_total / fast_shots) / (moris_total / len(moris_hits)), "total": fast_total / moris_total},
-            "moris_samples": [{"t": float(h.t), "damage": int(h.damage)} for h in moris_hits[:20]],
+            "moris": {"hits": len(moris_hits), "total": moris_total, "mean": moris_total / len(moris_hits), "t0": int(moris_hits[0].damage)},
+            "fast": {"shots": fast_shots, "total": fast_total, "mean": fast_total / fast_shots, "t0": fast_t0},
+            "ratios": {"shots": fast_shots / len(moris_hits), "mean": (fast_total / fast_shots) / (moris_total / len(moris_hits)), "total": fast_total / moris_total, "t0": fast_t0 / int(moris_hits[0].damage)},
+            "fast_t0_terms": asdict(terms0),
+            "normal_spec": asdict(normal_spec),
+            "base_atk": member.base_atk,
+            "enemy_def": fast_enemy.defense,
         }
         self.fail("INTENTIONAL_MIHARA_NO_CONTROL=" + json.dumps(report, ensure_ascii=False, sort_keys=True))
 
