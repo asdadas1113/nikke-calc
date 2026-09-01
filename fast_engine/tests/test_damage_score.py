@@ -229,7 +229,7 @@ class LiberelioPendingB3ParityTests(unittest.TestCase):
         # intentionally fail-closed in Fast. Keep this authority fixture shorter
         # than Liberelio's 1.5s first charge so only pending B3 semantics remain.
         squad = build_squad(self.NAMES)
-        compiled = compile_moris_squad(squad)
+        compiled = compile_moris_squad(squad, require_five=False)
         config = {
             "duration": self.DURATION,
             "rng_mode": "expected",
