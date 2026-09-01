@@ -236,7 +236,9 @@ class TriggerDispatcher:
         Score-only damage support is deliberately opt-in through ``damage_sink``.
         Lifecycle/burst gauge writers are also instance-scoped because a gauge
         family is certified only after scanning the whole squad for unsupported
-        reachable writers or advanced gauge-capacity mechanics.
+        reachable writers or advanced gauge-capacity mechanics. Named DoT stack
+        operations use the same score-only bridge and therefore cannot widen a
+        plain BurstRuntime silently.
         """
         family = self._gauge_family(effect)
         if (
@@ -247,7 +249,12 @@ class TriggerDispatcher:
             return True
         if self.is_executable_effect(effect):
             return True
-        return bool(self.damage_sink is not None and self.damage_sink.supports(effect))
+        if self.damage_sink is None:
+            return False
+        return (
+            self.damage_sink.supports(effect)
+            or self.damage_sink.supports_state_operation(effect)
+        )
 
     def _is_state_dependency(self, effect: "CompiledEffect") -> bool:
         """Track otherwise-unsupported named buffs needed by certified conditions."""
@@ -384,6 +391,16 @@ class TriggerDispatcher:
                                 gauge_id,
                                 max(0.0, current - value),
                             )
+            elif (
+                self.damage_sink is not None
+                and self.damage_sink.supports_state_operation(effect)
+            ):
+                if not self.damage_sink.activate_state_operation(
+                    effect,
+                    now=now,
+                    targets=targets,
+                ):
+                    return False
             else:
                 return False
         elif effect.effect_type == "buff":
