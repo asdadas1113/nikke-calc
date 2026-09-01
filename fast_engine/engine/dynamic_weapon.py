@@ -23,6 +23,7 @@ class DynamicCountSignal:
 class DynamicChargeBoundary:
     actor: int
     signals: tuple[DynamicCountSignal, ...]
+    is_last_bullet: bool = False
 
 
 class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
@@ -107,6 +108,12 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
                 actors.add(actor)
         self.actors = tuple(sorted(actors))
 
+    def emits_every_charge_shot(self, actor: int) -> bool:
+        """Whether this runtime materializes every physical charge shot for actor."""
+        return actor in self.actors and (
+            self.emits_each_charge_hit or actor in self._raw_full_charge_actors
+        )
+
     def _shot_is_boundary(self, actor: int, absolute_count: int) -> bool:
         if actor in self._raw_full_charge_actors:
             return True
@@ -128,4 +135,8 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
             signals.append(DynamicCountSignal("full_charge_hit", count_increment))
         if actor in self._hit_thresholds:
             signals.append(DynamicCountSignal("hit_count", count_increment))
-        return DynamicChargeBoundary(actor, tuple(signals))
+        return DynamicChargeBoundary(
+            actor,
+            tuple(signals),
+            is_last_bullet=self._states[actor].ammo <= 0,
+        )
