@@ -352,6 +352,13 @@ class BurstMachine:
         full_burst_extension: float = 0.0,
         cooldown_buff_provider=None,
     ) -> tuple[BurstSignal, ...]:
+        # Full-burst-end effects must see the cast flags from the cycle that just
+        # ended. Reset them on a same-time follow-up boundary after those signals
+        # have been dispatched, but before later weapon-phase events at that time.
+        if event.kind is EventKind.BURST_END_FINALIZE:
+            self.casted = [False] * len(self.casted)
+            return ()
+
         if not self._is_current(event):
             return ()
         now = event.time
@@ -389,7 +396,7 @@ class BurstMachine:
         if event.kind is EventKind.FULL_BURST_END:
             self.phase = "idle"
             signals = self._broadcast(now, "full_burst_end", self.full_burst_caster, "3")
-            self.casted = [False] * len(self.casted)
+            scheduler.schedule(now, EventKind.BURST_END_FINALIZE)
             self.cycle_count += 1
             self.full_burst_caster = None
             self.gauge_ready_at = [
