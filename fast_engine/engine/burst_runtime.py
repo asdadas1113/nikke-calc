@@ -52,6 +52,8 @@ class BurstRuntime:
         "max_ammo_pct",
         "max_ammo_flat",
         "max_ammo_infinite",
+        "ammo_charge_flat",
+        "ammo_charge_pct",
         "charge_speed_pct",
         "charge_speed_caster_based_pct",
         "charge_time_flat",
