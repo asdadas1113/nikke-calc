@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from context.spec import build_squad
-from fast_engine.engine.burst import BurstMachine
+from fast_engine.engine.burst import BurstMachine, compile_burst_policy
 from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.conditions import SignalContext
 from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_supported
@@ -18,21 +18,31 @@ NAMES = ["미란다", "브리드 : 사일런트 트랙", "헬름", "루주", "�
 
 
 class HelmTenShotLifetimeTests(unittest.TestCase):
-    def test_helm_charge_magnitude_expires_after_tenth_shot(self):
+    @staticmethod
+    def _fixture():
         squad = build_squad(NAMES)
         next(c for c in squad if c["name"] == "미하라 : 본딩 체인")["control"] = {}
         compiled = compile_moris_squad(squad)
+        policy = compile_burst_policy(
+            squad,
+            compiled,
+            {"duration": 180.0, "first_burst_time": 3.0, "rng_mode": "expected"},
+        )
         helm = next(
             e for e in compiled.effects
             if e.actor == 2 and e.name == "이지스 캐논 3" and e.stat == "charge_dmg_mag_pct"
         )
+        return compiled, policy, helm
+
+    def test_helm_charge_magnitude_expires_after_tenth_shot(self):
+        compiled, policy, helm = self._fixture()
         self.assertEqual(helm.parameters.get("duration_bullets"), 10)
         self.assertEqual(helm.value, 158.4)
         self.assertTrue(is_direct_damage_buff_runtime_supported(helm))
 
         state = StateStore.from_compiled_squad(compiled)
         scheduler = EventScheduler()
-        burst = BurstMachine(compiled)
+        burst = BurstMachine(compiled, policy)
         dispatcher = TriggerDispatcher(
             compiled,
             state,
@@ -68,20 +78,14 @@ class HelmTenShotLifetimeTests(unittest.TestCase):
         )
 
     def test_reactivation_resets_ten_shot_generation(self):
-        squad = build_squad(NAMES)
-        next(c for c in squad if c["name"] == "미하라 : 본딩 체인")["control"] = {}
-        compiled = compile_moris_squad(squad)
-        helm = next(
-            e for e in compiled.effects
-            if e.actor == 2 and e.name == "이지스 캐논 3" and e.stat == "charge_dmg_mag_pct"
-        )
+        compiled, policy, helm = self._fixture()
         state = StateStore.from_compiled_squad(compiled)
         scheduler = EventScheduler()
         dispatcher = TriggerDispatcher(
             compiled,
             state,
             EnemyStaticProfile(defense=31784.0, duration=180.0),
-            BurstMachine(compiled),
+            BurstMachine(compiled, policy),
             scheduler,
         )
 
