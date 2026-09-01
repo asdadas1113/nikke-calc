@@ -35,6 +35,18 @@ jobs:
                   raise SystemExit(f"{path}: expected one patch anchor, found {count}: {old[:80]!r}")
               p.write_text(text.replace(old, new, 1), encoding="utf-8")
 
+          def replace_after(path: str, marker: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              pos = text.index(marker)
+              head, tail = text[:pos], text[pos:]
+              count = tail.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f"{path}: expected one post-marker patch anchor, found {count}: {old[:80]!r}"
+                  )
+              p.write_text(head + tail.replace(old, new, 1), encoding="utf-8")
+
           # 1) Rapid runtime: materialize only expected core threshold crossings.
           path = "fast_engine/engine/dynamic_rapid.py"
           replace_once(
@@ -99,8 +111,9 @@ jobs:
               "def _rapid_actor_score_safe(\n",
               "def _rapid_dynamic_core_score_safe(squad: CompiledSquad, actor: int) -> bool:\n    if not _actor_has_executable_core_count(squad, actor):\n        return True\n    for effect in squad.effects:\n        if actor not in _possible_ally_targets(squad, effect):\n            continue\n        stat = effect.stat or \"\"\n        if effect.effect_type == \"weapon_change\" or stat in {\n            \"pellet_count\",\n            \"pellet_count_fixed\",\n        }:\n            return False\n        if stat != \"accuracy_pct\":\n            continue\n        if (\n            effect.effect_type == \"buff\"\n            and effect.duration in (None, -1.0)\n            and not effect.condition_rules\n            and bool(effect.triggers)\n            and all(rule.event_key == \"battle_start\" for rule in effect.triggers)\n            and TriggerDispatcher.is_executable_effect(effect)\n        ):\n            continue\n        return False\n    return True\n\n\ndef _rapid_actor_score_safe(\n",
           )
-          replace_once(
+          replace_after(
               path,
+              "def _rapid_actor_score_safe(\n",
               "    if _actor_has_executable_core_count(squad, actor):\n        return False\n",
               "    if not _rapid_dynamic_core_score_safe(squad, actor):\n        return False\n",
           )
