@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 
 from fast_engine.engine.dynamic_weapon import MultiSignalChargeCadenceRuntime
 from fast_engine.engine.effects import ActiveEffectStore
@@ -165,6 +166,28 @@ class DynamicMultiSignalTests(unittest.TestCase):
             [(row.event_key, row.count_increment) for row in boundary.signals],
             [("hit_count", 3)],
         )
+
+    def test_multi_hit_charge_hit_count_fails_closed(self):
+        base = _squad()
+        hit_only = _effect(0, "hit_count:3", "hit_count", 3)
+        weapon = dict(base.members[0].weapon)
+        weapon["muzzles"] = 2
+        member = replace(base.members[0], weapon=weapon, effects=(hit_only,))
+        squad = CompiledSquad(
+            (member,),
+            TriggerIndex.from_effects((hit_only,), actor_count=1),
+        )
+        scheduler = EventScheduler()
+        state = StateStore.from_compiled_squad(squad)
+        with self.assertRaisesRegex(NotImplementedError, "multiple hits per shot"):
+            MultiSignalChargeCadenceRuntime(
+                squad,
+                ActiveEffectStore(squad, state),
+                state,
+                scheduler,
+                duration=10.0,
+                effect_filter=lambda _effect: True,
+            )
 
 
 if __name__ == "__main__":
