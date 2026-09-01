@@ -1,14 +1,17 @@
-"""Small exhaustive ground-truth harness for optimizer experiments.
+"""Validation harnesses for optimizer search and Fast-vs-Moris ranking.
 
-This module is intentionally evaluator-agnostic. Synthetic score functions keep
-regression tests cheap; a later Moris experiment can pass separate ground-truth
-and optimizer evaluators plus their simulate-call counters.
+The exhaustive allocation helper predates Fast Engine and remains useful for tiny
+search spaces.  The ranking diagnostics added below are deliberately evaluator-
+agnostic: production/local experiments can bind Moris and Fast callables, while CI
+uses synthetic scores and public fixtures without committing account data.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from itertools import combinations, permutations
+from math import isfinite
 from time import perf_counter
 from typing import Callable, Iterable, Sequence
 
@@ -191,4 +194,243 @@ def run_exhaustive_validation(
         final_to_optimum=ratio,
         exhaustive_runtime_s=exhaustive_runtime,
         optimizer_runtime_s=optimizer_runtime,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fast-vs-Moris ranking diagnostics
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RankingObservation:
+    """One candidate scored by Moris and, when safe, by Fast.
+
+    ``fast_score=None`` means Fast deliberately failed closed.  That is kept
+    distinct from a low numeric score because a blocked strong team must be
+    protected/fallback-scored rather than pruned as weak.
+
+    ``groups`` are caller-owned diagnostic labels such as ``weapon:MG``,
+    ``mechanic:core`` or ``archetype:charge``.  The validation core never assigns
+    game-specific meaning to those labels.
+    """
+
+    members: tuple[str, ...]
+    moris_score: float
+    fast_score: float | None
+    blockers: tuple[str, ...] = ()
+    unsupported: tuple[str, ...] = ()
+    groups: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class GroupRankingMetrics:
+    group: str
+    candidate_count: int
+    fast_scored_count: int
+    blocked_count: int
+    top_n_count: int
+    top_n_recalled: int
+    top_n_recall: float | None
+    mean_rank_percentile_error: float | None
+
+
+@dataclass(frozen=True)
+class RankingValidationMetrics:
+    candidate_count: int
+    fast_scored_count: int
+    blocked_count: int
+    top_n: int
+    top_k: int
+    top_n_recalled: int
+    top_n_recall: float
+    top_n_blocked: int
+    top_n_ranked_out: int
+    catastrophic_false_negative_rate: float
+    pairwise_accuracy: float | None
+    comparable_pairs: int
+    best_missed_true_rank: int | None
+    best_missed_team: tuple[str, ...] | None
+    blocker_counts: tuple[tuple[str, int], ...]
+    unsupported_counts: tuple[tuple[str, int], ...]
+    groups: tuple[GroupRankingMetrics, ...]
+
+
+def _validate_ranking_observations(
+    observations: Sequence[RankingObservation],
+) -> tuple[RankingObservation, ...]:
+    rows = tuple(observations)
+    if not rows:
+        raise ValueError("observations must not be empty")
+
+    seen: set[tuple[str, ...]] = set()
+    normalized: list[RankingObservation] = []
+    for raw in rows:
+        members = tuple(raw.members)
+        if not members or len(set(members)) != len(members):
+            raise ValueError("ranking members must be non-empty with unique members")
+        if members in seen:
+            raise ValueError(f"duplicate ranking candidate: {members}")
+        seen.add(members)
+        moris = float(raw.moris_score)
+        fast = None if raw.fast_score is None else float(raw.fast_score)
+        if not isfinite(moris):
+            raise ValueError(f"non-finite Moris score for {members}")
+        if fast is not None and not isfinite(fast):
+            raise ValueError(f"non-finite Fast score for {members}")
+        normalized.append(
+            RankingObservation(
+                members=members,
+                moris_score=moris,
+                fast_score=fast,
+                blockers=tuple(dict.fromkeys(str(value) for value in raw.blockers)),
+                unsupported=tuple(dict.fromkeys(str(value) for value in raw.unsupported)),
+                groups=tuple(dict.fromkeys(str(value) for value in raw.groups)),
+            )
+        )
+    return tuple(normalized)
+
+
+def _rank_percentile(rank: int, count: int) -> float:
+    if count <= 1:
+        return 0.0
+    return (rank - 1) / (count - 1)
+
+
+def analyze_fast_moris_ranking(
+    observations: Sequence[RankingObservation],
+    *,
+    top_n: int,
+    top_k: int,
+) -> RankingValidationMetrics:
+    """Measure whether Fast preserves the Moris ranking that pruning cares about.
+
+    Ranking is deterministic on ties via ``members``.  Pairwise accuracy excludes
+    Moris ties (there is no true ordering to preserve); a Fast tie on a comparable
+    pair receives half credit.  Blocked candidates never receive an artificial
+    numeric score and are reported separately from scored candidates that merely
+    fall below Fast Top-K.
+
+    ``mean_rank_percentile_error`` is scale-free.  Positive means the scored group
+    is, on average, pushed *down* by Fast relative to Moris; negative means Fast
+    promotes it.  Blocked rows are excluded from this signed error and exposed via
+    ``blocked_count`` instead.
+    """
+
+    if top_n <= 0 or top_k <= 0:
+        raise ValueError("top_n and top_k must be positive")
+    rows = _validate_ranking_observations(observations)
+
+    moris_ranked = sorted(rows, key=lambda row: (-row.moris_score, row.members))
+    scored = tuple(row for row in rows if row.fast_score is not None)
+    fast_ranked = sorted(
+        scored,
+        key=lambda row: (-float(row.fast_score), row.members),
+    )
+
+    true_top = tuple(moris_ranked[: min(top_n, len(moris_ranked))])
+    fast_top = tuple(fast_ranked[: min(top_k, len(fast_ranked))])
+    fast_top_keys = {row.members for row in fast_top}
+
+    recalled = sum(row.members in fast_top_keys for row in true_top)
+    top_blocked = sum(row.fast_score is None for row in true_top)
+    top_ranked_out = len(true_top) - recalled - top_blocked
+    recall = recalled / len(true_top)
+    catastrophic = 1.0 - recall
+
+    pair_score = 0.0
+    comparable = 0
+    for left, right in combinations(scored, 2):
+        true_delta = left.moris_score - right.moris_score
+        if true_delta == 0.0:
+            continue
+        fast_delta = float(left.fast_score) - float(right.fast_score)
+        comparable += 1
+        if fast_delta == 0.0:
+            pair_score += 0.5
+        elif (true_delta > 0.0) == (fast_delta > 0.0):
+            pair_score += 1.0
+    pairwise = pair_score / comparable if comparable else None
+
+    missed = [row for row in true_top if row.members not in fast_top_keys]
+    moris_rank_by_team = {
+        row.members: rank
+        for rank, row in enumerate(moris_ranked, start=1)
+    }
+    best_missed = min(
+        missed,
+        key=lambda row: moris_rank_by_team[row.members],
+        default=None,
+    )
+
+    blocker_counter: Counter[str] = Counter()
+    unsupported_counter: Counter[str] = Counter()
+    for row in rows:
+        blocker_counter.update(row.blockers)
+        unsupported_counter.update(row.unsupported)
+
+    fast_rank_by_team = {
+        row.members: rank
+        for rank, row in enumerate(fast_ranked, start=1)
+    }
+    true_top_keys = {row.members for row in true_top}
+    all_groups = sorted({group for row in rows for group in row.groups})
+    group_rows: list[GroupRankingMetrics] = []
+    for group in all_groups:
+        members = tuple(row for row in rows if group in row.groups)
+        group_scored = tuple(row for row in members if row.fast_score is not None)
+        group_true_top = tuple(row for row in members if row.members in true_top_keys)
+        group_recalled = sum(row.members in fast_top_keys for row in group_true_top)
+        errors = [
+            _rank_percentile(fast_rank_by_team[row.members], len(fast_ranked))
+            - _rank_percentile(moris_rank_by_team[row.members], len(moris_ranked))
+            for row in group_scored
+        ]
+        group_rows.append(
+            GroupRankingMetrics(
+                group=group,
+                candidate_count=len(members),
+                fast_scored_count=len(group_scored),
+                blocked_count=len(members) - len(group_scored),
+                top_n_count=len(group_true_top),
+                top_n_recalled=group_recalled,
+                top_n_recall=(
+                    group_recalled / len(group_true_top)
+                    if group_true_top
+                    else None
+                ),
+                mean_rank_percentile_error=(
+                    sum(errors) / len(errors)
+                    if errors
+                    else None
+                ),
+            )
+        )
+
+    return RankingValidationMetrics(
+        candidate_count=len(rows),
+        fast_scored_count=len(scored),
+        blocked_count=len(rows) - len(scored),
+        top_n=len(true_top),
+        top_k=min(top_k, len(fast_ranked)),
+        top_n_recalled=recalled,
+        top_n_recall=recall,
+        top_n_blocked=top_blocked,
+        top_n_ranked_out=top_ranked_out,
+        catastrophic_false_negative_rate=catastrophic,
+        pairwise_accuracy=pairwise,
+        comparable_pairs=comparable,
+        best_missed_true_rank=(
+            moris_rank_by_team[best_missed.members]
+            if best_missed is not None
+            else None
+        ),
+        best_missed_team=(best_missed.members if best_missed is not None else None),
+        blocker_counts=tuple(
+            sorted(blocker_counter.items(), key=lambda row: (-row[1], row[0]))
+        ),
+        unsupported_counts=tuple(
+            sorted(unsupported_counter.items(), key=lambda row: (-row[1], row[0]))
+        ),
+        groups=tuple(group_rows),
     )
