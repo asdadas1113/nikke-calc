@@ -14,6 +14,9 @@ if TYPE_CHECKING:
     from .model import CompiledEffect, CompiledSquad
 
 
+_INTERNAL_BULLET_CONSUME_EVENT = "__fast_consume_dynamic_bullet_lifetime__"
+
+
 @dataclass(frozen=True, slots=True)
 class DynamicCountSignal:
     event_key: str
@@ -116,9 +119,6 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
             effect_filter=effect_filter,
         )
 
-        # A charge actor may be interesting only because of generic hit_count or
-        # a literal full_charge_hit consumer. Add it before start() initializes
-        # actor state; static weapon planners will then skip the same actor.
         actors = set(self.actors)
         for actor in interesting:
             if str(squad.members[actor].weapon.get("fire_mode") or "") == "charge":
@@ -134,8 +134,6 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         actors: tuple[int, ...] | frozenset[int],
         sink: Callable[[int, float], None],
     ) -> None:
-        """Promote selected charge actors to physical-shot score boundaries."""
-
         if self._states:
             raise RuntimeError("Fast score shot sink must be attached before weapon start")
         selected = frozenset(int(actor) for actor in actors)
@@ -157,8 +155,6 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         actors: tuple[int, ...] | frozenset[int],
         sink: Callable[[int, int, float], None],
     ) -> None:
-        """Attach compressed normal-score delivery for non-clip auto/MG actors."""
-
         self._rapid_reload.attach_score_sink(actors, sink)
 
     def begin_full_burst(
@@ -167,13 +163,9 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         casted: Sequence[bool],
         full_burst_end: float,
     ) -> tuple[int, ...]:
-        """Apply supported own-full-burst cover after burst-start effects land."""
-
         return self._rapid_reload.begin_full_burst(now, casted, full_burst_end)
 
     def consume_post_shot_bullet_lifetimes(self, actor: int, now: float) -> tuple[int, ...]:
-        """Consume rapid dynamic duration_bullets at Moris' post-hit point."""
-
         return self._rapid_reload.consume_post_shot_bullet_lifetimes(actor, now)
 
     def emits_every_charge_shot(self, actor: int) -> bool:
@@ -184,18 +176,11 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         )
 
     def supports_dynamic_last_bullet(self, actor: int) -> bool:
-        # Charge score actors already materialize every shot and therefore know
-        # exact magazine end. Rapid actors deliberately stay compressed across
-        # ordinary magazine boundaries unless a reducible hit/pellet crossing is
-        # needed, so post-shot last_bullet remains fail-closed for that path.
         if actor in self._rapid_reload.actors:
             return False
         return self.emits_every_charge_shot(actor)
 
     def emits_squad_body_hit(self, actor: int) -> bool:
-        # ``emits_each_charge_hit`` is a charge-only bridge. Rapid auto/MG actors
-        # must not accidentally inherit that global flag merely because another
-        # charge actor exists in the same squad.
         return actor in self.actors and self.emits_each_charge_hit
 
     def _shot_is_boundary(self, actor: int, absolute_count: int) -> bool:
@@ -223,12 +208,21 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
     def handle_boundary(self, event: ScheduledEvent) -> DynamicChargeBoundary | None:
         rapid = self._rapid_reload.handle_boundary(event)
         if rapid is not None:
+            signals = [
+                DynamicCountSignal(row.event_key, row.count_increment)
+                for row in rapid.signals
+            ]
+            if self._rapid_reload.effects.has_dynamic_bullet_lifetime(
+                rapid.actor, now=float(event.time)
+            ):
+                # BurstRuntime dispatches boundary signals in tuple order. This
+                # internal signal therefore runs after pellet/hit_count effects,
+                # matching Moris consume_bullet_buffs, and before rapid
+                # last_bullet (which remains fail-closed in this slice).
+                signals.append(DynamicCountSignal(_INTERNAL_BULLET_CONSUME_EVENT, 1))
             return DynamicChargeBoundary(
                 rapid.actor,
-                tuple(
-                    DynamicCountSignal(row.event_key, row.count_increment)
-                    for row in rapid.signals
-                ),
+                tuple(signals),
                 is_last_bullet=rapid.is_last_bullet,
             )
 
