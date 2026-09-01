@@ -13,7 +13,7 @@ from fast_engine.engine.score import score_static_normal_squad, static_normal_sc
 
 class StaticNormalScoreParityTests(unittest.TestCase):
     NAMES = ["라피", "폴리", "프로덕트 12", "델타", "아니스"]
-    DURATION = 30.0
+    DURATION = 180.0
 
     @classmethod
     def setUpClass(cls):
@@ -27,26 +27,7 @@ class StaticNormalScoreParityTests(unittest.TestCase):
         cls.blockers = static_normal_score_blockers(cls.compiled)
 
     def test_reference_fixture_is_safe_for_static_normal_scoring(self):
-        details = []
-        for effect in self.compiled.effects:
-            if effect.name != "포메이션 F.F":
-                continue
-            details.append(
-                "effect="
-                + repr(
-                    {
-                        "actor": self.compiled.members[effect.actor].name,
-                        "stat": effect.stat,
-                        "timings": [rule.raw for rule in effect.triggers],
-                        "conditions": list(effect.conditions),
-                        "target": effect.target,
-                        "duration": effect.duration,
-                        "value": effect.value,
-                    }
-                )
-            )
-        message = "\n".join((*self.blockers, *details))
-        self.assertEqual(self.blockers, (), message)
+        self.assertEqual(self.blockers, (), "\n".join(self.blockers))
 
     def test_fast_normal_damage_stays_close_to_moris_expected_normal_damage(self):
         if self.blockers:
