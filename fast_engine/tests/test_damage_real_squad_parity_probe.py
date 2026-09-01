@@ -28,8 +28,6 @@ CONFIG = {
 
 class FirstCertifiedRealSquadParityProbe(unittest.TestCase):
     def test_print_standardized_fast_moris_parity(self):
-        # Membership is fixed explicitly. No optimizer candidate generator or
-        # snapshot case-specific build/config/enemy data participates here.
         moris_squad = spec.build_squad(NAMES)
         moris_config = spec.build_config(moris_squad, dict(CONFIG))
         enemy = dict(DEFAULT_ENEMY)
@@ -98,9 +96,9 @@ class FirstCertifiedRealSquadParityProbe(unittest.TestCase):
             "fast_events": fast.events_processed,
             "characters": char_rows,
         }
-        print("FIRST_CERTIFIED_REAL_SQUAD_PARITY=" + json.dumps(
-            report, ensure_ascii=False, sort_keys=True
-        ))
+        payload = json.dumps(report, ensure_ascii=False, sort_keys=True)
+        print("FIRST_CERTIFIED_REAL_SQUAD_PARITY=" + payload)
+        self.fail("INTENTIONAL_PARITY_PROBE=" + payload)
 
 
 if __name__ == "__main__":
