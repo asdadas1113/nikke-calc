@@ -223,9 +223,6 @@ def _rapid_actor_score_safe(
     ):
         return False
 
-    # The compressed rapid path does not broadcast one squad-body event per
-    # physical shot yet. Any executable consumer would otherwise silently miss
-    # hits while this actor is dynamic.
     if any(
         TriggerDispatcher.is_executable_effect(effect)
         and any(rule.event_key == "squad_body_hit" for rule in effect.triggers)
@@ -468,6 +465,7 @@ class StaticNormalAttackObserver:
         "cursors",
         "dynamic_charge_actors",
         "dynamic_reload_actors",
+        "control_cover_anchor",
         "char_total",
     )
 
@@ -500,6 +498,7 @@ class StaticNormalAttackObserver:
             ShotBlockCursor(()) if actor in dynamic else ShotBlockCursor(rows)
             for actor, rows in enumerate(blocks)
         )
+        self.control_cover_anchor = -1.0
         self.char_total = [0.0] * len(runtime.squad.members)
         if self.dynamic_charge_actors:
             runtime.weapons.attach_score_shot_sink(
@@ -539,6 +538,18 @@ class StaticNormalAttackObserver:
         self._score_shots(actor, count, eval_time=float(time))
 
     def consume_until(self, time: float, *, inclusive: bool) -> None:
+        machine = self.runtime.machine
+        if (
+            machine.phase == "full_burst"
+            and machine.full_burst_end_at > self.control_cover_anchor + 1e-9
+        ):
+            self.runtime.weapons.begin_full_burst(
+                float(time),
+                machine.casted,
+                machine.full_burst_end_at,
+            )
+            self.control_cover_anchor = machine.full_burst_end_at
+
         self.runtime.weapons.advance_to(time, inclusive=inclusive)
 
         eval_time = float(time) if inclusive else nextafter(float(time), -inf)
