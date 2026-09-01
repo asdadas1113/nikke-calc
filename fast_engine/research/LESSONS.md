@@ -78,6 +78,16 @@ If an unsupported buff/debuff could change otherwise-supported damage, block tha
 
 Capability labels should therefore be conservative. A narrow auxiliary path (for example, using one ATK buff only to resolve Top-ATK targeting) does not make the full damage mechanic globally READY.
 
+## Core-count authority and cadence lesson
+
+Real parsed cases exposed two separate issues that must not be conflated.
+
+- `루드밀라 : 윈터 오너` (`눈보라`) and `길로틴 : 윈터 슬레이어` (`경험치`) use the canonical `core_hit_count:N` spelling.
+- Moris expected-mode `_notify_frac` is designed to feed fractional `core_hit` events for count mechanics, but the current BuffManager timing matcher accepts the older `core_hit:N` spelling and does not match `core_hit_count:N` directly. Until the authority matcher is corrected, Fast parity tests must isolate that spelling gap at the test boundary rather than changing Fast semantics to imitate a silent authority omission.
+- Core-count scheduling is not only a probability problem. Ammo refill (`ammo_charge_flat` / `ammo_charge_pct`), reload/max-ammo, attack/charge speed, pellet shape, weapon changes, and live accuracy can all invalidate future precompiled core boundaries.
+- The same ammo-refill issue invalidates ordinary static shot blocks, not just core triggers. Fast must fail closed on such squads until dynamic cadence replanning exists; silently scoring the stale timeline is a potential false-negative ranking bug.
+- CI must explicitly execute core-probability and core-boundary tests. File-name conventions alone are not a reliable quality gate for a new mechanic family.
+
 ## Do not carry the research constraints forward
 
 The following were research-specific and must not define production abstractions:
