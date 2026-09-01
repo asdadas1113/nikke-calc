@@ -5,65 +5,109 @@ on:
     branches:
       - fast-engine-phase2-20260901
 
+permissions:
+  contents: write
+
 jobs:
   inspect:
+    if: github.event.head_commit.message != 'impl: charge bullet lifetime runtime'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect Helm reload special threshold
+      - name: Apply charge bullet lifetime slice
         run: |
           python - <<'PY'
-          from context import spec
-          from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.engine.score import _possible_ally_targets
+          from pathlib import Path
 
-          names = ['리틀 머메이드', '크라운', '라피 : 레드 후드', '미하라 : 본딩 체인', '헬름']
-          squad = compile_moris_squad(spec.build_squad(names))
-          actor = 4
-          print('HELM', squad.members[actor].weapon)
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              if new in text:
+                  return
+              if text.count(old) != 1:
+                  raise SystemExit(f'{path}: expected one replacement, found {text.count(old)}')
+              p.write_text(text.replace(old, new, 1))
 
-          upper = 0.0
-          for effect in squad.effects:
-              if effect.stat == 'reload_speed_pct' and effect.effect_type == 'buff':
-                  targets = _possible_ally_targets(squad, effect)
-                  if actor not in targets:
-                      continue
-                  value = max(0.0, float(effect.value or 0.0))
-                  stacks = effect.max_stack
-                  if stacks is None or stacks <= 1:
-                      mult = 1.0
-                  elif stacks == -1:
-                      mult = float('inf')
-                  else:
-                      mult = float(stacks)
-                  contrib = value * mult
-                  upper += contrib
-                  print('RELOAD_SOURCE', squad.members[effect.actor].name, effect.name, {
-                      'value': effect.value,
-                      'max_stack': effect.max_stack,
-                      'duration': effect.duration,
-                      'target': effect.target,
-                      'triggers': [r.raw for r in effect.triggers],
-                      'conditions': [r.raw for r in effect.condition_rules],
-                      'contrib_upper': contrib,
-                  })
-          print('RELOAD_UPPER_BOUND', upper)
+          replace_once(
+              'fast_engine/engine/effects.py',
+              '        self._dynamic_bullet_targets = selected\n',
+              '        # Registration is additive: charge and rapid score runtimes may\n'
+              '        # both own recipient-shot lifetimes in the same squad.\n'
+              '        self._dynamic_bullet_targets = self._dynamic_bullet_targets | selected\n',
+          )
 
-          for effect in squad.members[actor].effects:
-              if not TriggerDispatcher.is_executable_effect(effect):
-                  continue
-              keys = sorted({r.event_key for r in effect.triggers})
-              if any(k in {'last_bullet_fire','last_bullet','on_attack','event:full_reload','full_reload','event:cover'} for k in keys):
-                  print('HELM_EVENT_CONSUMER', effect.name, effect.stat, {
-                      'keys': keys,
-                      'type': effect.effect_type,
-                      'value': effect.value,
-                      'duration': effect.duration,
-                      'target': effect.target,
-                      'parameters': effect.parameters,
-                  })
+          replace_once(
+              'fast_engine/engine/dynamic_weapon.py',
+              '        self._score_actors = selected\n        self._score_shot_sink = sink\n',
+              '        # Charge duration_bullets must be registered before battle-start\n'
+              '        # activation so ActiveEffectStore does not schedule a stale static\n'
+              '        # Nth-shot expiry. Rapid registration is additive in the store.\n'
+              '        self.effects.enable_dynamic_bullet_lifetime_targets(selected)\n'
+              '        self._score_actors = selected\n        self._score_shot_sink = sink\n',
+          )
+
+          replace_once(
+              'fast_engine/engine/dynamic_weapon.py',
+              '        if actor in self._hit_thresholds:\n            signals.append(DynamicCountSignal("hit_count", count_increment))\n        return DynamicChargeBoundary(\n',
+              '        if actor in self._hit_thresholds:\n            signals.append(DynamicCountSignal("hit_count", count_increment))\n        if self.effects.has_dynamic_bullet_lifetime(actor, now=float(event.time)):\n            # The consuming charge shot is scored above and its hit/full-charge\n            # signals are delivered first. Remove bullet-duration state only at\n            # the same post-shot point used by the rapid runtime.\n            signals.append(DynamicCountSignal(_INTERNAL_BULLET_CONSUME_EVENT, 1))\n        return DynamicChargeBoundary(\n',
+          )
+
+          core_block = '''def _actor_has_executable_core_count(squad: CompiledSquad, actor: int) -> bool:\n    return any(\n        TriggerDispatcher.is_executable_effect(effect)\n        and any(is_static_expected_core_count_rule(rule) for rule in effect.triggers)\n        for effect in squad.members[actor].effects\n    )\n\n\n'''
+          helpers = core_block + '''def _reload_speed_positive_upper_bound(squad: CompiledSquad, actor: int) -> float:\n    \"\"\"Conservative upper bound for beneficial reload speed on one actor.\n\n    ``cover_during_delay`` only changes Moris behavior once reload speed reaches\n    100%. Counting every possibly-targeting positive buff at maximum stack is an\n    intentionally loose bound: if even this stays below 100, the special branch\n    is provably unreachable for the squad.\n    \"\"\"\n\n    total = 0.0\n    for effect in squad.effects:\n        if effect.effect_type != \"buff\" or (effect.stat or \"\") != \"reload_speed_pct\":\n            continue\n        if actor not in _possible_ally_targets(squad, effect):\n            continue\n        value = max(0.0, float(effect.value or 0.0))\n        if value <= 0.0:\n            continue\n        max_stack = effect.max_stack\n        if max_stack is not None and float(max_stack) < 0.0:\n            return inf\n        stacks = 1.0 if max_stack is None else max(1.0, float(max_stack))\n        total += value * stacks\n    return total\n\n\ndef _charge_actor_score_safe(squad: CompiledSquad, actor: int) -> bool:\n    \"\"\"Safety contract for per-shot dynamic SR/RL score ownership.\"\"\"\n\n    member = squad.members[actor]\n    if str(member.weapon.get(\"fire_mode\") or \"\") != \"charge\":\n        return False\n    if member.weapon.get(\"control\") or member.weapon.get(\"is_clip\"):\n        return False\n    if (\n        member.weapon.get(\"cover_during_delay\")\n        and _reload_speed_positive_upper_bound(squad, actor) >= 100.0 - 1e-9\n    ):\n        return False\n\n    for effect in squad.effects:\n        if effect.effect_type == \"weapon_change\" and actor in _possible_ally_targets(squad, effect):\n            return False\n\n    if _actor_has_executable_core_count(squad, actor):\n        return False\n    if _actor_has_executable_event(\n        squad,\n        actor,\n        frozenset({\"last_bullet_fire\", \"on_attack\", \"event:full_reload\", \"full_reload\"}),\n    ):\n        return False\n    if _actor_has_executable_event(squad, actor, frozenset({\"pellet_hit\"})):\n        return False\n    return not _actor_has_unhandled_count_event(\n        squad, actor, frozenset({\"hit_count\"})\n    )\n\n\n'''
+          replace_once('fast_engine/engine/score.py', core_block, helpers)
+
+          old_reload = '''def _reload_recipient_score_safe(squad: CompiledSquad, actor: int) -> bool:\n    member = squad.members[actor]\n    mode = str(member.weapon.get(\"fire_mode\") or \"\")\n    if mode in {\"auto\", \"auto_warmup\"}:\n        return _rapid_actor_score_safe(squad, actor)\n    if mode != \"charge\":\n        return False\n    if member.weapon.get(\"control\") or member.weapon.get(\"is_clip\"):\n        return False\n    if member.weapon.get(\"cover_during_delay\"):\n        return False\n\n    for effect in squad.effects:\n        if effect.effect_type != \"weapon_change\":\n            continue\n        if actor in _possible_ally_targets(squad, effect):\n            return False\n\n    if _actor_has_executable_core_count(squad, actor):\n        return False\n    if _actor_has_executable_event(\n        squad,\n        actor,\n        frozenset({\"last_bullet_fire\", \"on_attack\", \"event:full_reload\", \"full_reload\"}),\n    ):\n        return False\n    if _actor_has_executable_event(squad, actor, frozenset({\"pellet_hit\"})):\n        return False\n    return not _actor_has_unhandled_count_event(\n        squad, actor, frozenset({\"hit_count\"})\n    )\n\n\n'''
+          new_reload = '''def _reload_recipient_score_safe(squad: CompiledSquad, actor: int) -> bool:\n    member = squad.members[actor]\n    mode = str(member.weapon.get(\"fire_mode\") or \"\")\n    if mode in {\"auto\", \"auto_warmup\"}:\n        return _rapid_actor_score_safe(squad, actor)\n    if mode == \"charge\":\n        return _charge_actor_score_safe(squad, actor)\n    return False\n\n\n'''
+          replace_once('fast_engine/engine/score.py', old_reload, new_reload)
+
+          marker = 'def _dynamic_charge_score_actors(squad: CompiledSquad) -> tuple[int, ...]:\n'
+          helper = '''def _dynamic_charge_bullet_lifetime_score_actors(\n    squad: CompiledSquad,\n) -> tuple[int, ...]:\n    actors: set[int] = set()\n    for effect in squad.effects:\n        if effect.parameters.get(\"duration_bullets\") is None:\n            continue\n        if not is_direct_damage_buff_runtime_supported(effect):\n            continue\n        if not TriggerDispatcher.is_executable_effect(effect):\n            continue\n        for actor in _possible_ally_targets(squad, effect):\n            if _charge_actor_score_safe(squad, actor):\n                actors.add(actor)\n    return tuple(sorted(actors))\n\n\n''' + marker
+          replace_once('fast_engine/engine/score.py', marker, helper)
+
+          replace_once(
+              'fast_engine/engine/score.py',
+              '    actors.update(charge & set(_dynamic_reload_score_actors(squad)))\n    return tuple(sorted(actors))\n',
+              '    actors.update(charge & set(_dynamic_reload_score_actors(squad)))\n    actors.update(_dynamic_charge_bullet_lifetime_score_actors(squad))\n    return tuple(sorted(actors))\n',
+          )
+
+          replace_once(
+              'fast_engine/engine/score.py',
+              '    return bool(targets) and all(\n        static_bullet_lifetime_cadence_safe(squad, actor)\n        for actor in targets\n    )\n',
+              '    return bool(targets) and all(\n        static_bullet_lifetime_cadence_safe(squad, actor)\n        or _charge_actor_score_safe(squad, actor)\n        for actor in targets\n    )\n',
+          )
+
+          replace_once(
+              'fast_engine/tests/test_damage_helm_bullet_lifetime.py',
+              'from fast_engine.engine.burst import BurstMachine, compile_burst_policy\n',
+              'from fast_engine.engine.burst import BurstMachine, BurstPolicy, compile_burst_policy\nfrom fast_engine.engine.burst_runtime import BurstRuntime\n',
+          )
+          replace_once(
+              'fast_engine/tests/test_damage_helm_bullet_lifetime.py',
+              'from fast_engine.engine.score import static_score_blockers\n',
+              'from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers\n',
+          )
+
+          test_marker = '    def test_reactivation_resets_ten_shot_generation(self):\n'
+          tests = '''    def test_dynamic_charge_owner_consumes_ten_shot_lifetime(self):\n        compiled, _policy, helm = self._fixture()\n        runtime = BurstRuntime(\n            compiled,\n            BurstPolicy(duration=20.0, first_burst_time=30.0),\n            EnemyStaticProfile(defense=31784.0, duration=20.0),\n        )\n        observer = StaticNormalAttackObserver(runtime, duration=20.0)\n        self.assertIn(2, observer.dynamic_charge_actors)\n        self.assertTrue(runtime.dispatcher.effects.dynamic_bullet_lifetime_supported(2))\n\n        runtime.dispatcher.effects.activate(helm, 2, 0.0, runtime.scheduler)\n        self.assertGreater(\n            runtime.dispatcher.effects.sum_stat(2, \"charge_dmg_mag_pct\", now=0.0),\n            0.0,\n        )\n        runtime.run(duration=20.0, score_observer=observer)\n        self.assertEqual(\n            runtime.dispatcher.effects.sum_stat(2, \"charge_dmg_mag_pct\", now=19.9),\n            0.0,\n        )\n\n    def test_squad1_helm_charge_lifetime_and_crown_reload_are_certified(self):\n        names = [\"리틀 머메이드\", \"크라운\", \"라피 : 레드 후드\", \"미하라 : 본딩 체인\", \"헬름\"]\n        compiled = compile_moris_squad(build_squad(names))\n        blockers = static_score_blockers(compiled)\n        self.assertNotIn(\"cadence:크라운:원 포 올 2:reload_speed_pct\", blockers)\n        self.assertNotIn(\"normal_delivery:헬름:이지스 캐논 3:charge_dmg_mag_pct\", blockers)\n        self.assertNotIn(\"skill_state_delivery:헬름:이지스 캐논 3:charge_dmg_mag_pct\", blockers)\n        self.assertIn(\"cadence:리틀 머메이드:세이렌 송 2:ammo_charge_pct\", blockers)\n        self.assertIn(\"normal_delivery:크라운:로얄 에타이어 4:atk_dmg_pct\", blockers)\n\n''' + test_marker
+          replace_once('fast_engine/tests/test_damage_helm_bullet_lifetime.py', test_marker, tests)
           PY
+      - name: Targeted Fast regressions
+        run: |
+          python -m unittest \
+            fast_engine.tests.test_damage_dynamic_charge_scoring \
+            fast_engine.tests.test_damage_dynamic_reload_scoring \
+            fast_engine.tests.test_damage_helm_bullet_lifetime \
+            fast_engine.tests.test_damage_real_squad_certification
+      - name: Commit implementation
+        run: |
+          git config user.name 'fast-engine-bot'
+          git config user.email 'fast-engine-bot@users.noreply.github.com'
+          git add fast_engine/engine/effects.py fast_engine/engine/dynamic_weapon.py fast_engine/engine/score.py fast_engine/tests/test_damage_helm_bullet_lifetime.py
+          git diff --cached --check
+          git commit -m 'impl: charge bullet lifetime runtime'
+          git push origin HEAD:fast-engine-phase2-20260901
