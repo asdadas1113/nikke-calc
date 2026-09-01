@@ -19,7 +19,9 @@ jobs:
         with:
           python-version: '3.13'
       - name: Apply state-end source gate
-        run: python fast_engine/research/_apply_state_end_source_gate_once.py
+        run: |
+          python fast_engine/research/_apply_state_end_source_gate_once.py
+          python fast_engine/research/_fix_state_end_source_gate_test_once.py
       - name: Targeted Fast regressions
         run: |
           python -m unittest \
