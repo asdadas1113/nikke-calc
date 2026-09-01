@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from .burst import BurstMachine, BurstPolicy
 from .conditions import SignalContext
 from .dispatcher import TriggerDispatcher
+from .last_bullet import simulate_static_last_bullet_boundaries
 from .model import CompiledSquad, EnemyStaticProfile
 from .scheduler import EventKind, EventScheduler
 from .state import StateStore
@@ -86,6 +87,48 @@ class BurstRuntime:
                 ),
             )
 
+    def _schedule_static_last_bullets(
+        self, horizon: float, dynamic_actors: set[int]
+    ) -> None:
+        """Expose exact magazine-ending shots without widening to every weapon hit.
+
+        Static actors are safe because their cadence plan cannot be invalidated by
+        live charge/ammo/reload modifiers. A dynamic charge actor that also owns
+        an executable last-bullet effect needs one physical shot to emit both the
+        dynamic cadence signal and `last_bullet_fire`; that multi-signal boundary
+        is deliberately not guessed here.
+        """
+        interested = {
+            effect.actor
+            for effect in self.squad.effects
+            if self.dispatcher.is_executable_effect(effect)
+            and any(rule.event_key == "last_bullet_fire" for rule in effect.triggers)
+        }
+        unsupported = interested & dynamic_actors
+        if unsupported:
+            names = ", ".join(self.squad.members[actor].name for actor in sorted(unsupported))
+            raise NotImplementedError(
+                "Fast dynamic charge + last_bullet_fire boundary not certified: " + names
+            )
+
+        from .burst import BurstSignal
+        for boundary in simulate_static_last_bullet_boundaries(
+            self.squad,
+            duration=horizon,
+            effect_filter=self.dispatcher.is_executable_effect,
+        ):
+            self.scheduler.schedule(
+                boundary.time,
+                EventKind.TRIGGER_BOUNDARY,
+                actor=boundary.actor,
+                payload=BurstSignal(
+                    boundary.time,
+                    "last_bullet_fire",
+                    boundary.actor,
+                    boundary.actor,
+                ),
+            )
+
     def start(self, *, duration: float | None = None) -> None:
         self._broadcast(0.0, "battle_start")
         self.machine.start(self.scheduler)
@@ -116,6 +159,7 @@ class BurstRuntime:
                     count_increment=boundary.count_increment,
                 ),
             )
+        self._schedule_static_last_bullets(horizon, dynamic_actors)
         self._schedule_initial_periodics(horizon)
 
     def run(self, *, duration: float | None = None) -> BurstRuntimeResult:
