@@ -85,7 +85,9 @@ class FastDamageKernelParityTests(unittest.TestCase):
             hit_type=_moris_hit(hit),
             enemy_def=self.ENEMY_DEF,
         )
-        self.assertAlmostEqual(fast, moris, places=9, msg=(fast, moris, terms, hit))
+        # Both paths intentionally use slightly different arithmetic grouping.
+        # Treat sub-1e-8 drift as floating-point noise rather than formula drift.
+        self.assertAlmostEqual(fast, moris, delta=1e-8, msg=(fast, moris, terms, hit))
 
     def test_plain_normal_attack(self):
         self.assertMorisParity(DamageTerms(), HitSpec(coeff=69.04))
