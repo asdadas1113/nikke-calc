@@ -14,6 +14,7 @@ class EventKind(IntEnum):
     BURST_REENTER = 12
     FULL_BURST_START = 13
     FULL_BURST_END = 14
+    DAMAGE_TICK = 19
     STATE_EXPIRE = 20
     PERIODIC_TICK = 30
     RELOAD_DONE = 40
@@ -23,9 +24,11 @@ class EventKind(IntEnum):
 
 
 # Moris frame order is buff-manager tick -> burst controller -> weapon actors.
-# Only equal-time events use this phase key; continuous timestamps remain untouched.
-# Same-phase events still preserve insertion order through sequence.
+# Inside BuffManager.tick, periodic damage is processed before buff expiry and
+# every:Ns skill ticks. Only equal-time events use this phase key; continuous
+# timestamps remain untouched. Same-phase events preserve insertion order.
 _EVENT_PHASE: dict[EventKind, int] = {
+    EventKind.DAMAGE_TICK: -10,
     EventKind.STATE_EXPIRE: 0,
     EventKind.PERIODIC_TICK: 10,
     EventKind.BURST_READY: 20,
@@ -54,9 +57,9 @@ class EventScheduler:
     """Continuous-time stable priority queue.
 
     There is deliberately no 1/60 s loop. Equal-time events follow Moris'
-    semantic frame phases (expiry -> periodic -> burst -> weapon), then preserve
-    insertion order inside the same phase. This prevents activation-history from
-    accidentally deciding combat semantics.
+    semantic frame phases (DoT -> expiry -> periodic -> burst -> weapon), then
+    preserve insertion order inside the same phase. This prevents activation
+    history from accidentally deciding combat semantics.
     """
 
     __slots__ = ("_heap", "_sequence", "now")
