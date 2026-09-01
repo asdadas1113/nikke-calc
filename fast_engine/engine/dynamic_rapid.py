@@ -53,11 +53,14 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
       (no empty-magazine reload-start delay), while an already-running reload is
       left untouched;
     - shots are suppressed until cover ends, and no missed-shot debt is replayed;
-    - MG warmup cools once at the next real shot, using the whole idle interval.
+    - MG warmup cools once at the next real shot, using the whole idle interval;
+    - while a live ``duration_bullets`` state targets this actor, each physical
+      shot becomes a temporary scheduler boundary so the consuming shot can be
+      scored before the state is removed.
 
     Exact ``event:cover`` consumers are intentionally excluded by score
-    certification for this slice, so entering cover has no dispatcher callback
-    here. Full-reload/last-bullet/raw-hit consumers are likewise gated elsewhere.
+    certification for this slice. Full-reload/last-bullet/raw-hit consumers are
+    likewise gated elsewhere.
     """
 
     __slots__ = ("_cover_until",)
@@ -68,6 +71,26 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
 
     def _cover_end(self, actor: int) -> float:
         return float(self._cover_until.get(actor, -1.0))
+
+    def _signature(self, actor: int, now: float) -> tuple:
+        # A bullet-lifetime activation/removal changes whether every shot must be
+        # materialized. Include its generation/remaining state so ordinary
+        # weapon sync invalidates any stale compressed boundary immediately.
+        return super()._signature(actor, now) + self.effects.dynamic_bullet_signature(
+            actor, now=now
+        )
+
+    def _shot_is_boundary(self, st: _RapidActorState) -> bool:
+        if self.effects.has_dynamic_bullet_lifetime(st.actor, now=st.phase_end):
+            return True
+        return super()._shot_is_boundary(st)
+
+    def consume_post_shot_bullet_lifetimes(self, actor: int, now: float) -> tuple[int, ...]:
+        """Consume dynamic bullet states after hit signals, before last-bullet."""
+
+        if actor not in self.actors:
+            return ()
+        return self.effects.consume_dynamic_bullet(actor, now=now, count=1)
 
     def _postpone_firing_for_cover(self, st: _RapidActorState) -> bool:
         until = self._cover_end(st.actor)
