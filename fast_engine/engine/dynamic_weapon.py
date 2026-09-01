@@ -36,12 +36,24 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
     for actors that actually own an executable raw consumer; unrelated charge
     actors remain aggregated and no global every-shot loop is introduced.
 
+    The score path may additionally promote selected charge actors to every-shot
+    boundaries. That promotion is opt-in and installed before ``start()``. The
+    score callback runs after the physical shot has advanced ammo state but before
+    post-shot ``full_charge_hit`` / ``hit_count`` effects are dispatched, matching
+    Moris' damage-before-hit-notify ordering without teaching the generic runtime
+    about damage formulas.
+
     Moris ``hit_count`` advances once per charge attack, independent of pellet or
     muzzle multiplicity. ``pellet_hit`` is the separate per-hit stream, so a
     multi-hit charge weapon does not need intra-shot hit_count expansion here.
     """
 
-    __slots__ = ("_hit_thresholds", "_raw_full_charge_actors")
+    __slots__ = (
+        "_hit_thresholds",
+        "_raw_full_charge_actors",
+        "_score_actors",
+        "_score_shot_sink",
+    )
 
     def __init__(
         self,
@@ -98,6 +110,8 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
 
         self._hit_thresholds = hit_thresholds
         self._raw_full_charge_actors = frozenset(raw_full_charge_actors)
+        self._score_actors: frozenset[int] = frozenset()
+        self._score_shot_sink: Callable[[int, float], None] | None = None
 
         # A charge actor may be interesting only because of generic hit_count or
         # a literal full_charge_hit consumer. Add it before start() initializes
@@ -108,14 +122,44 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
                 actors.add(actor)
         self.actors = tuple(sorted(actors))
 
+    def attach_score_shot_sink(
+        self,
+        actors: tuple[int, ...] | frozenset[int],
+        sink: Callable[[int, float], None],
+    ) -> None:
+        """Promote selected charge actors to physical-shot score boundaries.
+
+        This must be installed before ``start()`` so no early shot can be
+        fast-forwarded under the old boundary set. Only charge weapons are
+        accepted; auto/MG dynamic scoring is deliberately a separate slice.
+        """
+
+        if self._states:
+            raise RuntimeError("Fast score shot sink must be attached before weapon start")
+        selected = frozenset(int(actor) for actor in actors)
+        for actor in selected:
+            if actor < 0 or actor >= len(self.squad.members):
+                raise IndexError(f"actor out of range: {actor}")
+            if str(self.squad.members[actor].weapon.get("fire_mode") or "") != "charge":
+                raise NotImplementedError(
+                    "Fast dynamic score shot sink only supports charge weapons: "
+                    + self.squad.members[actor].name
+                )
+        self._score_actors = selected
+        self._score_shot_sink = sink
+        if selected:
+            self.actors = tuple(sorted(set(self.actors) | set(selected)))
+
     def emits_every_charge_shot(self, actor: int) -> bool:
         """Whether this runtime materializes every physical charge shot for actor."""
         return actor in self.actors and (
-            self.emits_each_charge_hit or actor in self._raw_full_charge_actors
+            self.emits_each_charge_hit
+            or actor in self._raw_full_charge_actors
+            or actor in self._score_actors
         )
 
     def _shot_is_boundary(self, actor: int, absolute_count: int) -> bool:
-        if actor in self._raw_full_charge_actors:
+        if actor in self._score_actors or actor in self._raw_full_charge_actors:
             return True
         if super()._shot_is_boundary(actor, absolute_count):
             return True
@@ -129,6 +173,13 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         if row is None:
             return None
         actor, _base_event_key, count_increment = row
+
+        if actor in self._score_actors:
+            if self._score_shot_sink is None:
+                raise RuntimeError("Fast dynamic score actor has no shot sink")
+            # Score every physical charge shot before any post-shot trigger can
+            # mutate damage-facing state for the next shot.
+            self._score_shot_sink(actor, float(event.time))
 
         signals: list[DynamicCountSignal] = []
         if actor in self._thresholds or actor in self._raw_full_charge_actors:
