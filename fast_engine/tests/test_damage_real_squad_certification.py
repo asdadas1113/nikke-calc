@@ -24,6 +24,34 @@ class RealSquadCertificationTests(unittest.TestCase):
         blockers = static_score_blockers(compiled)
         self.assertEqual(blockers, (), msg=f"state-delivery blockers remain: {blockers}")
 
+        for effect in compiled.effects:
+            if effect.actor != 4 or effect.effect_type != "damage":
+                continue
+            print(
+                "MIHARA_DAMAGE_EFFECT",
+                {
+                    "name": effect.name,
+                    "stat": effect.stat,
+                    "target": effect.target,
+                    "target_mode": effect.target_spec.mode.value,
+                    "conditions": tuple(rule.raw for rule in effect.condition_rules),
+                    "triggers": tuple(
+                        (
+                            rule.raw,
+                            rule.event_key,
+                            rule.mode.value,
+                            rule.threshold,
+                            rule.trigger_count_reducible,
+                        )
+                        for rule in effect.triggers
+                    ),
+                    "value": effect.value,
+                    "duration": effect.duration,
+                    "tick_interval": effect.tick_interval,
+                    "parameters": dict(effect.parameters),
+                },
+            )
+
         config = {
             "duration": 180.0,
             "first_burst_time": 3.0,
