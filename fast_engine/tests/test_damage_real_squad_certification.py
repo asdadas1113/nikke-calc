@@ -6,6 +6,7 @@ from context.spec import build_squad
 from fast_engine.engine.burst import compile_burst_policy
 from fast_engine.engine.burst_runtime import BurstRuntime
 from fast_engine.engine.compiler import compile_moris_squad
+from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
 from fast_engine.engine.last_bullet import simulate_static_last_bullet_boundaries
 from fast_engine.engine.model import EnemyStaticProfile
 from fast_engine.engine.score import score_static_squad, static_score_blockers
@@ -58,7 +59,7 @@ class RealSquadCertificationTests(unittest.TestCase):
         self.assertGreater(score.events_processed, 0)
         self.assertEqual(score.unsupported, EXPECTED_MIHARA_GAPS)
 
-    def test_real_helm_last_bullet_still_activates_on_dynamic_charge_path(self):
+    def test_real_helm_last_bullet_still_activates_on_dynamic_charge_score_path(self):
         moris_squad, compiled, _policy, enemy = self._fixture()
         helm = next(
             effect
@@ -79,12 +80,13 @@ class RealSquadCertificationTests(unittest.TestCase):
             compiled,
             {**CONFIG, "duration": first + 0.01},
         )
-        runtime = BurstRuntime(compiled, policy, enemy)
+
+        # score_static_squad attaches this sink before BurstRuntime decides which
+        # charge actors need per-shot signal production. Mirror that exact path.
+        sink = SimpleDamageScoreSink(compiled, enemy)
+        runtime = BurstRuntime(compiled, policy, enemy, damage_sink=sink)
         runtime.run(duration=first + 0.01)
 
-        # This squad routes Helm through MultiSignalChargeCadenceRuntime because
-        # a squad-body-hit consumer exists. The post-shot last_bullet signal must
-        # still activate Helm's all-allies crit-rate state there.
         self.assertTrue(runtime.weapons.emits_every_charge_shot(2))
         helm_value = runtime.dispatcher.effects.sum_stat(
             2, "normal_atk_crit_rate", now=first + 0.001
