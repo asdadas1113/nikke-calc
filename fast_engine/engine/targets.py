@@ -140,8 +140,21 @@ def compile_target(raw: Any, *, actor_by_name: dict[str, int]) -> TargetSpec:
     return TargetSpec(raw, TargetMode.UNSUPPORTED)
 
 
+# Moris resolves these stat/rank targets lazily, then shares one cohort between
+# effects from the same caster at the same activation time with the same raw
+# target. Fast does not yet defer resolution to end-of-frame, but it must at
+# least preserve that cohort identity once the first selection is made.
+_SHARED_SELECTION_MODES = frozenset({
+    TargetMode.TOP_ATK,
+    TargetMode.TOP_ATK_EXCL_SELF,
+    TargetMode.LOWEST_HP,
+    TargetMode.LOWEST_HP_EXCL_SELF,
+    TargetMode.TOP_DEF,
+})
+
+
 class TargetResolver:
-    __slots__ = ("squad", "state", "effects", "burst")
+    __slots__ = ("squad", "state", "effects", "burst", "_selection_cache")
 
     def __init__(
         self,
@@ -154,8 +167,34 @@ class TargetResolver:
         self.state = state
         self.effects = effects
         self.burst = burst
+        self._selection_cache: dict[tuple[int, float, str], tuple[int, ...]] = {}
+
+    def _cache_key(
+        self, spec: TargetSpec, *, owner_actor: int, now: float
+    ) -> tuple[int, float, str] | None:
+        if spec.mode not in _SHARED_SELECTION_MODES or not isinstance(spec.raw, str):
+            return None
+        return owner_actor, float(now), spec.raw
+
+    def _remember(
+        self,
+        spec: TargetSpec,
+        *,
+        owner_actor: int,
+        now: float,
+        targets: tuple[int, ...],
+    ) -> tuple[int, ...]:
+        key = self._cache_key(spec, owner_actor=owner_actor, now=now)
+        if key is not None:
+            self._selection_cache.setdefault(key, targets)
+            return self._selection_cache[key]
+        return targets
 
     def resolve(self, spec: TargetSpec, *, owner_actor: int, now: float) -> tuple[int, ...]:
+        key = self._cache_key(spec, owner_actor=owner_actor, now=now)
+        if key is not None and key in self._selection_cache:
+            return self._selection_cache[key]
+
         n = len(self.squad.members)
         mode = spec.mode
         if mode is TargetMode.SELF:
@@ -241,7 +280,12 @@ class TargetResolver:
                 if mode is TargetMode.TOP_ATK or i != owner_actor
             ]
             cand.sort(key=lambda i: (-self.effects.effective_atk(i, now=now), i))
-            return tuple(cand[: max(0, spec.count or 0)])
+            return self._remember(
+                spec,
+                owner_actor=owner_actor,
+                now=now,
+                targets=tuple(cand[: max(0, spec.count or 0)]),
+            )
         if mode in {TargetMode.LOWEST_HP, TargetMode.LOWEST_HP_EXCL_SELF}:
             cand = [
                 i for i in range(n)
@@ -253,12 +297,22 @@ class TargetResolver:
                     i,
                 )
             )
-            return tuple(cand[: max(0, spec.count or 0)])
+            return self._remember(
+                spec,
+                owner_actor=owner_actor,
+                now=now,
+                targets=tuple(cand[: max(0, spec.count or 0)]),
+            )
         if mode is TargetMode.TOP_DEF:
             cand = sorted(
                 range(n), key=lambda i: (-self.squad.members[i].base_def, i)
             )
-            return tuple(cand[: max(0, spec.count or 0)])
+            return self._remember(
+                spec,
+                owner_actor=owner_actor,
+                now=now,
+                targets=tuple(cand[: max(0, spec.count or 0)]),
+            )
         if mode is TargetMode.RANDOM:
             raise NotImplementedError(
                 f"expected random target not certified: {spec.raw!r}"
