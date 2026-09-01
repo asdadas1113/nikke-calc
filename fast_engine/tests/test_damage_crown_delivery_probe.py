@@ -15,6 +15,9 @@ from fast_engine.engine.damage_policy import (
 from fast_engine.engine.score import static_score_blockers
 
 
+HEAL_EVENT_STATS = {"heal_hp_pct", "lifesteal_pct"}
+
+
 class CrownDeliveryProbe(unittest.TestCase):
     def test_surface_crown_royal_attire_gate(self):
         names = ["리틀 머메이드", "크라운", "라피 : 레드 후드", "미하라 : 본딩 체인", "헬름"]
@@ -57,8 +60,28 @@ class CrownDeliveryProbe(unittest.TestCase):
                 "conditions_supported": all(r.mode in _SAFE_CONDITIONS for r in e.condition_rules),
                 "runtime_supported": is_direct_damage_buff_runtime_supported(e),
             })
+        heal_sources = [
+            {
+                "owner": compiled.names[e.actor],
+                "name": e.name,
+                "type": e.effect_type,
+                "stat": e.stat,
+                "value": e.value,
+                "duration": e.duration,
+                "target": e.target,
+                "target_mode": e.target_spec.mode.value,
+                "conditions": list(e.conditions),
+                "triggers": [
+                    {"raw": r.raw, "event_key": r.event_key, "mode": r.mode.value}
+                    for r in e.triggers
+                ],
+            }
+            for e in compiled.effects
+            if (e.stat or "") in HEAL_EVENT_STATS
+        ]
         report = {
             "effects": rows,
+            "heal_sources": heal_sources,
             "blockers": [b for b in static_score_blockers(compiled) if ":크라운:로얄 에타이어 4:" in b],
         }
         self.fail("INTENTIONAL_CROWN_DELIVERY=" + json.dumps(report, ensure_ascii=False, sort_keys=True))
