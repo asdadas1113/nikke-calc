@@ -219,5 +219,54 @@ class StaticNormalScoreParityTests(unittest.TestCase):
         self.assertTrue(all(row.startswith("skill_damage:") for row in fast.unsupported))
 
 
+class LiberelioPendingB3ParityTests(unittest.TestCase):
+    NAMES = ["미카", "아니스", "리버렐리오"]
+    DURATION = 1.0
+    SKILL = "잠기는 세계 2"
+
+    def test_first_burst_pending_bonus_matches_moris_before_raw_full_charge_state(self):
+        # `격류` uses literal full_charge_hit, whose every-hit producer is
+        # intentionally fail-closed in Fast. Keep this authority fixture shorter
+        # than Liberelio's 1.5s first charge so only pending B3 semantics remain.
+        squad = build_squad(self.NAMES)
+        compiled = compile_moris_squad(squad)
+        config = {
+            "duration": self.DURATION,
+            "rng_mode": "expected",
+            "first_burst_time": 0.0,
+            "max_burst_count": 1,
+            "burst_sequence": [
+                {"1": ["미카"], "2": ["아니스"], "3": ["리버렐리오"]}
+            ],
+        }
+        policy = compile_burst_policy(squad, compiled, config)
+        enemy = EnemyStaticProfile(duration=self.DURATION)
+        sink = SimpleDamageScoreSink(compiled, enemy)
+
+        actor = self.NAMES.index("리버렐리오")
+        effect = next(e for e in compiled.members[actor].effects if e.name == self.SKILL)
+        self.assertEqual(effect.stat, "bonus_damage")
+        self.assertIn(effect.effect_id, sink.pending_specs)
+
+        runtime = BurstRuntime(compiled, policy, enemy, damage_sink=sink)
+        runtime.run(duration=self.DURATION)
+
+        moris = simulate(squad, config=config, verbose=True)
+        authority = sum(
+            hit.damage
+            for hit in moris.hits
+            if hit.caster == "리버렐리오" and hit.skill_name == self.SKILL
+        )
+        estimate = sink.char_total[actor]
+        self.assertGreater(authority, 0.0)
+        self.assertGreater(estimate, 0.0)
+        rel_error = abs(estimate - authority) / authority
+        self.assertLessEqual(
+            rel_error,
+            0.01,
+            f"Liberelio pending B3: Fast={estimate:,.2f}, Moris={authority:,.2f}, rel={rel_error:.4%}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
