@@ -171,6 +171,11 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
 
         return self._rapid_reload.begin_full_burst(now, casted, full_burst_end)
 
+    def consume_post_shot_bullet_lifetimes(self, actor: int, now: float) -> tuple[int, ...]:
+        """Consume rapid dynamic duration_bullets at Moris' post-hit point."""
+
+        return self._rapid_reload.consume_post_shot_bullet_lifetimes(actor, now)
+
     def emits_every_charge_shot(self, actor: int) -> bool:
         return actor in self.actors and (
             self.emits_each_charge_hit
