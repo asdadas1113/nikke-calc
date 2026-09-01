@@ -55,6 +55,9 @@ def _weapon_view(name: str, meta: dict[str, Any], char: dict[str, Any]) -> dict[
     charge_frames = char.get("charge_time_frames")
     charge_time = (float(charge_frames) / 60.0) if charge_frames is not None else float(meta.get("charge_time") or 0.0)
     clip_chars = _MECHANICS.get("clip_characters", {}).get(weapon_type, [])
+    normal_hit_coeff = float(
+        (_MECHANICS.get("normal_hit_coeff") or {}).get(weapon_type, 1.0)
+    )
     return {
         "weapon_type": weapon_type,
         "fire_mode": fire_mode,
@@ -75,6 +78,7 @@ def _weapon_view(name: str, meta: dict[str, Any], char: dict[str, Any]) -> dict[
         "damage_coeff": float(meta.get("damage_coeff") or 0.0),
         "core_dmg_mult": float(meta.get("core_dmg_mult") or 200.0),
         "full_charge_mult": float(meta.get("full_charge_mult") or 100.0),
+        "normal_hit_coeff": normal_hit_coeff,
     }
 
 
