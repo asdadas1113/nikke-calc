@@ -11,6 +11,7 @@ from .damage_policy import (
 )
 from .damage_state import DamageTermResolver
 from .dispatcher import TriggerDispatcher
+from .dynamic_rapid import is_supported_rapid_cover_control
 from .model import CompiledSquad, EnemyStaticProfile, FastScore
 from .normal_attack import compile_normal_attack_spec, expected_normal_block_damage
 from .shot_blocks import (
@@ -174,10 +175,72 @@ def _actor_has_executable_core_count(squad: CompiledSquad, actor: int) -> bool:
     )
 
 
+def _rapid_actor_score_safe(
+    squad: CompiledSquad,
+    actor: int,
+    *,
+    require_cover_control: bool = False,
+) -> bool:
+    """Safety contract for compressed auto/MG physical-shot ownership."""
+
+    member = squad.members[actor]
+    mode = str(member.weapon.get("fire_mode") or "")
+    if mode not in {"auto", "auto_warmup"}:
+        return False
+    if member.weapon.get("is_clip") or member.weapon.get("cover_during_delay"):
+        return False
+
+    control = member.weapon.get("control") or {}
+    if require_cover_control:
+        if not is_supported_rapid_cover_control(member):
+            return False
+    elif control and not is_supported_rapid_cover_control(member):
+        return False
+
+    for effect in squad.effects:
+        if effect.effect_type != "weapon_change":
+            continue
+        if actor in _possible_ally_targets(squad, effect):
+            return False
+
+    if _actor_has_executable_core_count(squad, actor):
+        return False
+    if _actor_has_executable_event(
+        squad,
+        actor,
+        frozenset({
+            "last_bullet_fire",
+            "last_bullet",
+            "on_attack",
+            "event:full_reload",
+            "full_reload",
+            "event:cover",
+        }),
+    ):
+        return False
+    if _actor_has_unhandled_count_event(
+        squad, actor, frozenset({"hit_count", "pellet_hit"})
+    ):
+        return False
+
+    # The compressed rapid path does not broadcast one squad-body event per
+    # physical shot yet. Any executable consumer would otherwise silently miss
+    # hits while this actor is dynamic.
+    if any(
+        TriggerDispatcher.is_executable_effect(effect)
+        and any(rule.event_key == "squad_body_hit" for rule in effect.triggers)
+        for effect in squad.effects
+    ):
+        return False
+    return True
+
+
 def _reload_recipient_score_safe(squad: CompiledSquad, actor: int) -> bool:
     member = squad.members[actor]
     mode = str(member.weapon.get("fire_mode") or "")
-    if mode not in {"auto", "auto_warmup", "charge"}:
+    if mode in {"auto", "auto_warmup"}:
+        return _rapid_actor_score_safe(squad, actor)
+    if mode != "charge":
         return False
     if member.weapon.get("control") or member.weapon.get("is_clip"):
         return False
@@ -198,28 +261,11 @@ def _reload_recipient_score_safe(squad: CompiledSquad, actor: int) -> bool:
         frozenset({"last_bullet_fire", "on_attack", "event:full_reload", "full_reload"}),
     ):
         return False
-
-    if mode == "charge":
-        if _actor_has_executable_event(squad, actor, frozenset({"pellet_hit"})):
-            return False
-        return not _actor_has_unhandled_count_event(
-            squad, actor, frozenset({"hit_count"})
-        )
-
-    if _actor_has_unhandled_count_event(
-        squad, actor, frozenset({"hit_count", "pellet_hit"})
-    ):
+    if _actor_has_executable_event(squad, actor, frozenset({"pellet_hit"})):
         return False
-    if _actor_has_executable_event(squad, actor, frozenset({"last_bullet"})):
-        return False
-
-    if any(
-        TriggerDispatcher.is_executable_effect(effect)
-        and any(rule.event_key == "squad_body_hit" for rule in effect.triggers)
-        for effect in squad.effects
-    ):
-        return False
-    return True
+    return not _actor_has_unhandled_count_event(
+        squad, actor, frozenset({"hit_count"})
+    )
 
 
 def _is_dynamic_reload_score_supported(squad: CompiledSquad, effect) -> bool:
@@ -264,12 +310,19 @@ def _dynamic_charge_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
 
 
 def _dynamic_rapid_reload_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
-    return tuple(
+    actors = {
         actor
         for actor in _dynamic_reload_score_actors(squad)
         if str(squad.members[actor].weapon.get("fire_mode") or "")
         in {"auto", "auto_warmup"}
+    }
+    actors.update(
+        actor
+        for actor, member in enumerate(squad.members)
+        if member.weapon.get("control")
+        and _rapid_actor_score_safe(squad, actor, require_cover_control=True)
     )
+    return tuple(sorted(actors))
 
 
 def _is_score_safe_fixed_periodic(effect) -> bool:
@@ -331,8 +384,10 @@ def _direct_damage_buff_score_supported(squad: CompiledSquad, effect) -> bool:
 
 def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
     blockers: list[str] = []
-    for member in squad.members:
-        if member.weapon.get("control"):
+    for actor, member in enumerate(squad.members):
+        if member.weapon.get("control") and not _rapid_actor_score_safe(
+            squad, actor, require_cover_control=True
+        ):
             blockers.append(f"control:{member.name}")
 
     has_score_periodic = any(_is_score_safe_fixed_periodic(effect) for effect in squad.effects)
