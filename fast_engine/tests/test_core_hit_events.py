@@ -97,6 +97,36 @@ class ExpectedCoreRuntimeTests(unittest.TestCase):
         )
         return squad, core_effect.effect_id
 
+    @staticmethod
+    def _with_ammo_refill_invalidator(squad: CompiledSquad, core_effect_id: int) -> CompiledSquad:
+        owner = squad.members[0]
+        base = next(
+            effect for effect in owner.effects
+            if effect.effect_id != core_effect_id
+        )
+        ammo_effect = replace(
+            base,
+            effect_type="instant",
+            name="synthetic ammo refill",
+            stat="ammo_charge_flat",
+            triggers=(compile_trigger_rule("hit_count:60"),),
+            target="self",
+            target_spec=replace(base.target_spec, mode=TargetMode.SELF),
+        )
+        members = list(squad.members)
+        members[0] = replace(
+            owner,
+            effects=tuple(
+                ammo_effect if effect.effect_id == base.effect_id else effect
+                for effect in owner.effects
+            ),
+        )
+        effects = tuple(effect for member in members for effect in member.effects)
+        return CompiledSquad(
+            tuple(members),
+            TriggerIndex.from_effects(effects, actor_count=len(members)),
+        )
+
     def test_runtime_dispatches_only_meaningful_core_count_boundaries(self):
         squad, effect_id = self._with_core_trigger_damage()
         duration = 1.0
@@ -138,6 +168,29 @@ class ExpectedCoreRuntimeTests(unittest.TestCase):
             expected_count,
         )
         self.assertGreater(sink.char_total[0], 0.0)
+
+    def test_static_core_plan_fails_closed_when_ammo_refill_can_shift_future_shots(self):
+        squad, effect_id = self._with_core_trigger_damage()
+        squad = self._with_ammo_refill_invalidator(squad, effect_id)
+        duration = 2.0
+        enemy = EnemyStaticProfile(
+            duration=duration,
+            core_uptime=1.0,
+            core_px=1_000_000.0,
+        )
+        sink = SimpleDamageScoreSink(squad, enemy)
+        runtime = BurstRuntime(
+            squad,
+            BurstPolicy(
+                duration=duration,
+                no_burst_actors=frozenset(range(len(squad.members))),
+            ),
+            enemy,
+            damage_sink=sink,
+        )
+
+        with self.assertRaisesRegex(NotImplementedError, "synthetic ammo refill"):
+            runtime.start(duration=duration)
 
 
 if __name__ == "__main__":
