@@ -2,7 +2,7 @@
 
 > **Canonical handoff. Read this file first in a new chat/session.**
 >
-> Last consolidated: **2026-09-01 13:38 KST**.
+> Last consolidated: **2026-09-01**.
 >
 > Repository: `asdadas1113/nikke-calc`
 >
@@ -10,47 +10,68 @@
 
 ## 0. Immediate resume point
 
-There are two different Git states that must not be confused.
+### Latest fully verified Fast code checkpoint
 
-### Last fully green checkpoint
+`2017fbc18189d5351c9f33f24fe8467cb8fbaee8`
 
-`a33bafd86d694d435db9188c7045008fbe8fb21a`
+Message: `docs: record core-count parity lessons`
 
-Message: `test: connect Liberelio raw full-charge effect`
+GitHub Actions run `33477782548` completed fully green. It included:
 
-At that checkpoint the full branch CI completed successfully, including Fast tests, calculator regression, optimizer tests, browser tests and golden snapshots.
+- doclint;
+- all Fast burst/state/trigger/damage/runtime/weapon suites;
+- the dedicated Fast **core semantics** gate;
+- structural performance;
+- calculator regression;
+- optimizer tests;
+- bridge smoke tests;
+- browser tests;
+- golden snapshots **29/29**.
 
-Known performance near that checkpoint: roughly **59 ms for a 180 s five-person Fast score** on the CI benchmark used at the time. Treat this as an order-of-magnitude reference, not a forever-stable microbenchmark.
+The structural Fast score fixture in that run measured:
 
-### Current work-in-progress HEAD
+```text
+median = 20.19 ms / 180 s five-person score
+samples = [20.19, 19.90, 20.50] ms
+events = 358
+```
 
-`3e561a8c04a12f890d51cbda82a13feff9b69080`
+Treat this as a CI-runner reference point, not a universal microbenchmark.
 
-Message: `feat: resolve accuracy into damage state`
+A later commit may be documentation-only. Always check the current branch HEAD and latest CI before writing code, but do not reopen already-certified core work merely because the handoff document itself has a newer SHA.
 
-This HEAD is **16 commits ahead** of the last fully green checkpoint and contains fixed-DoT work, the SG/hit-count semantic correction, and the beginning of weapon-specific core-probability work.
+### What was completed since the previous handoff
 
-Its latest CI is **red**, but the failures are currently narrow:
+The old resume point around `3e561a8c...` is obsolete. The branch is back to green and now includes:
 
-1. `fast_engine.tests.test_compiled_triggers.MorisEffectExpansionTests.test_compiler_includes_all_moris_registered_effect_sources`
-   - expected `equipment` source count > 0 but got 0;
-   - investigate fixture/build assumptions before changing compiler semantics.
-2. `test_damage_kernel.FastDamageKernelParityTests.test_skill_type_layers_and_skill_crit_lane`
-   - Fast and Moris differ by only `9.313225746154785e-10`;
-   - this is a 9-decimal floating-point assertion issue, not evidence of a meaningful damage-formula divergence.
-
-All other Fast subsystems in that CI run were green, including burst, capabilities/state, dispatch, dynamic weapon signals, periodic, targets, weapon tests and structural performance.
-
-The same red run reported structural Fast performance of about **15.41 ms**, 358 events, for that test fixture. Do not compare this directly to the earlier ~59 ms number unless the benchmark inputs are confirmed identical.
+1. compiler effect-source provenance fix using Moris `_source_tag`;
+2. floating-point damage-kernel test tolerance fix for sub-`1e-8` noise;
+3. weapon-specific core probability wired into normal scoring;
+4. Moris parity tests for AR/SMG/SG/MG/SR/RL core probability and accuracy;
+5. compressed expected `core_hit_count:N` threshold boundaries;
+6. real parsed core-count damage evidence with `루드밀라 : 윈터 오너` / `눈보라`;
+7. real parsed core-count buff evidence with `길로틴 : 윈터 슬레이어` / `경험치`;
+8. fail-closed protection when ammo refill or other live weapon state can invalidate a static core/cadence plan;
+9. the same ammo-refill protection added to ordinary static normal-attack scoring;
+10. a dedicated CI gate so core-probability and core-boundary tests cannot silently fall outside test discovery.
 
 ### First action in the next session
 
-1. Fix or correctly reframe the two current CI failures above.
-2. Get the current branch back to full green.
-3. Then finish weapon-specific core probability wiring.
-4. Only after that add expected `core_hit_count:N` threshold production.
+The next major task is **ranking validation**, not another mechanic chosen by intuition.
 
-Do **not** start a new large primitive before the current HEAD is green.
+Build a reusable validation harness that can compare a broad Fast-scored candidate pool with Moris authoritative scores and report at least:
+
+- Moris Top-N recall inside Fast Top-K;
+- pairwise ordering accuracy;
+- catastrophic false-negative / tail-miss rate;
+- systematic bias by weapon class, mechanic and archetype;
+- unsupported/blocker frequency and which mechanics cause it;
+- Fast calls, Moris calls, wall time and peak memory;
+- eventually the final five-team Moris score after Fast shortlist/allocation.
+
+Use public/synthetic fixtures in Git. Real account samples may be used locally for measurement but must not be committed.
+
+Use the unsupported/blocker distribution from this harness to decide whether the next implementation should be dynamic ammo/cadence/core replanning, `crit_hit_count:N`, or another missing primitive. Do not assume which one matters most before measuring.
 
 ## 1. Project goal
 
@@ -74,7 +95,7 @@ exact 5-team no-overlap allocation
 optional replacement/refinement
 ```
 
-The intended use is now explicit: **Fast should make thousands of candidate evaluations cheap enough that Moris can be reserved for the main shortlist.**
+The intended use is explicit: **Fast should make thousands of candidate evaluations cheap enough that Moris can be reserved for the shortlist and final allocation.**
 
 ## 2. What Fast is optimizing for
 
@@ -106,7 +127,7 @@ False negatives are more expensive than false positives: Moris can remove an ove
 - Unique character behavior should be represented as generalized mechanics/constraints if possible.
 - Anonymous account/profile/personal temporary data must never be committed.
 - `master` must never be modified or merged implicitly from this work.
-- `calculator/` should not be changed unless an explicitly intended Moris fix is being made; current Fast work should stay outside it.
+- `calculator/` should not be changed unless an explicitly intended Moris fix is being made; Fast work should stay outside it by default.
 
 Current `master` SHA remains:
 
@@ -144,7 +165,7 @@ mechanic-level handler
 character-specific exception only if genuinely unavoidable
 ```
 
-Example: Rouge-style adjacency should be a generic position-targeting constraint, not a name-specific synergy bonus.
+A character exposing a mechanic first does not make that mechanic character-specific.
 
 ## 5. Current Fast implementation — completed/validated foundations
 
@@ -156,8 +177,9 @@ Tests: `fast_engine/tests/`
 
 - Moris `context.spec.build_squad()` remains input authority.
 - Fast compile reuses Moris base-stat/build/favorite-stage semantics.
-- compiled model is immutable and runtime-oriented.
-- capability inventory/fail-closed routing exists.
+- Compiled model is immutable and runtime-oriented.
+- Capability inventory/fail-closed routing exists.
+- Moris effect provenance (`skill` / `equipment` / `cube` / `collection`) is preserved through `_source_tag`.
 
 ### Scheduler/state
 
@@ -191,11 +213,11 @@ Tests: `fast_engine/tests/`
 - first safe `last_bullet_fire` slice;
 - multi-signal charge boundary support.
 
-### Important corrected semantics
+### Important corrected count semantics
 
 `hit_count` and `pellet_hit` are distinct.
 
-Moris currently treats ordinary weapon `hit_count` as **one per trigger pull/shot**, while `pellet_hit` is per pellet. Fast temporarily over-counted SG `hit_count` by pellet count; this was identified as a ranking-bias bug and corrected in the current WIP line.
+Moris treats ordinary weapon `hit_count` as **one per trigger pull/shot**, while `pellet_hit` is per pellet. Fast temporarily over-counted SG `hit_count` by pellet count; this was identified as a ranking-bias bug and corrected.
 
 Do not reintroduce pellet-based generic `hit_count` without new Moris evidence.
 
@@ -220,11 +242,12 @@ Includes general modes needed by validated cases such as:
 - source/caster-based ATK handling;
 - enemy defense-down/personal routing corrected;
 - normal attack expected damage aggregation;
-- static shot blocks (`1 DealForm × N shots`).
+- static shot blocks (`1 DealForm × N shots`);
+- `accuracy_pct` is resolved into damage state and can affect actor-specific core probability.
 
 ### Score vertical slice
 
-`score_static_squad()` exists and can combine:
+`score_static_squad()` can combine:
 
 - compressed normal attacks;
 - currently certified simple damage events;
@@ -232,7 +255,7 @@ Includes general modes needed by validated cases such as:
 - explicit `unsupported` damage-event reporting;
 - fail-closed comparison-critical state blockers.
 
-Validated static fixtures have shown per-character/combined Fast-vs-Moris comparisons within about 1% for supported subsets.
+Validated static fixtures have shown per-character/combined Fast-vs-Moris comparisons within about 1% for supported subsets. Ranking validation, rather than this absolute-error observation, is the required production gate.
 
 ### B3 pending bonus damage
 
@@ -243,9 +266,9 @@ Implemented safe slice for Moris B3 behavior:
 - `bonus_damage:N` remains immediate multi-hit, not pending;
 - source-order cases with later same-cast buffs remain fail-closed unless explicitly modeled.
 
-Actual Liberelio B3 case was used as parity evidence.
+Actual Liberelio B3 was used as parity evidence.
 
-### Fixed DoT — current WIP line
+### Fixed DoT — certified first slice
 
 Implemented first fixed-tick DoT slice:
 
@@ -257,33 +280,19 @@ Implemented first fixed-tick DoT slice:
 - `tick_start: immediate` starts immediately;
 - default expiry-boundary and immediate-expiry semantics mirror Moris.
 
-Synthetic tests and a real Mana DoT parity fixture passed the Fast damage test stage before later core-probability work was layered on top.
+Synthetic tests and a real Mana DoT parity fixture pass. Complex DoT remains fail-closed.
 
-Complex DoT remains fail-closed.
+## 6. Core probability / expected core-hit count — current certified state
 
-## 6. Current work: core probability / core-hit triggers
+### Weapon-specific core probability
 
-This is the active unfinished feature area.
-
-### Why the old scalar is insufficient
-
-The original static enemy model exposed:
+The old static scalar remains a fallback:
 
 ```text
 effective_core_rate = core_uptime × core_hit_rate_when_open
 ```
 
-That is useful as a fallback, but Moris core-hit probability can depend on:
-
-- weapon type;
-- accuracy percentage;
-- boss core size (`core_px`).
-
-Therefore one common rate can introduce weapon-archetype ranking bias on core-heavy bosses.
-
-### Moris model being mirrored
-
-Moris currently uses weapon accuracy geometry roughly as:
+When `core_px` is supplied, Fast now mirrors Moris weapon accuracy geometry per actor:
 
 ```text
 D = max(base_diameter - acc_slope * accuracy_pct, 1)
@@ -292,31 +301,57 @@ r_core = core_px / 2
 P_core = min(1, (r_core / R) ** model_n)
 ```
 
-with parameters in `data/weapon_mechanics.json`.
+Parameters are lowered from `data/weapon_mechanics.json`.
 
-Current WIP changes have begun to lower accuracy data into Fast compile/runtime state and add `accuracy_pct` into `DamageTerms`.
+Fast parity tests cover AR/SMG/SG/MG/SR/RL at multiple accuracy values. Normal scoring resolves each actor's current `accuracy_pct` and uses that actor's weapon-specific core probability rather than a squad-wide common scalar.
 
-### Next implementation target
+### Expected `core_hit_count:N`
 
-After current CI is green:
+Fast now supports a **static-cadence certified slice** of expected `core_hit_count:N`:
 
-1. finish `EnemyStaticProfile`/weapon-specific core probability API;
-2. verify Fast core probabilities numerically against Moris `_core_hit_prob()` for AR/SMG/SG/MG/SR/RL and accuracy modifiers;
-3. feed that probability into normal-attack scoring instead of a squad-wide common scalar when `core_px` is supplied;
-4. use expected fractional accumulation for `core_hit_count:N`;
-5. only split/materialize at threshold crossings that can change future state;
-6. add real parsed cases, including core-hit-driven damage/buff characters, and compare against Moris expected mode;
-7. remeasure 180 s score cost.
+- expected fractional core probability is accumulated per physical hit/pellet, matching Moris expected-mode semantics;
+- only absolute threshold crossings observed by executable effects are materialized;
+- no scheduler event is created for every probabilistic core hit;
+- one physical shot can cross several observed thresholds and produce ordered compressed increments;
+- core boundaries are scheduled before shot-level `hit_count`/`on_attack` boundaries at equal timestamps, matching Moris ordering.
 
-Do not create one scheduler event per probabilistic core hit.
+Real parsed evidence exists for both effect classes:
+
+- `루드밀라 : 윈터 오너` — `눈보라`, damage, `core_hit_count:60`;
+- `길로틴 : 윈터 슬레이어` — `경험치`, self ATK buff, `core_hit_count:3`.
+
+### Moris authority spelling gap discovered during parity work
+
+Current parsed data uses canonical `core_hit_count:N`. Moris expected-mode `_notify_frac()` is designed to feed fractional `core_hit` events for these count mechanics, but the current BuffManager timing matcher accepts the older `core_hit:N` form and does not directly match canonical `core_hit_count:N`.
+
+Therefore current real parity tests do **not** modify `calculator/`. They isolate only this spelling gap at the test boundary by temporarily aliasing the real parsed timing to the old Moris spelling, run the intended authority mechanics, then restore the module table.
+
+Do not change Fast to imitate the current silent Moris omission. If the Moris matcher is fixed later, treat it as an explicit calculator bugfix with its own tests and expected snapshot review.
+
+### Static-core fail-closed boundary
+
+Precompiled core boundaries are rejected when future probability or firing cadence can change through live state, including relevant cases such as:
+
+- live accuracy changes;
+- reload/max-ammo changes;
+- ammo refill (`ammo_charge_flat`, `ammo_charge_pct`);
+- attack/charge speed changes;
+- pellet shape changes;
+- weapon changes;
+- dynamic charge actors not covered by the static plan.
+
+Permanent unconditional self cadence folded at compile time remains safe.
+
+The same ammo-refill problem applies to ordinary static shot blocks, so static normal scoring also blocks such squads rather than silently using a stale firing timeline.
 
 ## 7. Explicit fail-closed / not-yet-certified areas
 
 This list is intentionally conservative and should be updated as mechanics are certified.
 
-- generic raw `hit_count` every-hit producer;
-- expected `core_hit_count:N` runtime production (next feature);
+- generic raw `hit_count` every-hit producer where a consumer truly needs every event rather than compressed counts;
 - expected `crit_hit_count:N` production;
+- dynamic core-boundary replanning when accuracy/ammo/reload/attack/charge state changes future probabilities or shot times;
+- legacy `core_hit:N` threshold semantics as a production static-boundary primitive when trigger-count reduction can alter the effective threshold;
 - dynamic multi-hit charge intra-shot threshold crossing where not explicitly represented;
 - dynamic periodic interval rescaling from `effect_interval` / skill-cooldown-style modifiers;
 - complex DoT: stacks, gauges, `dmg_scale_mag_pct`, same-target ramp, dynamic coefficients;
@@ -343,18 +378,19 @@ Performance principles:
 - threshold-crossing events rather than raw counts;
 - DoT ticks are explicit only when they are actual meaningful damage boundaries.
 
-Historical measurements from this branch include:
+Useful historical measurements from this branch:
 
-- ~59.33 ms / 180 s five-person score near the last fully green broad-score checkpoint;
-- 15.41 ms / 358 events in the latest red CI's structural-performance fixture.
+- ~59.33 ms / 180 s five-person score near an earlier broad-score checkpoint;
+- 15.41 ms / 358 events in an earlier structural-performance run;
+- **20.19 ms median / 358 events** in the fully green `2017fbc...` CI run after core-count and safety work.
 
-Keep the CI regression gate conservative (currently much looser than these observed values). The production metric later should include calls/sec and end-to-end shortlist wall time, not just one microbenchmark.
+Do not compare different measurements as regressions unless fixture/runtime scope is confirmed identical. Keep the CI regression gate conservative. Production measurement should include calls/sec and end-to-end shortlist wall time, not just one microbenchmark.
 
 ## 9. Validation hierarchy before optimizer integration
 
 ### Primitive correctness
 
-Synthetic tests for scheduler, targets, counts, DoT, damage formula, boundary order.
+Synthetic tests for scheduler, targets, counts, DoT, damage formula and boundary order.
 
 ### Static Moris comparison
 
@@ -367,21 +403,23 @@ Under equivalent conditions compare:
 - important effect windows;
 - trigger count/timing.
 
-### Ranking validation — required before production pruning
+### Ranking validation — **current highest priority**
 
 This is the most important missing project gate.
 
-Measure across real/local account samples without committing personal data:
+Measure across representative candidate sets:
 
 - Moris Top-N recall inside Fast Top-K;
 - pairwise ordering accuracy;
 - false-negative/tail failure rate;
 - bias by weapon class/mechanic/archetype;
-- unsupported/fallback frequency;
+- unsupported/fallback/blocker frequency;
 - final five-team Moris score after Fast shortlist;
 - Fast calls, Moris calls, wall time, peak memory.
 
 Do not choose shortlist width by intuition.
+
+The validation harness should preserve enough metadata to answer **why** misses occur. In particular, classify candidates by blocker/unsupported reason so missing mechanics can be prioritized by actual ranking impact rather than implementation convenience.
 
 ## 10. Candidate-generator principles
 
@@ -424,11 +462,13 @@ Never commit:
 - local personal data;
 - temporary user fixtures derived from private accounts.
 
-Real account data used during development has been kept outside Git/File Library where applicable; Git tests should use synthetic/public/static fixtures.
+Real account data used during development must remain outside Git. Git tests should use synthetic/public/static fixtures.
 
 ### Moris calculator
 
 Moris is the authority and should remain intact. Do not casually change `calculator/` merely to make Fast match. If one character disagrees, inspect unique mechanics/data first.
+
+The discovered canonical `core_hit_count:N` matcher gap is a legitimate Moris issue, but fixing it is a separate explicit calculator change because it may alter real calculator results and snapshots.
 
 ## 12. Files to read in a fresh session
 
@@ -438,7 +478,17 @@ Read in this order:
 2. `docs/FAST_ENGINE_ARCHITECTURE.md` — architecture/performance contract;
 3. `fast_engine/research/LESSONS.md` — research lessons and anti-overfit rules;
 4. current branch HEAD and latest CI logs;
-5. active files for the next feature (`model.py`, `compiler.py`, `damage_state.py`, `score.py`, `weapon_events.py`, `dynamic_weapon.py`, relevant tests).
+5. ranking/candidate files under `optimizer/` plus `fast_engine/engine/score.py` and blocker/capability code needed by the validation harness.
+
+For core-specific debugging, also read:
+
+- `fast_engine/engine/core_events.py`;
+- `fast_engine/engine/burst_runtime.py`;
+- `fast_engine/tests/test_core_probability.py`;
+- `fast_engine/tests/test_core_hit_events.py`;
+- `fast_engine/tests/test_damage_core_hit_real_parity.py`;
+- `fast_engine/tests/test_damage_core_hit_buff_parity.py`;
+- `fast_engine/tests/test_damage_score_safety.py`.
 
 Do not rely on chat memory when Git/docs disagree.
 
