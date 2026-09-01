@@ -355,10 +355,16 @@ class BurstRuntime:
 
     def start(self, *, duration: float | None = None) -> None:
         self._broadcast(0.0, "battle_start")
-        # Moris finishes every ally battle_start notification before emitting
-        # one static enemy/target spawn notification per ally at the same t=0.
-        self._broadcast(0.0, "event:enemy_spawn")
-        self._broadcast(0.0, "event:target_spawn")
+        # Moris finishes every ally battle_start notification, then emits an
+        # enemy_spawn -> target_spawn pair for each ally in roster order.
+        from .burst import BurstSignal
+        for owner in range(len(self.squad.members)):
+            self.dispatcher.dispatch(
+                BurstSignal(0.0, "event:enemy_spawn", owner, owner)
+            )
+            self.dispatcher.dispatch(
+                BurstSignal(0.0, "event:target_spawn", owner, owner)
+            )
         self.machine.start(self.scheduler)
         horizon = (
             self.policy.duration
