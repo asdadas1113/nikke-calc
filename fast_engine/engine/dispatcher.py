@@ -14,6 +14,7 @@ from .triggers import TriggerMode
 
 if TYPE_CHECKING:
     from .burst import BurstMachine, BurstSignal
+    from .damage_runtime import SimpleDamageScoreSink
     from .model import CompiledEffect, CompiledSquad, EnemyStaticProfile
     from .scheduler import EventScheduler
 
@@ -29,7 +30,7 @@ class TriggerDispatcher:
 
     __slots__ = (
         "squad", "state", "enemy", "burst", "scheduler", "effects", "targets",
-        "conditions", "_effect_table", "_event_counts", "_conditional_counts",
+        "conditions", "damage_sink", "_effect_table", "_event_counts", "_conditional_counts",
         "_activation_counts", "_state_dependency_names",
     )
 
@@ -58,12 +59,14 @@ class TriggerDispatcher:
         enemy: "EnemyStaticProfile",
         burst: "BurstMachine",
         scheduler: "EventScheduler",
+        damage_sink: "SimpleDamageScoreSink | None" = None,
     ) -> None:
         self.squad = squad
         self.state = state
         self.enemy = enemy
         self.burst = burst
         self.scheduler = scheduler
+        self.damage_sink = damage_sink
         self.effects = ActiveEffectStore(squad, state)
         self.targets = TargetResolver(squad, state, self.effects, burst)
         self.conditions = ConditionEvaluator(squad, state, self.effects, enemy, burst)
@@ -79,7 +82,7 @@ class TriggerDispatcher:
         self._state_dependency_names = frozenset(
             rule.key
             for effect in self._effect_table
-            if self.is_executable_effect(effect)
+            if self.is_runtime_executable_effect(effect)
             for rule in effect.condition_rules
             if rule.mode in state_modes and rule.key
         )
@@ -123,6 +126,17 @@ class TriggerDispatcher:
 
     _is_executable = is_executable_effect
 
+    def is_runtime_executable_effect(self, effect: "CompiledEffect") -> bool:
+        """Return effects executable in this dispatcher instance.
+
+        Score-only damage support is deliberately opt-in through ``damage_sink``.
+        The static predicate above remains unchanged so existing burst/cadence
+        runtimes cannot silently widen merely because the score bridge exists.
+        """
+        if self.is_executable_effect(effect):
+            return True
+        return bool(self.damage_sink is not None and self.damage_sink.supports(effect))
+
     def _is_state_dependency(self, effect: "CompiledEffect") -> bool:
         """Track otherwise-unsupported named buffs needed by certified conditions."""
         return (
@@ -134,7 +148,7 @@ class TriggerDispatcher:
         )
 
     def can_activate_effect(self, effect: "CompiledEffect") -> bool:
-        return self.is_executable_effect(effect) or self._is_state_dependency(effect)
+        return self.is_runtime_executable_effect(effect) or self._is_state_dependency(effect)
 
     def _rule_matches(
         self,
@@ -236,6 +250,16 @@ class TriggerDispatcher:
                     )
                 else:
                     self.burst.set_stage_override(effect.actor, suffix)
+        elif effect.effect_type == "damage":
+            if self.damage_sink is None or not self.damage_sink.supports(effect):
+                return False
+            if not self.damage_sink.activate(
+                effect,
+                now=now,
+                targets=targets,
+                context=context,
+            ):
+                return False
         else:
             return False
 
