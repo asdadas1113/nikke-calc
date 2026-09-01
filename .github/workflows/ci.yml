@@ -53,6 +53,9 @@ jobs:
       - name: Fast — dispatch/burst runtime
         if: ${{ !cancelled() }}
         run: python -m unittest fast_engine.tests.test_dispatch_burst_runtime
+      - name: Fast — dynamic weapon signals
+        if: ${{ !cancelled() }}
+        run: python -m unittest fast_engine.tests.test_dynamic_weapon_signals
       - name: Fast — greenfield core
         if: ${{ !cancelled() }}
         run: python -m unittest fast_engine.tests.test_greenfield_core
