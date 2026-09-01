@@ -28,6 +28,25 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual([e.time for e in events], [0.125, 2.431, 2.431])
         self.assertEqual([e.payload for e in events[1:]], ["a", "b"])
 
+    def test_equal_time_events_follow_moris_frame_phases(self):
+        q = EventScheduler()
+        # Deliberately enqueue in the opposite order. Moris runs BuffManager.tick
+        # (expiry then every:N) before burst controller and weapon actors.
+        q.schedule(20.0, EventKind.WEAPON_BOUNDARY, payload="weapon")
+        q.schedule(20.0, EventKind.FULL_BURST_START, payload="burst")
+        q.schedule(20.0, EventKind.PERIODIC_TICK, payload="periodic")
+        q.schedule(20.0, EventKind.STATE_EXPIRE, payload="expiry")
+        self.assertEqual(
+            [q.pop().payload for _ in range(4)],
+            ["expiry", "periodic", "burst", "weapon"],
+        )
+
+    def test_equal_time_same_phase_remains_stable(self):
+        q = EventScheduler()
+        q.schedule(3.0, EventKind.BURST_READY, payload="first")
+        q.schedule(3.0, EventKind.BURST_ACTIVATE, payload="second")
+        self.assertEqual([q.pop().payload, q.pop().payload], ["first", "second"])
+
     def test_cannot_schedule_into_past(self):
         q = EventScheduler()
         q.schedule(1.0, EventKind.CUSTOM)

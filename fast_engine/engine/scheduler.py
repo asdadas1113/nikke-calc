@@ -22,9 +22,28 @@ class EventKind(IntEnum):
     CUSTOM = 100
 
 
+# Moris frame order is buff-manager tick -> burst controller -> weapon actors.
+# Only equal-time events use this phase key; continuous timestamps remain untouched.
+# Same-phase events still preserve insertion order through sequence.
+_EVENT_PHASE: dict[EventKind, int] = {
+    EventKind.STATE_EXPIRE: 0,
+    EventKind.PERIODIC_TICK: 10,
+    EventKind.BURST_READY: 20,
+    EventKind.BURST_ACTIVATE: 20,
+    EventKind.BURST_REENTER: 20,
+    EventKind.FULL_BURST_START: 20,
+    EventKind.FULL_BURST_END: 20,
+    EventKind.RELOAD_DONE: 30,
+    EventKind.WEAPON_BOUNDARY: 30,
+    EventKind.TRIGGER_BOUNDARY: 30,
+    EventKind.CUSTOM: 100,
+}
+
+
 @dataclass(order=True, slots=True)
 class ScheduledEvent:
     time: float
+    phase: int
     sequence: int
     kind: EventKind = field(compare=False)
     actor: int = field(compare=False, default=-1)
@@ -34,8 +53,10 @@ class ScheduledEvent:
 class EventScheduler:
     """Continuous-time stable priority queue.
 
-    There is deliberately no 1/60 s loop. Equal-time events preserve insertion
-    order so compiler/runtime decisions remain deterministic.
+    There is deliberately no 1/60 s loop. Equal-time events follow Moris'
+    semantic frame phases (expiry -> periodic -> burst -> weapon), then preserve
+    insertion order inside the same phase. This prevents activation-history from
+    accidentally deciding combat semantics.
     """
 
     __slots__ = ("_heap", "_sequence", "now")
@@ -54,7 +75,14 @@ class EventScheduler:
     def schedule(self, time: float, kind: EventKind, actor: int = -1, payload: Any = None) -> None:
         if time < self.now:
             raise ValueError(f"cannot schedule event in the past: now={self.now}, time={time}")
-        event = ScheduledEvent(float(time), self._sequence, kind, actor, payload)
+        event = ScheduledEvent(
+            float(time),
+            _EVENT_PHASE.get(kind, 100),
+            self._sequence,
+            kind,
+            actor,
+            payload,
+        )
         self._sequence += 1
         heapq.heappush(self._heap, event)
 
