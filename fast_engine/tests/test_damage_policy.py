@@ -23,6 +23,19 @@ class DamageEffectPolicyTests(unittest.TestCase):
         self.assertTrue(is_direct_damage_buff_runtime_supported(effect))
         self.assertTrue(TriggerDispatcher.is_executable_effect(effect))
 
+    def test_raw_full_charge_hit_without_every_hit_producer_fails_closed(self):
+        squad = compile_moris_squad(
+            build_squad(["리버렐리오", "미카", "아니스", "라피", "폴리"])
+        )
+        effect = next(
+            e for e in squad.members[0].effects
+            if e.name == "격류"
+            and any(rule.raw == "full_charge_hit" for rule in e.triggers)
+        )
+        self.assertEqual(effect.stat, "atk_dmg_pct")
+        self.assertFalse(is_direct_damage_buff_runtime_supported(effect))
+        self.assertFalse(TriggerDispatcher.is_executable_effect(effect))
+
     def test_gauge_condition_stays_fail_closed(self):
         squad = compile_moris_squad(
             build_squad(["나가", "리타", "크라운", "홍련", "앨리스"])
