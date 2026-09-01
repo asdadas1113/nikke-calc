@@ -99,9 +99,6 @@ class FirstCertifiedRealSquadParityProbe(unittest.TestCase):
         fast_seconds = perf_counter() - t1
         self.assertEqual(fast.unsupported, ())
 
-        # Re-run one Fast runtime with a recording sink. This does not use the
-        # optimizer; it records score-kernel invocations only and leaves the
-        # production score path untouched.
         recording = RecordingDamageSink(compiled, fast_enemy)
         runtime = BurstRuntime(
             compiled,
@@ -157,6 +154,43 @@ class FirstCertifiedRealSquadParityProbe(unittest.TestCase):
                 ],
             }
 
+        mihara_meta = []
+        for effect in compiled.effects:
+            if effect.actor != mihara_actor:
+                continue
+            trigger_rows = []
+            for rule in effect.triggers:
+                trigger_rows.append({
+                    "raw": rule.raw,
+                    "mode": rule.mode.value,
+                    "event_key": rule.event_key,
+                    "threshold": rule.threshold,
+                    "group": rule.group,
+                })
+            params = {}
+            for key in (
+                "gauge_id", "gauge_max", "scaling", "scaling_ref",
+                "target_effect", "tick_start",
+            ):
+                if key in effect.parameters:
+                    params[key] = effect.parameters[key]
+            mihara_meta.append({
+                "id": effect.effect_id,
+                "index": effect.actor_effect_index,
+                "name": effect.name,
+                "type": effect.effect_type,
+                "stat": effect.stat,
+                "target": effect.target,
+                "value": effect.value,
+                "duration": effect.duration,
+                "max_stack": effect.max_stack,
+                "tick_interval": effect.tick_interval,
+                "conditions": list(effect.conditions),
+                "triggers": trigger_rows,
+                "parameters": params,
+                "activation_count": int(runtime.dispatcher._activation_counts.get(effect.effect_id, 0)),
+            })
+
         report = {
             "moris_total": float(moris.squad_total),
             "fast_total": float(fast.squad_total),
@@ -166,6 +200,8 @@ class FirstCertifiedRealSquadParityProbe(unittest.TestCase):
             "speedup": moris_seconds / fast_seconds,
             "fast_mihara": fast_mihara,
             "moris_mihara": moris_skill_rows,
+            "mihara_compiled": mihara_meta,
+            "mihara_final_gauges": dict(runtime.state.actors[mihara_actor].gauges),
             "burst": {
                 "fast_count": len(runtime_result.full_burst_starts),
                 "moris_count": len([
@@ -178,7 +214,7 @@ class FirstCertifiedRealSquadParityProbe(unittest.TestCase):
             },
         }
         self.fail(
-            "INTENTIONAL_MIHARA_COUNT_VALUE_PROBE="
+            "INTENTIONAL_MIHARA_TRIGGER_PROBE="
             + json.dumps(report, ensure_ascii=False, sort_keys=True)
         )
 
