@@ -10,10 +10,12 @@ from .damage_events import (
     DamageEventSpec,
     FixedDotSpec,
     StackCountDamageSpec,
+    StackScaledDotSpec,
     compile_fixed_dot_damage_event,
     compile_pending_b3_bonus_damage_event,
     compile_simple_damage_event,
     compile_stack_count_damage_event,
+    compile_stack_scaled_dot_damage_event,
     expected_damage_event,
 )
 from .damage_state import DamageTermResolver
@@ -27,8 +29,6 @@ if TYPE_CHECKING:
     from .model import CompiledEffect, CompiledSquad, EnemyStaticProfile
 
 
-# Event sources that BurstRuntime currently produces exactly. Periodic has no
-# event_key and is checked by TriggerMode below.
 _SAFE_EVENT_KEYS = frozenset({
     "battle_start",
     "burst_cast",
@@ -56,6 +56,11 @@ _STACK_COUNT_SAFE_CONDITIONS = frozenset({
     ConditionMode.GAUGE_EQUAL,
     ConditionMode.GAUGE_MOD,
 })
+_PATTERNLESS_UNREACHABLE_STATE_EVENTS = frozenset({
+    "enemy_death",
+    "received_hit",
+    "event:self_down",
+})
 _DOT_EPS = 1e-9
 
 
@@ -67,22 +72,20 @@ class DotTickToken:
 
 
 class SimpleDamageScoreSink:
-    """Score fail-closed immediate, pending-B3 and fixed periodic damage.
+    """Score the currently certified event-driven skill-damage subset.
 
-    Immediate damage is one cached DamageTerms lookup + one expected DealForm ×
-    hit_count. Delayed B3 bonus damage is queued until full-burst entry. The first
-    DoT slice schedules only its meaningful damage ticks: no frame loop and no
-    per-frame polling. Reactivation invalidates old reservations by generation.
-
-    The first dynamic direct-damage slice supports Moris' non-DoT
-    ``scaling:stack_count`` only when the reference is a fully certified Fast
-    gauge family. Named-stack scaling and stack-scaled DoTs remain unsupported.
+    Fixed immediate damage, delayed B3 damage and fixed DoTs keep their existing
+    compressed paths. Dynamic direct ``stack_count`` damage is gauge-only. The
+    observable DoT slice mirrors Moris' named-state semantics: scaling_ref is
+    captured into the DoT's own stack at activation, stack operations mutate that
+    state, and named removal invalidates its future timer reservations.
     """
 
     __slots__ = (
         "squad", "enemy", "specs", "pending_specs", "dot_specs", "stack_specs",
-        "unsupported_effect_ids", "char_total", "runtime", "resolver",
-        "_pending_effect_ids", "_effect_actor", "_dot_generation",
+        "stateful_dot_specs", "unsupported_effect_ids", "char_total", "runtime",
+        "resolver", "_pending_effect_ids", "_effect_actor", "_dot_generation",
+        "_stateful_dot_names",
     )
 
     def __init__(self, squad: "CompiledSquad", enemy: "EnemyStaticProfile") -> None:
@@ -92,6 +95,7 @@ class SimpleDamageScoreSink:
         self.pending_specs: dict[int, DamageEventSpec] = {}
         self.dot_specs: dict[int, FixedDotSpec] = {}
         self.stack_specs: dict[int, StackCountDamageSpec] = {}
+        self.stateful_dot_specs: dict[int, StackScaledDotSpec] = {}
         self.unsupported_effect_ids: set[int] = set()
         self.char_total = [0.0] * len(squad.members)
         self.runtime: "BurstRuntime | None" = None
@@ -101,6 +105,7 @@ class SimpleDamageScoreSink:
             effect.effect_id: effect.actor for effect in squad.effects
         }
         self._dot_generation: dict[int, int] = {}
+        self._stateful_dot_names: dict[str, list[int]] = {}
 
         downstream_keys = set(squad.trigger_index.by_event)
         scaled_names = {
@@ -118,6 +123,7 @@ class SimpleDamageScoreSink:
             pending = None
             dot = None
             stack = None
+            stateful_dot = None
             if spec is None:
                 pending = compile_pending_b3_bonus_damage_event(
                     effect, squad.members[effect.actor]
@@ -127,12 +133,16 @@ class SimpleDamageScoreSink:
                     effect, squad.members[effect.actor]
                 )
             if spec is None and pending is None and stack is None:
+                stateful_dot = compile_stack_scaled_dot_damage_event(
+                    effect, squad.members[effect.actor]
+                )
+            if spec is None and pending is None and stack is None and stateful_dot is None:
                 dot = compile_fixed_dot_damage_event(
                     effect, squad.members[effect.actor]
                 )
 
             if (
-                (spec is None and pending is None and dot is None and stack is None)
+                (spec is None and pending is None and dot is None and stack is None and stateful_dot is None)
                 or not self._delivery_supported(effect)
             ):
                 self.unsupported_effect_ids.add(effect.effect_id)
@@ -150,6 +160,12 @@ class SimpleDamageScoreSink:
                     self.unsupported_effect_ids.add(effect.effect_id)
                     continue
                 self.stack_specs[effect.effect_id] = stack
+            elif stateful_dot is not None:
+                if not self._stateful_dot_shape_supported(effect, stateful_dot):
+                    self.unsupported_effect_ids.add(effect.effect_id)
+                    continue
+                self.stateful_dot_specs[effect.effect_id] = stateful_dot
+                self._stateful_dot_names.setdefault(effect.name, []).append(effect.effect_id)
             elif pending is not None:
                 if self._has_later_same_actor_burst_cast_buff(effect):
                     self.unsupported_effect_ids.add(effect.effect_id)
@@ -164,14 +180,18 @@ class SimpleDamageScoreSink:
                 assert spec is not None
                 self.specs[effect.effect_id] = spec
 
-    def _has_later_same_actor_burst_cast_buff(self, effect: "CompiledEffect") -> bool:
-        """Conservatively guard Moris' source-order exclusion rule.
+        # Observable DoTs are only safe when every reachable explicit mutator of
+        # that named state belongs to the narrow state-operation slice below.
+        for effect_id in tuple(self.stateful_dot_specs):
+            effect = squad.effects[effect_id]
+            if not self._stateful_dot_dependencies_supported(effect):
+                self.stateful_dot_specs.pop(effect_id, None)
+                ids = self._stateful_dot_names.get(effect.name, [])
+                if effect_id in ids:
+                    ids.remove(effect_id)
+                self.unsupported_effect_ids.add(effect_id)
 
-        Moris records names of later same-skill ``burst_cast`` buffs and excludes
-        them while firing the delayed B3 hit. Fast has no compiled exclusion mask
-        yet, so rejecting any later same-actor burst-cast buff is deliberately
-        broader but cannot over-credit the hit.
-        """
+    def _has_later_same_actor_burst_cast_buff(self, effect: "CompiledEffect") -> bool:
         return any(
             other.actor == effect.actor
             and other.actor_effect_index > effect.actor_effect_index
@@ -185,13 +205,6 @@ class SimpleDamageScoreSink:
         effect: "CompiledEffect",
         spec: StackCountDamageSpec,
     ) -> bool:
-        """Keep the first stack-count slice gauge-only and source-complete.
-
-        A declared gauge writer is required so a same-named buff cannot silently
-        take over Moris' ``ref_count`` fallback semantics. Whole-family safety is
-        checked again after BurstRuntime attaches because the dispatcher owns the
-        authoritative scan for unsupported reachable writers.
-        """
         if any(
             rule.mode not in _STACK_COUNT_SAFE_CONDITIONS
             for rule in effect.condition_rules
@@ -204,17 +217,11 @@ class SimpleDamageScoreSink:
             for other in self.squad.effects
         )
 
-    def _stack_count_runtime_supported(self, effect: "CompiledEffect") -> bool:
-        spec = self.stack_specs.get(effect.effect_id)
-        if spec is None:
-            return False
+    def _gauge_ref_runtime_supported(self, actor: int, ref: str) -> bool:
         runtime = self.runtime
         if runtime is None:
-            # TriggerDispatcher is built before attach(). This is provisional;
-            # once attached, every activation and final certification rechecks the
-            # dispatcher's whole-gauge fail-closed verdict.
             return True
-        family = (effect.actor, spec.ref)
+        family = (actor, ref)
         if family in runtime.dispatcher._unsafe_gauge_families:
             return False
         return any(
@@ -223,13 +230,151 @@ class SimpleDamageScoreSink:
             for other in self.squad.effects
         )
 
-    def _dot_state_is_observed(self, effect: "CompiledEffect") -> bool:
-        """Reject DoTs whose active debuff identity is part of other mechanics.
+    def _stack_count_runtime_supported(self, effect: "CompiledEffect") -> bool:
+        spec = self.stack_specs.get(effect.effect_id)
+        return bool(spec is not None and self._gauge_ref_runtime_supported(effect.actor, spec.ref))
 
-        Moris registers periodic damage in ActiveBuff as well as in its timer map.
-        This first Fast slice intentionally models only damage/timer semantics, so
-        any mechanic that reads/removes that named state must remain fail-closed.
-        """
+    @staticmethod
+    def _state_effect_patternless_unreachable(effect: "CompiledEffect") -> bool:
+        return (
+            bool(effect.triggers)
+            and all(
+                (rule.event_key or "") in _PATTERNLESS_UNREACHABLE_STATE_EVENTS
+                for rule in effect.triggers
+            )
+        )
+
+    @staticmethod
+    def _state_operation_shape_supported(effect: "CompiledEffect") -> bool:
+        stat = effect.stat or ""
+        if effect.effect_type != "instant" or stat not in {"debuff_stack_add", "remove_named_buff"}:
+            return False
+        if effect.target_spec.mode is not TargetMode.ENEMY:
+            return False
+        target_name = effect.parameters.get("target_effect")
+        if not isinstance(target_name, str) or not target_name:
+            return False
+        if not all(rule.is_runtime_supported for rule in effect.condition_rules):
+            return False
+        if not effect.triggers or any(
+            rule.event_key not in _SAFE_EVENT_KEYS for rule in effect.triggers
+        ):
+            return False
+        if stat == "debuff_stack_add":
+            if effect.parameters.get("scaling") is not None:
+                return False
+            if effect.value is None or float(effect.value) <= 0.0:
+                return False
+            if abs(float(effect.value) - round(float(effect.value))) > 1e-9:
+                return False
+        return True
+
+    def _stateful_dot_shape_supported(
+        self,
+        effect: "CompiledEffect",
+        spec: StackScaledDotSpec,
+    ) -> bool:
+        return (
+            bool(effect.name)
+            and (effect.polarity or "").startswith("harmful")
+            and spec.immediate
+            and all(rule.is_runtime_supported for rule in effect.condition_rules)
+        )
+
+    def _stateful_dot_dependencies_supported(self, effect: "CompiledEffect") -> bool:
+        name = effect.name
+        for other in self.squad.effects:
+            if other.effect_id == effect.effect_id:
+                continue
+            if other.parameters.get("target_effect") != name:
+                continue
+            if self._state_effect_patternless_unreachable(other):
+                continue
+            if not self._state_operation_shape_supported(other):
+                return False
+        return True
+
+    def _stateful_dot_runtime_supported(
+        self,
+        effect: "CompiledEffect",
+        seen: set[int] | None = None,
+    ) -> bool:
+        spec = self.stateful_dot_specs.get(effect.effect_id)
+        if spec is None:
+            return False
+        if self.runtime is None:
+            return True
+        seen = set() if seen is None else set(seen)
+        if effect.effect_id in seen:
+            return False
+        seen.add(effect.effect_id)
+
+        has_declared_gauge = any(
+            other.actor == effect.actor
+            and other.parameters.get("gauge_id") == spec.ref
+            and (other.stat or "") in {"gauge_charge", "gauge_consume", "gauge_max_add", "gauge_charge_enabled", "gauge_consume_as_ammo"}
+            for other in self.squad.effects
+        )
+        if has_declared_gauge:
+            return self._gauge_ref_runtime_supported(effect.actor, spec.ref)
+
+        ref_ids = self._stateful_dot_names.get(spec.ref, ())
+        for ref_id in ref_ids:
+            ref_effect = self.squad.effects[ref_id]
+            if ref_effect.actor != effect.actor:
+                continue
+            if self._stateful_dot_runtime_supported(ref_effect, seen):
+                return True
+        return False
+
+    def supports_state_operation(self, effect: "CompiledEffect") -> bool:
+        if not self._state_operation_shape_supported(effect):
+            return False
+        name = str(effect.parameters.get("target_effect") or "")
+        ids = self._stateful_dot_names.get(name, ())
+        if not ids:
+            return False
+        if self.runtime is None:
+            return True
+        return any(
+            self._stateful_dot_runtime_supported(self.squad.effects[effect_id])
+            for effect_id in ids
+        )
+
+    def activate_state_operation(
+        self,
+        effect: "CompiledEffect",
+        *,
+        now: float,
+        targets: tuple[int, ...],
+    ) -> bool:
+        runtime = self.runtime
+        if runtime is None or not self.supports_state_operation(effect):
+            return False
+        name = str(effect.parameters.get("target_effect") or "")
+        stat = effect.stat or ""
+        if stat == "debuff_stack_add":
+            delta = int(round(float(effect.value or 0.0)))
+            for target in targets:
+                runtime.dispatcher.effects.adjust_named_stack(
+                    target, name, delta, now=now
+                )
+            return True
+        if stat == "remove_named_buff":
+            removed: list[int] = []
+            for target in targets:
+                removed.extend(
+                    runtime.dispatcher.effects.remove_named_state(
+                        target, name, now=now
+                    )
+                )
+            for effect_id in removed:
+                if effect_id in self.stateful_dot_specs:
+                    self._dot_generation[effect_id] = self._dot_generation.get(effect_id, 0) + 1
+            return True
+        return False
+
+    def _dot_state_is_observed(self, effect: "CompiledEffect") -> bool:
         name = effect.name
         if not name:
             return False
@@ -267,6 +412,8 @@ class SimpleDamageScoreSink:
     def supports(self, effect: "CompiledEffect") -> bool:
         if effect.effect_id in self.stack_specs:
             return self._stack_count_runtime_supported(effect)
+        if effect.effect_id in self.stateful_dot_specs:
+            return self._stateful_dot_runtime_supported(effect)
         return (
             effect.effect_id in self.specs
             or effect.effect_id in self.pending_specs
@@ -289,8 +436,22 @@ class SimpleDamageScoreSink:
         stack = self.stack_specs.get(effect_id)
         if stack is not None:
             return stack.damage
+        stateful_dot = self.stateful_dot_specs.get(effect_id)
+        if stateful_dot is not None:
+            return stateful_dot.damage
         dot = self.dot_specs.get(effect_id)
         return None if dot is None else dot.damage
+
+    def _reference_count(self, actor: int, ref: str, *, now: float) -> int | None:
+        runtime = self.runtime
+        if runtime is None:
+            return None
+        gauges = runtime.state.actors[actor].gauges
+        if ref in gauges:
+            return int(gauges[ref])
+        if runtime.dispatcher.effects.has_named_state(ENEMY, ref, now=now):
+            return int(runtime.dispatcher.effects.named_stack(ENEMY, ref, now=now))
+        return None
 
     def _stack_count_hit_count(self, effect_id: int) -> int | None:
         spec = self.stack_specs.get(effect_id)
@@ -298,11 +459,21 @@ class SimpleDamageScoreSink:
         actor = self._effect_actor.get(effect_id)
         if spec is None or runtime is None or actor is None:
             return None
-        gauges = runtime.state.actors[actor].gauges
-        if spec.ref not in gauges:
-            # Moris leaves the default one hit in place when ref_count() is None.
-            return spec.damage.hit_count
-        return max(0, int(gauges[spec.ref]))
+        count = self._reference_count(actor, spec.ref, now=runtime.scheduler.now)
+        return spec.damage.hit_count if count is None else max(0, count)
+
+    def _stateful_effect_stack(self, effect_id: int, *, now: float) -> float:
+        runtime = self.runtime
+        if runtime is None:
+            return 0.0
+        values = [
+            active.stacks
+            for active in runtime.dispatcher.effects._active.values()
+            if active.effect_id == effect_id
+            and active.target == ENEMY
+            and active.active(now)
+        ]
+        return max(values, default=0.0)
 
     def _score_spec(
         self,
@@ -318,10 +489,13 @@ class SimpleDamageScoreSink:
         if spec is None or runtime is None or resolver is None or actor is None:
             return False
         hit_count = None
+        coeff_multiplier = 1.0
         if effect_id in self.stack_specs:
             hit_count = self._stack_count_hit_count(effect_id)
             if hit_count is None:
                 return False
+        if effect_id in self.stateful_dot_specs:
+            coeff_multiplier = self._stateful_effect_stack(effect_id, now=now)
         terms = resolver.resolve(actor, now=now)
         self.char_total[actor] += expected_damage_event(
             spec,
@@ -330,25 +504,30 @@ class SimpleDamageScoreSink:
             terms,
             full_burst=full_burst,
             hit_count=hit_count,
+            coeff_multiplier=coeff_multiplier,
         )
         return True
 
     @staticmethod
-    def _dot_tick_allowed(spec: FixedDotSpec, tick_t: float, expires_at: float) -> bool:
+    def _dot_tick_allowed(spec, tick_t: float, expires_at: float) -> bool:
         if spec.immediate:
             return tick_t < expires_at - _DOT_EPS
         return tick_t <= expires_at + _DOT_EPS
 
-    def _activate_dot(self, effect_id: int, *, now: float) -> bool:
-        spec = self.dot_specs.get(effect_id)
+    def _schedule_dot(
+        self,
+        effect_id: int,
+        *,
+        now: float,
+        spec,
+    ) -> bool:
         runtime = self.runtime
         actor = self._effect_actor.get(effect_id)
-        if spec is None or runtime is None or actor is None:
+        if runtime is None or actor is None:
             return False
-
         generation = self._dot_generation.get(effect_id, 0) + 1
         self._dot_generation[effect_id] = generation
-        expires_at = float(now) + spec.duration
+        expires_at = inf if spec.duration == -1 else float(now) + spec.duration
         first_t = float(now) if spec.immediate else float(now) + spec.interval
         if self._dot_tick_allowed(spec, first_t, expires_at):
             runtime.scheduler.schedule(
@@ -359,6 +538,34 @@ class SimpleDamageScoreSink:
             )
         return True
 
+    def _activate_dot(self, effect_id: int, *, now: float) -> bool:
+        spec = self.dot_specs.get(effect_id)
+        if spec is None:
+            return False
+        return self._schedule_dot(effect_id, now=now, spec=spec)
+
+    def _activate_stateful_dot(
+        self,
+        effect: "CompiledEffect",
+        *,
+        now: float,
+        targets: tuple[int, ...],
+    ) -> bool:
+        spec = self.stateful_dot_specs.get(effect.effect_id)
+        runtime = self.runtime
+        if spec is None or runtime is None or not self._stateful_dot_runtime_supported(effect):
+            return False
+        captured = self._reference_count(effect.actor, spec.ref, now=now)
+        initial_stack = 1 if captured is None else captured
+        runtime.dispatcher.effects.activate_group_scaled(
+            effect,
+            targets,
+            now,
+            runtime.scheduler,
+            initial_stacks=initial_stack,
+        )
+        return self._schedule_dot(effect.effect_id, now=now, spec=spec)
+
     def activate(
         self,
         effect: "CompiledEffect",
@@ -367,22 +574,22 @@ class SimpleDamageScoreSink:
         targets: tuple[int, ...],
         context: SignalContext,
     ) -> bool:
-        del context  # reserved for future crit/core trigger chaining
+        del context
         if ENEMY not in targets:
             return False
         if effect.effect_id in self.stack_specs and not self._stack_count_runtime_supported(effect):
             return False
-
+        if effect.effect_id in self.stateful_dot_specs:
+            return self._activate_stateful_dot(
+                effect,
+                now=now,
+                targets=targets,
+            )
         if effect.effect_id in self.pending_specs:
-            # Moris postpones B3 bonus damage until the full-burst entry event.
-            # Preserve duplicate activations if future burst patterns legitimately
-            # produce more than one pending cast before entry.
             self._pending_effect_ids.append(effect.effect_id)
             return True
-
         if effect.effect_id in self.dot_specs:
             return self._activate_dot(effect.effect_id, now=now)
-
         return self._score_spec(
             effect.effect_id,
             now=now,
@@ -390,11 +597,10 @@ class SimpleDamageScoreSink:
         )
 
     def handle_scheduled_tick(self, event: ScheduledEvent) -> bool:
-        """Score one current DoT timer boundary and reserve its next tick."""
         token = event.payload
         if not isinstance(token, DotTickToken):
             return False
-        spec = self.dot_specs.get(token.effect_id)
+        spec = self.dot_specs.get(token.effect_id) or self.stateful_dot_specs.get(token.effect_id)
         runtime = self.runtime
         if spec is None or runtime is None:
             return False
@@ -403,9 +609,6 @@ class SimpleDamageScoreSink:
         if not self._dot_tick_allowed(spec, event.time, token.expires_at):
             return False
 
-        # Moris type-2 DoT includes the tick exactly at expiry but evaluates it
-        # with the immediately-pre-expiry buff state. Event ordering alone is not
-        # sufficient because DamageTermResolver excludes t >= expires_at buffs.
         eval_time = float(event.time)
         if not spec.immediate and event.time >= token.expires_at - _DOT_EPS:
             eval_time = nextafter(float(token.expires_at), -inf)
@@ -429,7 +632,6 @@ class SimpleDamageScoreSink:
         return True
 
     def flush_pending_burst(self, *, now: float) -> int:
-        """Fire queued B3 bonus damage after full-burst-start state is active."""
         if not self._pending_effect_ids:
             return 0
         queued = tuple(self._pending_effect_ids)
@@ -447,6 +649,7 @@ class SimpleDamageScoreSink:
             + len(self.pending_specs)
             + len(self.dot_specs)
             + len(self.stack_specs)
+            + len(self.stateful_dot_specs)
         )
 
     @property
