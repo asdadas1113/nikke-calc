@@ -95,6 +95,11 @@ _SAFE_EVENT_KEYS = frozenset({
     "full_burst_start",
     "full_burst_end",
     "event:ally_burst_cast",
+    # Moris emits last_bullet only after the final round's damage/hit processing.
+    # Fast TRIGGER_BOUNDARY scoring has the same post-shot phase, so this timing
+    # is safe. last_bullet_fire is intentionally NOT aliased here: it is a
+    # distinct pre-shot signal in Moris and needs separate pre-shot semantics.
+    "last_bullet",
 })
 
 
