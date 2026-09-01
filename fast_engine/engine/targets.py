@@ -36,6 +36,7 @@ class TargetMode(str, Enum):
     BURST_CASTED_WEAPON = "burst_casted_weapon"
     TOP_ATK = "top_atk"
     TOP_ATK_EXCL_SELF = "top_atk_excl_self"
+    LOWEST_ATK_BURST3 = "lowest_atk_burst3"
     LOWEST_HP = "lowest_hp"
     LOWEST_HP_EXCL_SELF = "lowest_hp_excl_self"
     TOP_DEF = "top_def"
@@ -117,6 +118,12 @@ def compile_target(raw: Any, *, actor_by_name: dict[str, int]) -> TargetSpec:
     if raw.startswith("allies_burst3"):
         return TargetSpec(raw, TargetMode.BURST3)
 
+    if raw.startswith("allies_lowest_atk_burst3:"):
+        return TargetSpec(
+            raw,
+            TargetMode.LOWEST_ATK_BURST3,
+            count=_counted(raw, "allies_lowest_atk_burst3:"),
+        )
     if raw.startswith("allies_top_atk_excl:"):
         return TargetSpec(
             raw, TargetMode.TOP_ATK_EXCL_SELF, count=_counted(raw, "allies_top_atk_excl:")
@@ -147,6 +154,7 @@ def compile_target(raw: Any, *, actor_by_name: dict[str, int]) -> TargetSpec:
 _SHARED_SELECTION_MODES = frozenset({
     TargetMode.TOP_ATK,
     TargetMode.TOP_ATK_EXCL_SELF,
+    TargetMode.LOWEST_ATK_BURST3,
     TargetMode.LOWEST_HP,
     TargetMode.LOWEST_HP_EXCL_SELF,
     TargetMode.TOP_DEF,
@@ -280,6 +288,20 @@ class TargetResolver:
                 if mode is TargetMode.TOP_ATK or i != owner_actor
             ]
             cand.sort(key=lambda i: (-self.effects.effective_atk(i, now=now), i))
+            return self._remember(
+                spec,
+                owner_actor=owner_actor,
+                now=now,
+                targets=tuple(cand[: max(0, spec.count or 0)]),
+            )
+        if mode is TargetMode.LOWEST_ATK_BURST3:
+            # Moris uses parsed_nikke's base B3 stage here, not live stage
+            # overrides, then ranks by current effective ATK ascending.
+            cand = [
+                i for i, member in enumerate(self.squad.members)
+                if member.burst_stage == "3"
+            ]
+            cand.sort(key=lambda i: (self.effects.effective_atk(i, now=now), i))
             return self._remember(
                 spec,
                 owner_actor=owner_actor,
