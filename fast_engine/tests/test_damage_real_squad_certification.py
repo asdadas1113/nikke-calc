@@ -11,6 +11,7 @@ from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
 from fast_engine.engine.last_bullet import simulate_static_last_bullet_boundaries
 from fast_engine.engine.model import EnemyStaticProfile
 from fast_engine.engine.score import score_static_squad, static_score_blockers
+from fast_engine.engine.state import ENEMY
 
 
 NAMES = [
@@ -25,10 +26,6 @@ CONFIG = {
     "first_burst_time": 3.0,
     "rng_mode": "expected",
 }
-EXPECTED_MIHARA_GAPS = (
-    "skill_damage:미하라 : 본딩 체인:사슬 감기:dot_damage",
-    "skill_damage:미하라 : 본딩 체인:사슬 당기기:dot_damage",
-)
 
 
 class RealSquadCertificationTests(unittest.TestCase):
@@ -46,18 +43,14 @@ class RealSquadCertificationTests(unittest.TestCase):
         )
         return moris_squad, compiled, policy, enemy
 
-    def test_control_miranda_mihara_reaches_only_explicit_mihara_dot_gaps(self):
+    def test_control_miranda_mihara_is_first_fully_certified_real_squad(self):
         _moris_squad, compiled, policy, enemy = self._fixture()
 
-        # Helm last_bullet, Rouge back_row delivery, Mihara gauge state and the
-        # direct stack-count hit are now certified. The two linked DoT states are
-        # still explicit gaps rather than being mistaken for complete coverage.
         self.assertEqual(static_score_blockers(compiled), ())
-
         score = score_static_squad(compiled, policy, enemy)
         self.assertGreater(score.squad_total, 0.0)
         self.assertGreater(score.events_processed, 0)
-        self.assertEqual(score.unsupported, EXPECTED_MIHARA_GAPS)
+        self.assertEqual(score.unsupported, ())
 
     def test_mihara_body_contact_uses_live_gauge_as_direct_hit_count(self):
         moris_squad, compiled, _policy, enemy = self._fixture()
@@ -99,10 +92,104 @@ class RealSquadCertificationTests(unittest.TestCase):
             )
         )
         three_stack = sink.char_total[4] - before
-
-        # Moris non-DoT scaling:stack_count is N physical hits, not a coefficient
-        # multiplier. Expected-value damage is linear here, so 3 gauge = 3 hits.
         self.assertAlmostEqual(three_stack, one_stack * 3.0, places=6)
+
+    def test_mihara_dot_chain_captures_mutates_and_survives_named_removal(self):
+        moris_squad, compiled, _policy, enemy = self._fixture()
+        policy = compile_burst_policy(
+            moris_squad,
+            compiled,
+            {**CONFIG, "duration": 5.0},
+        )
+        sink = SimpleDamageScoreSink(compiled, enemy)
+        runtime = BurstRuntime(compiled, policy, enemy, damage_sink=sink)
+        mihara = [effect for effect in compiled.effects if effect.actor == 4]
+        chain = next(effect for effect in mihara if effect.name == "사슬 감기")
+        pull = next(effect for effect in mihara if effect.name == "사슬 당기기")
+        stack_add = next(
+            effect
+            for effect in mihara
+            if (effect.stat or "") == "debuff_stack_add"
+            and effect.parameters.get("target_effect") == "사슬 감기"
+            and any(rule.event_key == "hit_count" for rule in effect.triggers)
+        )
+        remove = next(
+            effect
+            for effect in mihara
+            if (effect.stat or "") == "remove_named_buff"
+            and effect.parameters.get("target_effect") == "사슬 감기"
+        )
+
+        self.assertTrue(sink.supports(chain))
+        self.assertTrue(sink.supports(pull))
+        self.assertTrue(sink.supports_state_operation(stack_add))
+        self.assertTrue(sink.supports_state_operation(remove))
+
+        runtime.state.set_gauge(4, "포획 사슬", 10.0)
+        self.assertTrue(
+            runtime.dispatcher._activate(
+                chain,
+                now=0.0,
+                context=SignalContext(),
+            )
+        )
+        self.assertTrue(
+            runtime.dispatcher.effects.has_named_state(
+                ENEMY, "사슬 감기", now=0.0
+            )
+        )
+        self.assertEqual(
+            runtime.dispatcher.effects.named_stack(ENEMY, "사슬 감기", now=0.0),
+            10.0,
+        )
+
+        # The real hit_count:40 mutator is normally gated by full burst. Its state
+        # operation itself is tested directly here so the stack semantic is not
+        # entangled with weapon timing in this unit.
+        self.assertTrue(
+            sink.activate_state_operation(
+                stack_add,
+                now=0.1,
+                targets=(ENEMY,),
+            )
+        )
+        self.assertEqual(
+            runtime.dispatcher.effects.named_stack(ENEMY, "사슬 감기", now=0.1),
+            11.0,
+        )
+
+        # Chain Pull captures the current 11-stack Chain Wind into its own DoT.
+        self.assertTrue(
+            runtime.dispatcher._activate(
+                pull,
+                now=0.2,
+                context=SignalContext(),
+            )
+        )
+        self.assertEqual(
+            runtime.dispatcher.effects.named_stack(ENEMY, "사슬 당기기", now=0.2),
+            11.0,
+        )
+
+        # The following real burst-cast state operation removes Chain Wind only.
+        # Chain Pull must retain its captured stack and continue its finite timer.
+        self.assertTrue(
+            runtime.dispatcher._activate(
+                remove,
+                now=0.2,
+                context=SignalContext(),
+            )
+        )
+        self.assertFalse(
+            runtime.dispatcher.effects.has_named_state(
+                ENEMY, "사슬 감기", now=0.2
+            )
+        )
+        self.assertEqual(
+            runtime.dispatcher.effects.named_stack(ENEMY, "사슬 당기기", now=0.2),
+            11.0,
+        )
+        self.assertTrue(sink.supports(pull))
 
     def test_real_helm_last_bullet_still_activates_on_dynamic_charge_score_path(self):
         moris_squad, compiled, _policy, enemy = self._fixture()
@@ -126,8 +213,6 @@ class RealSquadCertificationTests(unittest.TestCase):
             {**CONFIG, "duration": first + 0.01},
         )
 
-        # score_static_squad attaches this sink before BurstRuntime decides which
-        # charge actors need per-shot signal production. Mirror that exact path.
         sink = SimpleDamageScoreSink(compiled, enemy)
         runtime = BurstRuntime(compiled, policy, enemy, damage_sink=sink)
         runtime.run(duration=first + 0.01)
