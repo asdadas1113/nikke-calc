@@ -70,7 +70,7 @@ def _weapon_view(name: str, meta: dict[str, Any], char: dict[str, Any]) -> dict[
         "cover_during_delay": bool(delay_exc.get("cover_during_delay", False)),
         "charge_time": charge_time,
         "pellets": int(_pick("pellets", delay_exc, meta, mech, default=1)),
-        "muzzles": int(_pick("muzzles", delay_exc, meta, mech, default=1)),
+        "muzzles": int(_pick("muzzles", delay_exc, meta, default=1)),
         "is_clip": name in clip_chars,
         "damage_coeff": float(meta.get("damage_coeff") or 0.0),
         "core_dmg_mult": float(meta.get("core_dmg_mult") or 200.0),
@@ -120,16 +120,30 @@ def _parameters(effect: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _promote_exact_last_bullet_capability(capability, timings):
-    """Certify only exact `last_bullet_fire` when timing is the sole blocker.
+def _promote_exact_last_bullet_capability(capability, timings, effect, owner_meta):
+    """Certify the first fail-closed slice of exact `last_bullet_fire`.
 
-    The broad `weapon_hit` family remains PLANNED. Runtime support is deliberately
-    narrower: static cadence can expose the magazine-ending shot without creating
-    every-shot global events. Dynamic charge + last-bullet interaction still
-    fails closed in BurstRuntime until one weapon boundary can emit both signals.
+    Moris charge weapons emit `last_bullet_fire` when the final charge *starts*,
+    not when that projectile later fires, so charge mode stays PLANNED. Likewise,
+    a last-bullet effect that changes weapon cadence would invalidate precompiled
+    future magazine boundaries. For now only non-charge instant burst CDR is
+    certified; the broad weapon-hit family and cadence-mutating last-bullet buffs
+    remain PLANNED until dynamic multi-signal weapon boundaries exist.
     """
+    weapon_type = str(owner_meta.get("weapon_type") or "")
+    fire_mode = str(
+        owner_meta.get("fire_mode")
+        or _MECHANICS.get("weapon_type_defaults", {}).get(weapon_type, {}).get("type")
+        or ""
+    )
+    safe_effect = (
+        fire_mode in {"auto", "auto_warmup"}
+        and effect.get("type") == "instant"
+        and effect.get("stat") == "burst_cooldown_reduce"
+    )
     if (
-        capability.disposition is CapabilityDisposition.PLANNED
+        safe_effect
+        and capability.disposition is CapabilityDisposition.PLANNED
         and capability.blockers == ("timing:weapon_hit",)
         and timings
         and all(rule.raw == "last_bullet_fire" for rule in timings)
@@ -145,11 +159,11 @@ def _promote_exact_last_bullet_capability(capability, timings):
 def compile_moris_squad(squad: list[dict], *, require_five: bool = True) -> CompiledSquad:
     """Compile already-built Moris character dicts into immutable Fast input.
 
-    Input assembly remains Moris-owned (`context.spec.build_squad`).  Effect
+    Input assembly remains Moris-owned (`context.spec.build_squad`). Effect
     expansion is also Moris-owned at this boundary: the compile-only bridge uses
     the exact BuffManager registration path so overload/equipment, cube,
     collection, manual stats and favorite-stage skill variants cannot silently
-    disappear.  The Fast combat runtime itself never instantiates BuffManager.
+    disappear. The Fast combat runtime itself never instantiates BuffManager.
     """
 
     if require_five and len(squad) != 5:
@@ -196,7 +210,9 @@ def compile_moris_squad(squad: list[dict], *, require_five: bool = True) -> Comp
             root=_ROOT,
             character_names=char_names,
         )
-        capability = _promote_exact_last_bullet_capability(capability, timings)
+        capability = _promote_exact_last_bullet_capability(
+            capability, timings, effect, meta_by_actor[actor]
+        )
         effects_by_actor[actor].append(
             CompiledEffect(
                 effect_id=effect_id,
