@@ -30,7 +30,7 @@ class HelmTenShotLifetimeTests(unittest.TestCase):
         self.assertEqual(helm.value, 158.4)
         self.assertTrue(is_direct_damage_buff_runtime_supported(helm))
 
-        state = StateStore(compiled)
+        state = StateStore.from_compiled_squad(compiled)
         scheduler = EventScheduler()
         burst = BurstMachine(compiled)
         dispatcher = TriggerDispatcher(
@@ -75,7 +75,7 @@ class HelmTenShotLifetimeTests(unittest.TestCase):
             e for e in compiled.effects
             if e.actor == 2 and e.name == "이지스 캐논 3" and e.stat == "charge_dmg_mag_pct"
         )
-        state = StateStore(compiled)
+        state = StateStore.from_compiled_squad(compiled)
         scheduler = EventScheduler()
         dispatcher = TriggerDispatcher(
             compiled,
@@ -92,7 +92,6 @@ class HelmTenShotLifetimeTests(unittest.TestCase):
         self.assertTrue(dispatcher._activate(helm, now=refresh, context=SignalContext()))
         second_expiry = scheduler.pop()
 
-        # The stale first token cannot remove the refreshed generation.
         dispatcher.handle_expiry(first_expiry)
         self.assertGreater(
             dispatcher.effects.sum_stat(2, "charge_dmg_mag_pct", now=first_expiry.time),
