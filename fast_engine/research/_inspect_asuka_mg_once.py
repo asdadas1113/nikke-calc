@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from context.spec import build_squad
 from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.dispatcher import TriggerDispatcher
@@ -25,27 +27,27 @@ unsafe_events = frozenset({
 })
 for actor in score._possible_ally_targets(squad, effect):
     member = squad.members[actor]
-    weapon_change = [
-        e.name for e in squad.effects
-        if e.effect_type == "weapon_change" and actor in score._possible_ally_targets(squad, e)
-    ]
-    global_body = any(
-        TriggerDispatcher.is_executable_effect(e)
-        and any(rule.event_key == "squad_body_hit" for rule in e.triggers)
-        for e in squad.effects
-    )
     print(
         "TARGET",
         actor,
         member.name,
         "mode=", member.weapon.get("fire_mode"),
-        "control=", member.weapon.get("control"),
-        "clip=", member.weapon.get("is_clip"),
-        "cover_delay=", member.weapon.get("cover_during_delay"),
         "rapid_safe=", score._rapid_actor_score_safe(squad, actor),
-        "core=", score._actor_has_executable_core_count(squad, actor),
-        "unsafe_event=", score._actor_has_executable_event(squad, actor, unsafe_events),
-        "unhandled_count=", score._actor_has_unhandled_count_event(squad, actor, frozenset({"hit_count", "pellet_hit"})),
-        "weapon_change=", weapon_change,
-        "global_body=", global_body,
     )
+
+for path in ("calculator/buff_manager.py", "calculator/timeline.py", "fast_engine/engine/dispatcher.py", "fast_engine/engine/effects.py"):
+    text = Path(path).read_text(encoding="utf-8")
+    lines = text.splitlines()
+    print(f"=== {path} state_end contexts ===")
+    found = False
+    for idx, line in enumerate(lines):
+        if "state_end" not in line:
+            continue
+        found = True
+        lo = max(0, idx - 8)
+        hi = min(len(lines), idx + 12)
+        print(f"--- lines {lo + 1}-{hi} ---")
+        for j in range(lo, hi):
+            print(f"{j + 1:05d}: {lines[j]}")
+    if not found:
+        print("<none>")
