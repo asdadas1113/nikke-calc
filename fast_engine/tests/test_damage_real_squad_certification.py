@@ -12,6 +12,7 @@ from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
 from fast_engine.engine.last_bullet import simulate_static_last_bullet_boundaries
 from fast_engine.engine.model import EnemyStaticProfile
 from fast_engine.engine.score import score_static_squad, static_score_blockers
+from fast_engine.engine.shot_blocks import next_static_shot_after
 from fast_engine.engine.state import ENEMY
 
 NAMES = ["미란다", "브리드 : 사일런트 트랙", "헬름", "루주", "미하라 : 본딩 체인"]
@@ -34,7 +35,7 @@ class RealSquadCertificationTests(unittest.TestCase):
         with self.assertRaisesRegex(NotImplementedError, "control:미하라 : 본딩 체인"):
             score_static_squad(compiled, policy, enemy)
 
-    def test_miranda_wakeup_one_shot_crit_fails_closed_without_control_noise(self):
+    def test_miranda_wakeup_one_shot_crit_expires_after_recipient_shot(self):
         moris = build_squad(NAMES)
         # Remove the independently unsupported Mihara cover control so this test
         # isolates Miranda's target-side one-shot lifetime.
@@ -44,15 +45,67 @@ class RealSquadCertificationTests(unittest.TestCase):
             e for e in compiled.effects
             if e.name == "웨이크업! 4" and e.stat == "crit_rate"
         )
+        policy = compile_burst_policy(moris, compiled, {**CONFIG, "duration": 5.0})
+        enemy = EnemyStaticProfile(
+            defense=31784.0,
+            element=None,
+            core_uptime=0.0,
+            core_px=0.0,
+            duration=5.0,
+        )
 
         self.assertEqual(wakeup.parameters.get("duration_bullets"), 1)
         self.assertIsNone(wakeup.duration)
         self.assertEqual(wakeup.target, "allies_top_atk_excl:1")
-        self.assertFalse(is_direct_damage_buff_runtime_supported(wakeup))
-        self.assertIn(
+        self.assertTrue(is_direct_damage_buff_runtime_supported(wakeup))
+        blockers = static_score_blockers(compiled)
+        self.assertNotIn(
             "normal_delivery:미란다:웨이크업! 4:crit_rate",
-            static_score_blockers(compiled),
+            blockers,
         )
+        self.assertNotIn(
+            "skill_state_delivery:미란다:웨이크업! 4:crit_rate",
+            blockers,
+        )
+
+        timing_probe = BurstRuntime(compiled, policy, enemy)
+        result = timing_probe.run(duration=5.0)
+        self.assertTrue(result.full_burst_starts)
+        full_burst_start = result.full_burst_starts[0]
+
+        active_runtime = BurstRuntime(compiled, policy, enemy)
+        active_runtime.run(duration=full_burst_start + 1e-6)
+        active_rows = [
+            active
+            for effect, active in active_runtime.dispatcher.effects.iter_stat(
+                "crit_rate", now=full_burst_start + 1e-7
+            )
+            if effect.effect_id == wakeup.effect_id
+        ]
+        self.assertEqual(len(active_rows), 1)
+        recipient = active_rows[0].target
+        self.assertGreater(
+            active_runtime.dispatcher.effects.sum_stat(
+                recipient, "crit_rate", now=full_burst_start + 1e-7
+            ),
+            0.0,
+        )
+
+        consuming_shot = next_static_shot_after(
+            compiled, recipient, full_burst_start
+        )
+        self.assertGreater(consuming_shot, full_burst_start)
+
+        expired_runtime = BurstRuntime(compiled, policy, enemy)
+        expired_runtime.run(duration=consuming_shot + 1e-6)
+        lingering = [
+            active
+            for effect, active in expired_runtime.dispatcher.effects.iter_stat(
+                "crit_rate", now=consuming_shot + 1e-7
+            )
+            if effect.effect_id == wakeup.effect_id
+        ]
+        self.assertEqual(lingering, [])
 
     def test_mihara_body_contact_uses_live_gauge_as_hit_count(self):
         moris, compiled, _policy, enemy = self._fixture()
