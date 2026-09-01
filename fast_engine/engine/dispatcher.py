@@ -114,12 +114,13 @@ class TriggerDispatcher:
             family = self._gauge_family(effect)
             stat = effect.stat or ""
             if family is None:
-                gauge_id = effect.parameters.get("gauge_id")
-                if gauge_id and stat in self._GAUGE_ADVANCED_STATS:
-                    unsafe_gauges.add((effect.actor, str(gauge_id)))
                 continue
-            if not self._gauge_shape_supported(effect) and not self._gauge_patternless_unreachable(effect):
+            if stat in self._GAUGE_ADVANCED_STATS:
                 unsafe_gauges.add(family)
+                continue
+            if stat in self._GAUGE_STATS:
+                if not self._gauge_shape_supported(effect) and not self._gauge_patternless_unreachable(effect):
+                    unsafe_gauges.add(family)
         self._unsafe_gauge_families = frozenset(unsafe_gauges)
 
         state_modes = {
@@ -137,19 +138,25 @@ class TriggerDispatcher:
 
     @classmethod
     def _gauge_family(cls, effect: "CompiledEffect") -> tuple[int, str] | None:
-        if effect.effect_type != "instant" or (effect.stat or "") not in cls._GAUGE_STATS:
+        stat = effect.stat or ""
+        if stat not in cls._GAUGE_STATS and stat not in cls._GAUGE_ADVANCED_STATS:
             return None
         gauge_id = effect.parameters.get("gauge_id")
         if not isinstance(gauge_id, str) or not gauge_id:
-            return None
-        if effect.target_spec.mode is not TargetMode.SELF:
             return None
         return effect.actor, gauge_id
 
     @classmethod
     def _gauge_shape_supported(cls, effect: "CompiledEffect") -> bool:
         family = cls._gauge_family(effect)
-        if family is None or effect.value is None or not effect.triggers:
+        if (
+            family is None
+            or effect.effect_type != "instant"
+            or (effect.stat or "") not in cls._GAUGE_STATS
+            or effect.target_spec.mode is not TargetMode.SELF
+            or effect.value is None
+            or not effect.triggers
+        ):
             return False
         value = float(effect.value)
         if (effect.stat or "") == "gauge_charge" and value < 0.0:
@@ -176,6 +183,7 @@ class TriggerDispatcher:
     def _gauge_patternless_unreachable(cls, effect: "CompiledEffect") -> bool:
         return (
             cls._gauge_family(effect) is not None
+            and (effect.stat or "") in cls._GAUGE_STATS
             and bool(effect.triggers)
             and all(
                 (rule.event_key or "") in cls._PATTERNLESS_UNREACHABLE_GAUGE_EVENTS
@@ -344,7 +352,11 @@ class TriggerDispatcher:
                         self.burst.adjust_cooldown(target, value, now, self.scheduler)
             elif stat in self._GAUGE_STATS:
                 family = self._gauge_family(effect)
-                if family is None or family in self._unsafe_gauge_families:
+                if (
+                    family is None
+                    or family in self._unsafe_gauge_families
+                    or not self._gauge_shape_supported(effect)
+                ):
                     return False
                 gauge_id = family[1]
                 for target in targets:
