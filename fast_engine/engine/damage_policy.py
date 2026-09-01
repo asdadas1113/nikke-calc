@@ -56,6 +56,10 @@ _SAFE_CONDITIONS = frozenset({
     ConditionMode.SELF_STACK_AT_LEAST,
     ConditionMode.TARGET_STACK_AT_LEAST,
     ConditionMode.TARGET_CODE,
+    # Static roster positions never change during a ranking simulation. Moris
+    # defines back_row as slot 2/4 (zero-based actor indices 1/3), exactly what
+    # ConditionEvaluator.BACK_ROW already evaluates.
+    ConditionMode.BACK_ROW,
     ConditionMode.SQUAD_ALLY_EXISTS,
     ConditionMode.HAS_BURST1_ALLY,
     ConditionMode.NO_BURST1_ALLY,
