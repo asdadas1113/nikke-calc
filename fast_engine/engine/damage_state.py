@@ -47,12 +47,8 @@ class DamageTermResolver:
     def _sum(self, actor: int, stat: str, now: float) -> float:
         return self.effects.sum_stat(actor, stat, now=now)
 
-    def _personal_enemy_sum(self, actor: int, stat: str, now: float) -> float:
-        total = 0.0
-        for effect, active in self.effects.iter_stat(stat, now=now):
-            if active.target == ENEMY and active.source_actor == actor:
-                total += float(effect.value or 0.0) * active.stacks
-        return total
+    def _sum_aliases(self, actor: int, stats: tuple[str, ...], now: float) -> float:
+        return sum(self._sum(actor, stat, now) for stat in stats)
 
     def _caster_based_atk_flat(self, actor: int, now: float) -> float:
         total = 0.0
@@ -74,12 +70,13 @@ class DamageTermResolver:
         general_crit_dmg = self._sum(actor, "crit_dmg", now)
         normal_crit_dmg = self._sum(actor, "normal_atk_crit_dmg", now)
 
-        enemy_def_down = self.effects.sum_stat(ENEMY, "enemy_def_down_pct", now=now)
-        enemy_def_down += self._personal_enemy_sum(
-            actor, "personal_enemy_def_down_pct", now
-        )
-        received = self.effects.sum_stat(ENEMY, "received_dmg_pct", now=now)
-        received += self._personal_enemy_sum(
+        # Moris routing rules:
+        # - enemy-target def_pct becomes enemy_def_down_pct in the DealForm.
+        # - personal_* manual/character effects stay on the scored actor itself.
+        enemy_def_down = self._sum_aliases(
+            ENEMY, ("def_pct", "enemy_def_down_pct"), now
+        ) + self._sum(actor, "personal_enemy_def_down_pct", now)
+        received = self._sum(ENEMY, "received_dmg_pct", now) + self._sum(
             actor, "personal_received_dmg_pct", now
         )
 
@@ -92,9 +89,12 @@ class DamageTermResolver:
             ),
             enemy_def_down_pct=enemy_def_down,
             def_ignore_pct=self._sum(actor, "def_ignore_pct", now),
-            crit_rate=0.15 + (general_crit_rate_pct + normal_crit_rate_pct) / 100.0,
+            crit_rate=min(
+                1.0,
+                0.15 + (general_crit_rate_pct + normal_crit_rate_pct) / 100.0,
+            ),
             crit_dmg=general_crit_dmg + normal_crit_dmg,
-            crit_rate_skill=0.15 + general_crit_rate_pct / 100.0,
+            crit_rate_skill=min(1.0, 0.15 + general_crit_rate_pct / 100.0),
             crit_dmg_skill=general_crit_dmg,
             core_dmg_pct=self._sum(actor, "core_dmg_pct", now),
             normal_atk_dmg_pct=self._sum(actor, "normal_atk_dmg_pct", now),
@@ -104,19 +104,27 @@ class DamageTermResolver:
             pierce_dmg_pct=self._sum(actor, "pierce_dmg_pct", now),
             armor_break_dmg_pct=self._sum(actor, "armor_break_dmg_pct", now),
             dot_dmg_pct=self._sum(actor, "dot_dmg_pct", now),
-            projectile_explosion_dmg_pct=self._sum(
-                actor, "projectile_explosion_dmg_pct", now
+            projectile_explosion_dmg_pct=self._sum_aliases(
+                actor,
+                ("projectile_explosion_dmg", "projectile_explosion_dmg_pct"),
+                now,
             ),
-            projectile_attachment_dmg_pct=self._sum(
-                actor, "projectile_attachment_dmg_pct", now
+            projectile_attachment_dmg_pct=self._sum_aliases(
+                actor,
+                ("projectile_attachment_dmg", "projectile_attachment_dmg_pct"),
+                now,
             ),
             sequential_dmg_pct=self._sum(actor, "sequential_dmg_pct", now),
-            part_dmg_pct=self._sum(actor, "part_dmg_pct", now),
+            part_dmg_pct=self._sum_aliases(
+                actor, ("part_dmg", "part_dmg_pct"), now
+            ),
             charge_dmg_pct=self._sum(actor, "charge_dmg_pct", now),
             charge_dmg_mag_pct=self._sum(actor, "charge_dmg_mag_pct", now),
             received_dmg_pct=received,
             split_dmg_pct=self._sum(actor, "split_dmg_pct", now),
-            element_bonus_pct=self._sum(actor, "element_bonus_pct", now),
+            element_bonus_pct=self._sum_aliases(
+                actor, ("element_bonus", "element_bonus_pct"), now
+            ),
             element_match=(
                 bool(element)
                 and bool(self.enemy.element)
