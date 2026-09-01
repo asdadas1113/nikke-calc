@@ -5,6 +5,7 @@ from math import inf
 from typing import TYPE_CHECKING, Iterable
 
 from .scheduler import EventKind, EventScheduler, ScheduledEvent
+from .shot_blocks import next_static_shot_after
 from .state import StateDomain, StateStore
 
 if TYPE_CHECKING:
@@ -154,6 +155,26 @@ class ActiveEffectStore:
                 actor=target,
                 payload=EffectExpiryToken(effect.effect_id, target, cohort, generation),
             )
+
+        duration_bullets = effect.parameters.get("duration_bullets")
+        if duration_bullets is not None:
+            # Phase 2 certifies exactly one target-side ammo-consuming shot. The
+            # policy keeps every other shape fail-closed before activation.
+            if float(duration_bullets) != 1.0:
+                raise NotImplementedError(
+                    f"Fast duration_bullets={duration_bullets!r} not certified"
+                )
+            if target < 0:
+                raise NotImplementedError(
+                    "Fast duration_bullets enemy-target lifetime not certified"
+                )
+            consume_at = next_static_shot_after(self.squad, target, now)
+            scheduler.schedule(
+                consume_at,
+                EventKind.BULLET_EXPIRE,
+                actor=target,
+                payload=EffectExpiryToken(effect.effect_id, target, cohort, generation),
+            )
         return active
 
     def activate_group(
@@ -215,8 +236,9 @@ class ActiveEffectStore:
         active = self._active.get(key)
         if active is None or active.generation != token.generation:
             return None
-        if active.expires_at == inf or event.time < active.expires_at - _EPS:
-            return None
+        if event.kind is not EventKind.BULLET_EXPIRE:
+            if active.expires_at == inf or event.time < active.expires_at - _EPS:
+                return None
         effect = self._effects[token.effect_id]
         del self._active[key]
         self._index_remove(effect, key)
