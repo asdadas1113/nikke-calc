@@ -56,9 +56,6 @@ _SAFE_CONDITIONS = frozenset({
     ConditionMode.SELF_STACK_AT_LEAST,
     ConditionMode.TARGET_STACK_AT_LEAST,
     ConditionMode.TARGET_CODE,
-    # Static roster positions never change during a ranking simulation. Moris
-    # defines back_row as slot 2/4 (zero-based actor indices 1/3), exactly what
-    # ConditionEvaluator.BACK_ROW already evaluates.
     ConditionMode.BACK_ROW,
     ConditionMode.SQUAD_ALLY_EXISTS,
     ConditionMode.HAS_BURST1_ALLY,
@@ -99,19 +96,13 @@ _SAFE_EVENT_KEYS = frozenset({
     "full_burst_start",
     "full_burst_end",
     "event:ally_burst_cast",
-    # Moris emits last_bullet only after the final round's damage/hit processing.
-    # Fast TRIGGER_BOUNDARY scoring has the same post-shot phase, so this timing
-    # is safe. last_bullet_fire is intentionally NOT aliased here: it is a
-    # distinct pre-shot signal in Moris and needs separate pre-shot semantics.
     "last_bullet",
 })
 
-# Narrow duration_bullets lane. Moris only decrements a newly activated
-# duration_bullets state on the same timestamp when the activation itself is a
-# weapon-bound trigger. These burst-controller timings are all before weapon
-# processing and are not in Moris' bullet-bound trigger set, so the first
-# consuming shot is strictly after the activation timestamp.
-_SAFE_ONE_SHOT_EVENT_KEYS = frozenset({
+# Bullet-lifetime support is deliberately limited to controller events that happen
+# before the recipient weapon shot. Weapon-bound activation needs separate
+# same-shot consumption semantics and remains fail-closed.
+_SAFE_BULLET_LIFETIME_EVENT_KEYS = frozenset({
     "battle_start",
     "burst_cast",
     "full_burst_start",
@@ -127,27 +118,16 @@ def _target_supported(spec) -> bool:
 
 
 def _timing_supported(rule) -> bool:
-    # Fixed-grid periodic is intentionally left to the already-certified narrow
-    # auxiliary lane (e.g. Milk) until skill_cooldown/effect_interval replanning
-    # exists for all damage stats.
     if rule.mode is TriggerMode.PERIODIC:
         return False
     if rule.event_key == "full_charge_hit":
-        # MultiSignalChargeCadenceRuntime now has an actor-selective producer for
-        # literal every-full-charge events, while retaining compressed MODULO
-        # boundaries for full_charge_count:N.
         return (
             rule.mode is TriggerMode.EVENT
             or (rule.mode is TriggerMode.MODULO and rule.trigger_count_reducible)
         )
     if rule.event_key == "hit_count":
-        # Generic every-hit production is still intentionally absent. Only
-        # reducible hit_count:N crossings are certified.
         return rule.mode is TriggerMode.MODULO and rule.trigger_count_reducible
     if rule.event_key == "core_hit":
-        # The expected-value producer intentionally supports only fixed
-        # core_hit_count:N thresholds. Legacy core_hit:N can be modified by
-        # trigger-count-reduction buffs and therefore still fails closed.
         return is_static_expected_core_count_rule(rule)
     if rule.event_key in _SAFE_EVENT_KEYS:
         return True
@@ -159,6 +139,13 @@ def _timing_supported(rule) -> bool:
 
 
 def _one_shot_lifetime_supported(effect) -> bool:
+    """Return whether a duration_bullets effect can use static N-shot expiry.
+
+    The historical helper name is kept for callers/tests. The certified lane now
+    accepts any positive integer N while retaining the same target, stack and
+    pre-shot trigger restrictions used by the original one-shot implementation.
+    """
+
     raw = effect.parameters.get("duration_bullets")
     if raw is None:
         return True
@@ -166,23 +153,20 @@ def _one_shot_lifetime_supported(effect) -> bool:
         bullets = float(raw)
     except (TypeError, ValueError):
         return False
-    if bullets != 1.0:
+    if bullets < 1.0 or not bullets.is_integer():
         return False
     if effect.duration not in (None, -1.0):
         return False
     max_stack = effect.max_stack if effect.max_stack is not None else 1.0
     if float(max_stack) != 1.0:
         return False
-    # Enemy-target bullet lifetimes have no recipient weapon that can consume the
-    # count. Composite targets are also deferred until per-child lifecycle rules
-    # are independently certified.
     if effect.target_spec.mode in {TargetMode.ENEMY, TargetMode.COMPOSITE}:
         return False
     if not effect.triggers:
         return False
     for rule in effect.triggers:
         key = rule.event_key or ""
-        if key in _SAFE_ONE_SHOT_EVENT_KEYS:
+        if key in _SAFE_BULLET_LIFETIME_EVENT_KEYS:
             continue
         if key.startswith("burst_enter:") or key.startswith("squad_burst_cast:"):
             continue
@@ -191,14 +175,7 @@ def _one_shot_lifetime_supported(effect) -> bool:
 
 
 def is_direct_damage_buff_runtime_supported(effect) -> bool:
-    """Return True only when Fast can both represent and *deliver* this buff.
-
-    The function is intentionally conservative. Supporting a numeric stat is not
-    enough: every timing must have an actual Fast producer, every condition must
-    be evaluable from current state, and target resolution must be deterministic.
-    Unsupported effects stay absent rather than silently activating with guessed
-    semantics.
-    """
+    """Return True only when Fast can both represent and *deliver* this buff."""
 
     if effect.effect_type != "buff" or (effect.stat or "") not in DIRECT_DAMAGE_STATE_STATS:
         return False
