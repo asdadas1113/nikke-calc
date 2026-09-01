@@ -6,7 +6,7 @@ from typing import Callable, TYPE_CHECKING
 from .scheduler import EventScheduler, ScheduledEvent
 from .state import StateStore
 from .triggers import TriggerMode
-from .weapon import DynamicChargeCadenceRuntime, WeaponCadenceMachine
+from .weapon import DynamicChargeCadenceRuntime
 
 if TYPE_CHECKING:
     from .effects import ActiveEffectStore
@@ -35,10 +35,9 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
     for actors that actually own an executable raw consumer; unrelated charge
     actors remain aggregated and no global every-shot loop is introduced.
 
-    Current generic ``hit_count:N`` certification requires one hit event per
-    charge shot. A multi-hit charge shot can cross the same modulo threshold
-    several times at one timestamp; that intra-shot case fails closed until
-    represented explicitly.
+    Moris ``hit_count`` advances once per charge attack, independent of pellet or
+    muzzle multiplicity. ``pellet_hit`` is the separate per-hit stream, so a
+    multi-hit charge weapon does not need intra-shot hit_count expansion here.
     """
 
     __slots__ = ("_hit_thresholds", "_raw_full_charge_actors")
@@ -94,16 +93,6 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
                     raise NotImplementedError(
                         "Fast raw full_charge_hit consumer on non-charge weapon is not certified: "
                         + character.name
-                    )
-                continue
-            if actor in hit_thresholds:
-                hits_per_shot = WeaponCadenceMachine(
-                    actor, character, duration=duration
-                )._hits_per_shot()
-                if hits_per_shot != 1:
-                    raise NotImplementedError(
-                        "Fast dynamic charge hit_count with multiple hits per shot "
-                        f"is not certified: {character.name} ({hits_per_shot} hits/shot)"
                     )
 
         self._hit_thresholds = hit_thresholds
