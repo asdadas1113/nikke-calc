@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from calculator.timeline import simulate
 from context.spec import build_squad
@@ -8,6 +9,7 @@ from fast_engine.engine.burst import compile_burst_policy
 from fast_engine.engine.burst_runtime import BurstRuntime
 from fast_engine.engine.capabilities import CapabilityDisposition
 from fast_engine.engine.compiler import compile_moris_squad
+from fast_engine.engine.dispatcher import TriggerDispatcher
 
 FRAME = 1.0 / 60.0
 
@@ -98,6 +100,50 @@ class PeriodicRuntimeTests(unittest.TestCase):
         self.assertEqual(len(favorite_cohorts), 1)
         self.assertEqual(len(next(iter(base_cohorts))), 2)
         self.assertEqual(len(next(iter(favorite_cohorts))), 3)
+
+    def test_milk_every_tenth_full_charge_boundary_tracks_moris(self):
+        duration = 80.0
+        moris_squad, compiled = self._compiled(favorite_stage=3)
+        policy = compile_burst_policy(moris_squad, compiled, {"duration": duration})
+
+        fast_boundaries: list[tuple[float, int]] = []
+        original_dispatch = TriggerDispatcher.dispatch
+
+        def traced_dispatch(dispatcher, signal, *args, **kwargs):
+            if signal.owner_actor == 0 and signal.event_key == "full_charge_hit":
+                fast_boundaries.append(
+                    (signal.time, int(getattr(signal, "count_increment", 1)))
+                )
+            return original_dispatch(dispatcher, signal, *args, **kwargs)
+
+        with patch.object(TriggerDispatcher, "dispatch", new=traced_dispatch):
+            BurstRuntime(compiled, policy).run(duration=duration)
+
+        moris = simulate(
+            moris_squad,
+            config={"duration": duration, "rng_mode": "expected"},
+            verbose=True,
+        )
+        moris_full_charge = [
+            ev.t
+            for ev in moris.hits
+            if ev.caster == "밀크" and "full_charge_hit" in ev.hit_tag
+        ]
+        moris_tenth = moris_full_charge[9::10]
+        fast_tenth = [time for time, increment in fast_boundaries if increment >= 10]
+
+        self.assertTrue(fast_tenth, fast_boundaries)
+        self.assertTrue(moris_tenth, moris_full_charge)
+        pairs = list(zip(fast_tenth, moris_tenth))
+        detail = ", ".join(
+            f"{i}:F={f:.6f}/M={m:.6f}/d={f-m:+.6f}"
+            for i, (f, m) in enumerate(pairs, start=1)
+        )
+        self.assertLessEqual(
+            max(abs(f - m) for f, m in pairs),
+            FRAME + 1e-8,
+            detail,
+        )
 
     def test_milk_periodic_cadence_tracks_moris_burst_starts(self):
         duration = 80.0
