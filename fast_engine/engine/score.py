@@ -36,7 +36,7 @@ _CADENCE_OR_SHAPE_STATS = frozenset({
 _STATIC_FOLDABLE = frozenset(StaticCadenceModifiers.__dataclass_fields__)
 
 # Direct numeric states that can change ordinary weapon damage in the initial
-# static-target model.  A stat being numerically resolvable is not enough: its
+# static-target model. A stat being numerically resolvable is not enough: its
 # trigger/condition/target path must also be deliverable by the score runtime.
 _NORMAL_DIRECT_DAMAGE_STATS = frozenset({
     "atk_pct",
@@ -61,7 +61,7 @@ _NORMAL_DIRECT_DAMAGE_STATS = frozenset({
 })
 
 # These are known Moris mechanisms that can alter normal-attack damage but are
-# not yet lowered into DamageTerms/HitSpec.  Their presence must block a score,
+# not yet lowered into DamageTerms/HitSpec. Their presence must block a score,
 # otherwise some archetypes would be systematically undervalued.
 _UNRESOLVED_NORMAL_DAMAGE_STATS = frozenset({
     "atk_from_hp_pct",
@@ -85,6 +85,12 @@ _PERIODIC_GRID_INVALIDATORS = frozenset({
     "skill_cooldown_reduce_pct",
     "force_skill_use",
 })
+
+# The initial Fast enemy never attacks the squad. Effects that require an enemy
+# received-hit notification are therefore not "unsupported" for this scoring
+# problem; they are unreachable by construction. If incoming attacks are added
+# to the enemy model later this exemption must disappear with that model change.
+_PATTERNLESS_UNREACHABLE_EVENT_KEYS = frozenset({"received_hit"})
 
 
 def _is_folded_static_self_modifier(effect) -> bool:
@@ -115,11 +121,21 @@ def _is_score_safe_fixed_periodic(effect) -> bool:
     )
 
 
+def _is_patternless_unreachable(effect) -> bool:
+    return (
+        bool(effect.triggers)
+        and all(
+            rule.event_key in _PATTERNLESS_UNREACHABLE_EVENT_KEYS
+            for rule in effect.triggers
+        )
+    )
+
+
 def _direct_normal_effect_needs_score_support(effect) -> bool:
     stat = effect.stat or ""
     if stat != "def_pct":
         return True
-    # Ally DEF buffs do not enter outgoing normal-attack DealForm.  Enemy-target
+    # Ally DEF buffs do not enter outgoing normal-attack DealForm. Enemy-target
     # def_pct is the Moris defense-down path and does matter.
     return effect.target_spec.mode.value == "enemy"
 
@@ -129,7 +145,9 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
 
     This intentionally scans *all* compiled effects, not only effects currently
     marked executable. Unsupported mechanics are exactly where a silent ranking
-    bias would otherwise enter.
+    bias would otherwise enter. Effects that cannot fire under the patternless
+    static enemy contract are ignored explicitly rather than pretending they are
+    implemented.
     """
 
     blockers: list[str] = []
@@ -139,6 +157,9 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
         stat = effect.stat or ""
         owner = squad.members[effect.actor].name
         label = f"{owner}:{effect.name or stat}:{stat}"
+
+        if _is_patternless_unreachable(effect):
+            continue
 
         if stat in _CADENCE_OR_SHAPE_STATS:
             if not _is_folded_static_self_modifier(effect):
