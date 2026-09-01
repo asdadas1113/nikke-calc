@@ -90,9 +90,23 @@ class _LastBulletCadence(WeaponCadenceMachine):
             while ammo > 0 and t <= self.duration + _EPS:
                 rate = self._mg_rate(warmup)
                 inter = 1.0 / rate
+                next_warmup = min(cap, warmup + warm_inc)
+                next_rate = self._mg_rate(next_warmup)
+                if abs(next_rate - rate) <= 1e-12:
+                    fit = int(math.floor((self.duration - t) / inter + _EPS)) + 1
+                    n = min(ammo, max(0, fit))
+                    if n <= 0:
+                        return out
+                    last_shot = t + (n - 1) * inter
+                    last_inter = inter
+                    ammo -= n
+                    t += n * inter
+                    if ammo > 0:
+                        return out
+                    break
                 last_shot = t
                 last_inter = inter
-                warmup = min(cap, warmup + warm_inc)
+                warmup = next_warmup
                 ammo -= 1
                 t += inter
             if ammo > 0:
