@@ -2,8 +2,10 @@ name: Fast last-bullet boundary patch
 
 on:
   push:
-    branches: [fast-engine-phase2-20260901]
-    paths: [.github/workflows/_fast_last_bullet_patch.yml]
+    branches:
+      - fast-engine-phase2-20260901
+    paths:
+      - .github/workflows/_fast_last_bullet_patch.yml
 
 permissions:
   contents: write
@@ -23,6 +25,7 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import base64
 
           p = Path('fast_engine/engine/dynamic_reload.py')
           s = p.read_text(encoding='utf-8')
@@ -55,100 +58,8 @@ jobs:
           s = s.replace(old, new, 1)
           p.write_text(s, encoding='utf-8')
 
-          test = r'''from __future__ import annotations
-
-import unittest
-
-from context.spec import build_squad
-from fast_engine.engine.burst import BurstPolicy
-from fast_engine.engine.burst_runtime import BurstRuntime
-from fast_engine.engine.capabilities import CapabilityDisposition, EffectCapability, EffectCategory
-from fast_engine.engine.compiler import compile_moris_squad
-from fast_engine.engine.model import CompiledEffect, EnemyStaticProfile
-from fast_engine.engine.score import StaticNormalAttackObserver, static_normal_score_blockers, static_score_blockers
-from fast_engine.engine.targets import compile_target
-from fast_engine.engine.triggers import TriggerMode, TriggerRule
-from fast_engine.tests.test_damage_dynamic_reload_scoring import _reload_effect, _squad_many
-
-
-def _last_bullet_effect() -> CompiledEffect:
-    return CompiledEffect(
-        effect_id=1,
-        actor=0,
-        actor_effect_index=1,
-        source="synthetic",
-        source_tag="skill",
-        name="last bullet atk",
-        effect_type="buff",
-        stat="atk_pct",
-        polarity="beneficial",
-        target="self",
-        target_spec=compile_target("self", actor_by_name={"synthetic-reload": 0}),
-        conditions=(),
-        condition_rules=(),
-        triggers=(TriggerRule("last_bullet", "last_bullet", TriggerMode.EVENT),),
-        value=25.0,
-        duration=10.0,
-        max_stack=None,
-        max_trigger=None,
-        tick_interval=None,
-        parameters={},
-        capability=EffectCapability(
-            character="synthetic-reload",
-            index=1,
-            source="synthetic",
-            name="last bullet atk",
-            effect_type="buff",
-            stat="atk_pct",
-            category=EffectCategory.HIT_FORMULA,
-            timing_families=("weapon_hit",),
-            condition_families=(),
-            target_family="ally_static",
-            advanced_fields=(),
-            disposition=CapabilityDisposition.READY,
-            blockers=(),
-        ),
-    )
-
-
-class DynamicLastBulletBoundaryTests(unittest.TestCase):
-    def test_last_bullet_consumer_no_longer_blocks_dynamic_reload_owner(self):
-        reload_effect = _reload_effect(duration=1.5)
-        last = _last_bullet_effect()
-        blockers = static_normal_score_blockers(_squad_many((reload_effect, last)))
-        self.assertNotIn(
-            "cadence:synthetic-reload:live reload:reload_speed_pct",
-            blockers,
-        )
-
-    def test_magazine_final_shot_dispatches_last_bullet_once(self):
-        reload_effect = _reload_effect(duration=1.5)
-        last = _last_bullet_effect()
-        squad = _squad_many((reload_effect, last))
-        runtime = BurstRuntime(
-            squad,
-            BurstPolicy(duration=1.2, first_burst_time=30.0),
-            EnemyStaticProfile(defense=0.0, duration=1.2),
-        )
-        runtime.dispatcher.effects.activate(reload_effect, 0, 0.0, runtime.scheduler)
-        observer = StaticNormalAttackObserver(runtime, duration=1.2)
-        result = runtime.run(duration=1.2, score_observer=observer)
-        observer.finish(events_processed=result.events_processed)
-        self.assertEqual(runtime.dispatcher._activation_counts.get(1, 0), 1)
-        self.assertEqual(runtime.weapons._rapid_reload._states[0].hit_count, 2)
-
-    def test_public_privaty_reload_blocker_is_removed_but_max_ammo_stays_closed(self):
-        names = ["리틀 머메이드", "크라운", "라피 : 레드 후드", "앨리스", "프리바티"]
-        compiled = compile_moris_squad(build_squad(names))
-        blockers = static_score_blockers(compiled)
-        self.assertNotIn("cadence:프리바티:EX 매거진 2:reload_speed_pct", blockers)
-        self.assertIn("cadence:프리바티:EX 매거진 3:max_ammo_pct", blockers)
-
-
-if __name__ == "__main__":
-    unittest.main()
-'''
-          Path('fast_engine/tests/test_dynamic_last_bullet_boundary.py').write_text(test, encoding='utf-8')
+          test_b64 = 'ZnJvbSBfX2Z1dHVyZV9fIGltcG9ydCBhbm5vdGF0aW9ucwoKaW1wb3J0IHVuaXR0ZXN0Cgpmcm9tIGNvbnRleHQuc3BlYyBpbXBvcnQgYnVpbGRfc3F1YWQKZnJvbSBmYXN0X2VuZ2luZS5lbmdpbmUuYnVyc3QgaW1wb3J0IEJ1cnN0UG9saWN5CmZyb20gZmFzdF9lbmdpbmUuZW5naW5lLmJ1cnN0X3J1bnRpbWUgaW1wb3J0IEJ1cnN0UnVudGltZQpmcm9tIGZhc3RfZW5naW5lLmVuZ2luZS5jYXBhYmlsaXRpZXMgaW1wb3J0IENhcGFiaWxpdHlEaXNwb3NpdGlvbiwgRWZmZWN0Q2FwYWJpbGl0eSwgRWZmZWN0Q2F0ZWdvcnkKZnJvbSBmYXN0X2VuZ2luZS5lbmdpbmUuY29tcGlsZXIgaW1wb3J0IGNvbXBpbGVfbW9yaXNfc3F1YWQKZnJvbSBmYXN0X2VuZ2luZS5lbmdpbmUubW9kZWwgaW1wb3J0IENvbXBpbGVkRWZmZWN0LCBFbmVteVN0YXRpY1Byb2ZpbGUKZnJvbSBmYXN0X2VuZ2luZS5lbmdpbmUuc2NvcmUgaW1wb3J0IFN0YXRpY05vcm1hbEF0dGFja09ic2VydmVyLCBzdGF0aWNfbm9ybWFsX3Njb3JlX2Jsb2NrZXJzLCBzdGF0aWNfc2NvcmVfYmxvY2tlcnMKZnJvbSBmYXN0X2VuZ2luZS5lbmdpbmUudGFyZ2V0cyBpbXBvcnQgY29tcGlsZV90YXJnZXQKZnJvbSBmYXN0X2VuZ2luZS5lbmdpbmUudHJpZ2dlcnMgaW1wb3J0IFRyaWdnZXJNb2RlLCBUcmlnZ2VyUnVsZQpmcm9tIGZhc3RfZW5naW5lLnRlc3RzLnRlc3RfZGFtYWdlX2R5bmFtaWNfcmVsb2FkX3Njb3JpbmcgaW1wb3J0IF9yZWxvYWRfZWZmZWN0LCBfc3F1YWRfbWFueQoKCmRlZiBfbGFzdF9idWxsZXRfZWZmZWN0KCkgLT4gQ29tcGlsZWRFZmZlY3Q6CiAgICByZXR1cm4gQ29tcGlsZWRFZmZlY3QoCiAgICAgICAgZWZmZWN0X2lkPTEsCiAgICAgICAgYWN0b3I9MCwKICAgICAgICBhY3Rvcl9lZmZlY3RfaW5kZXg9MSwKICAgICAgICBzb3VyY2U9InN5bnRoZXRpYyIsCiAgICAgICAgc291cmNlX3RhZz0ic2tpbGwiLAogICAgICAgIG5hbWU9Imxhc3QgYnVsbGV0IGF0ayIsCiAgICAgICAgZWZmZWN0X3R5cGU9ImJ1ZmYiLAogICAgICAgIHN0YXQ9ImF0a19wY3QiLAogICAgICAgIHBvbGFyaXR5PSJiZW5lZmljaWFsIiwKICAgICAgICB0YXJnZXQ9InNlbGYiLAogICAgICAgIHRhcmdldF9zcGVjPWNvbXBpbGVfdGFyZ2V0KCJzZWxmIiwgYWN0b3JfYnlfbmFtZT17InN5bnRoZXRpYy1yZWxvYWQiOiAwfSksCiAgICAgICAgY29uZGl0aW9ucz0oKSwKICAgICAgICBjb25kaXRpb25fcnVsZXM9KCksCiAgICAgICAgdHJpZ2dlcnM9KFRyaWdnZXJSdWxlKCJsYXN0X2J1bGxldCIsICJsYXN0X2J1bGxldCIsIFRyaWdnZXJNb2RlLkVWRU5UKSwpLAogICAgICAgIHZhbHVlPTI1LjAsCiAgICAgICAgZHVyYXRpb249MTAuMCwKICAgICAgICBtYXhfc3RhY2s9Tm9uZSwKICAgICAgICBtYXhfdHJpZ2dlcj1Ob25lLAogICAgICAgIHRpY2tfaW50ZXJ2YWw9Tm9uZSwKICAgICAgICBwYXJhbWV0ZXJzPXt9LAogICAgICAgIGNhcGFiaWxpdHk9RWZmZWN0Q2FwYWJpbGl0eSgKICAgICAgICAgICAgY2hhcmFjdGVyPSJzeW50aGV0aWMtcmVsb2FkIiwKICAgICAgICAgICAgaW5kZXg9MSwKICAgICAgICAgICAgc291cmNlPSJzeW50aGV0aWMiLAogICAgICAgICAgICBuYW1lPSJsYXN0IGJ1bGxldCBhdGsiLAogICAgICAgICAgICBlZmZlY3RfdHlwZT0iYnVmZiIsCiAgICAgICAgICAgIHN0YXQ9ImF0a19wY3QiLAogICAgICAgICAgICBjYXRlZ29yeT1FZmZlY3RDYXRlZ29yeS5ISVRfRk9STVVMQSwKICAgICAgICAgICAgdGltaW5nX2ZhbWlsaWVzPSgid2VhcG9uX2hpdCIsKSwKICAgICAgICAgICAgY29uZGl0aW9uX2ZhbWlsaWVzPSgpLAogICAgICAgICAgICB0YXJnZXRfZmFtaWx5PSJhbGx5X3N0YXRpYyIsCiAgICAgICAgICAgIGFkdmFuY2VkX2ZpZWxkcz0oKSwKICAgICAgICAgICAgZGlzcG9zaXRpb249Q2FwYWJpbGl0eURpc3Bvc2l0aW9uLlJFQURZLAogICAgICAgICAgICBibG9ja2Vycz0oKSwKICAgICAgICApLAogICAgKQoKCmNsYXNzIER5bmFtaWNMYXN0QnVsbGV0Qm91bmRhcnlUZXN0cyh1bml0dGVzdC5UZXN0Q2FzZSk6CiAgICBkZWYgdGVzdF9sYXN0X2J1bGxldF9jb25zdW1lcl9ub19sb25nZXJfYmxvY2tzX2R5bmFtaWNfcmVsb2FkX293bmVyKHNlbGYpOgogICAgICAgIHJlbG9hZF9lZmZlY3QgPSBfcmVsb2FkX2VmZmVjdChkdXJhdGlvbj0xLjUpCiAgICAgICAgbGFzdCA9IF9sYXN0X2J1bGxldF9lZmZlY3QoKQogICAgICAgIGJsb2NrZXJzID0gc3RhdGljX25vcm1hbF9zY29yZV9ibG9ja2Vycyhfc3F1YWRfbWFueSgocmVsb2FkX2VmZmVjdCwgbGFzdCkpKQogICAgICAgIHNlbGYuYXNzZXJ0Tm90SW4oCiAgICAgICAgICAgICJjYWRlbmNlOnN5bnRoZXRpYy1yZWxvYWQ6bGl2ZSByZWxvYWQ6cmVsb2FkX3NwZWVkX3BjdCIsCiAgICAgICAgICAgIGJsb2NrZXJzLAogICAgICAgICkKCiAgICBkZWYgdGVzdF9tYWdhemluZV9maW5hbF9zaG90X2Rpc3BhdGNoZXNfbGFzdF9idWxsZXRfb25jZShzZWxmKToKICAgICAgICByZWxvYWRfZWZmZWN0ID0gX3JlbG9hZF9lZmZlY3QoZHVyYXRpb249MS41KQogICAgICAgIGxhc3QgPSBfbGFzdF9idWxsZXRfZWZmZWN0KCkKICAgICAgICBzcXVhZCA9IF9zcXVhZF9tYW55KChyZWxvYWRfZWZmZWN0LCBsYXN0KSkKICAgICAgICBydW50aW1lID0gQnVyc3RSdW50aW1lKAogICAgICAgICAgICBzcXVhZCwKICAgICAgICAgICAgQnVyc3RQb2xpY3koZHVyYXRpb249MS4yLCBmaXJzdF9idXJzdF90aW1lPTMwLjApLAogICAgICAgICAgICBFbmVteVN0YXRpY1Byb2ZpbGUoZGVmZW5zZT0wLjAsIGR1cmF0aW9uPTEuMiksCiAgICAgICAgKQogICAgICAgIHJ1bnRpbWUuZGlzcGF0Y2hlci5lZmZlY3RzLmFjdGl2YXRlKHJlbG9hZF9lZmZlY3QsIDAsIDAuMCwgcnVudGltZS5zY2hlZHVsZXIpCiAgICAgICAgb2JzZXJ2ZXIgPSBTdGF0aWNOb3JtYWxBdHRhY2tPYnNlcnZlcihydW50aW1lLCBkdXJhdGlvbj0xLjIpCiAgICAgICAgcmVzdWx0ID0gcnVudGltZS5ydW4oZHVyYXRpb249MS4yLCBzY29yZV9vYnNlcnZlcj1vYnNlcnZlcikKICAgICAgICBvYnNlcnZlci5maW5pc2goZXZlbnRzX3Byb2Nlc3NlZD1yZXN1bHQuZXZlbnRzX3Byb2Nlc3NlZCkKICAgICAgICBzZWxmLmFzc2VydEVxdWFsKHJ1bnRpbWUuZGlzcGF0Y2hlci5fYWN0aXZhdGlvbl9jb3VudHMuZ2V0KDEsIDApLCAxKQogICAgICAgIHNlbGYuYXNzZXJ0RXF1YWwocnVudGltZS53ZWFwb25zLl9yYXBpZF9yZWxvYWQuX3N0YXRlc1swXS5oaXRfY291bnQsIDIpCgogICAgZGVmIHRlc3RfcHVibGljX3ByaXZhdHlfcmVsb2FkX2Jsb2NrZXJfaXNfcmVtb3ZlZF9idXRfbWF4X2FtbW9fc3RheXNfY2xvc2VkKHNlbGYpOgogICAgICAgIG5hbWVzID0gWyLrpqzti4Ag66i466mU7J2065OcIiwgIu2BrOudvOyatCIsICLrnbztlLwgOiDroIjrk5wg7ZuE65OcIiwgIuyVqOumrOyKpCIsICLtlITrpqzrsJTti7AiXQogICAgICAgIGNvbXBpbGVkID0gY29tcGlsZV9tb3Jpc19zcXVhZChidWlsZF9zcXVhZChuYW1lcykpCiAgICAgICAgYmxvY2tlcnMgPSBzdGF0aWNfc2NvcmVfYmxvY2tlcnMoY29tcGlsZWQpCiAgICAgICAgc2VsZi5hc3NlcnROb3RJbigiY2FkZW5jZTrtlITrpqzrsJTti7A6RVgg66ek6rGw7KeEIDI6cmVsb2FkX3NwZWVkX3BjdCIsIGJsb2NrZXJzKQogICAgICAgIHNlbGYuYXNzZXJ0SW4oImNhZGVuY2U67ZSE66as67CU7YuwOkVYIOunpOqxsOynhCAzOm1heF9hbW1vX3BjdCIsIGJsb2NrZXJzKQoKCmlmIF9fbmFtZV9fID09ICJfX21haW5fXyI6CiAgICB1bml0dGVzdC5tYWluKCkK'
+          Path('fast_engine/tests/test_dynamic_last_bullet_boundary.py').write_bytes(base64.b64decode(test_b64))
           PY
       - name: Run focused and Fast tests
         run: |
