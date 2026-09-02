@@ -39,7 +39,7 @@ class TriggerDispatcher:
         "conditions", "damage_sink", "_effect_table", "_event_counts", "_conditional_counts",
         "_activation_counts", "_state_dependency_names", "_gauge_maxima",
         "_unsafe_gauge_families", "_strict_score_delivery", "_ammo_charge_sink",
-        "_force_reload_sink",
+        "_force_reload_sink", "_named_event_names_needed",
     )
 
     _AUXILIARY_STATS = frozenset({
@@ -62,6 +62,7 @@ class TriggerDispatcher:
         "ammo_charge_pct",
         "ammo_charge_flat",
         "charge_time_flat",
+        "named_buff_duration_extend",
     })
 
     _SHIELD_STATS = frozenset({"shield_from_max_hp_pct"})
@@ -127,6 +128,12 @@ class TriggerDispatcher:
         self._strict_score_delivery = False
         self._ammo_charge_sink: Callable[[str, tuple[int, ...], float, float], bool] | None = None
         self._force_reload_sink: Callable[[tuple[int, ...], float], bool] | None = None
+        self._named_event_names_needed = frozenset(
+            (rule.event_key or "")[len("event:"):]
+            for effect in self._effect_table
+            for rule in effect.triggers
+            if self._is_generic_named_event_key(rule.event_key or "")
+        )
 
         unsafe_gauges: set[tuple[int, str]] = set()
         for effect in self._effect_table:
@@ -312,9 +319,77 @@ class TriggerDispatcher:
             return False
         return True
 
+    _NAMED_EVENT_EXEMPT = frozenset({
+        "event:enemy_spawn",
+        "event:target_spawn",
+        "event:ally_burst_cast",
+        "event:shield_applied",
+    })
+
+    @classmethod
+    def _is_generic_named_event_key(cls, key: str) -> bool:
+        return (
+            key.startswith("event:")
+            and not key.startswith("event:state_end:")
+            and key not in cls._NAMED_EVENT_EXEMPT
+        )
+
+    @classmethod
+    def _named_event_keys(cls, effect: "CompiledEffect") -> tuple[str, ...]:
+        return tuple(
+            rule.event_key or ""
+            for rule in effect.triggers
+            if cls._is_generic_named_event_key(rule.event_key or "")
+        )
+
+    @classmethod
+    def _named_event_control_shape_supported(cls, effect: "CompiledEffect") -> bool:
+        return (
+            effect.capability.disposition is CapabilityDisposition.PLANNED
+            and effect.effect_type == "instant"
+            and (effect.stat or "") == "burst_cooldown_reduce"
+            and effect.value is not None
+            and effect.target_spec.runtime_supported
+            and all(rule.is_runtime_supported for rule in effect.condition_rules)
+            and bool(effect.triggers)
+            and all(
+                rule.mode is TriggerMode.EVENT
+                and cls._is_generic_named_event_key(rule.event_key or "")
+                for rule in effect.triggers
+            )
+        )
+
+    @classmethod
+    def _named_duration_extend_shape_supported(cls, effect: "CompiledEffect") -> bool:
+        target_effect = effect.parameters.get("target_effect")
+        return (
+            effect.capability.disposition is CapabilityDisposition.PLANNED
+            and effect.effect_type == "instant"
+            and (effect.stat or "") == "named_buff_duration_extend"
+            and effect.value is not None
+            and float(effect.value) > 0.0
+            and isinstance(target_effect, str)
+            and bool(target_effect)
+            and set(effect.parameters) == {"target_effect"}
+            and target_scope_is_static(effect.target_spec)
+            and effect.target_spec.runtime_supported
+            and all(rule.is_runtime_supported for rule in effect.condition_rules)
+            and bool(effect.triggers)
+            and all(
+                rule.mode is TriggerMode.EVENT
+                and cls._is_generic_named_event_key(rule.event_key or "")
+                for rule in effect.triggers
+            )
+        )
+
     @staticmethod
     def is_executable_effect(effect: "CompiledEffect") -> bool:
         stat = effect.stat or ""
+        if (
+            TriggerDispatcher._named_event_control_shape_supported(effect)
+            or TriggerDispatcher._named_duration_extend_shape_supported(effect)
+        ):
+            return True
         if stat in TriggerDispatcher._AUXILIARY_STATS:
             return (
                 effect.effect_type == "buff"
@@ -350,6 +425,32 @@ class TriggerDispatcher:
             for actor in targets
         )
 
+    def _named_event_source_runtime_safe(self, effect: "CompiledEffect") -> bool:
+        keys = self._named_event_keys(effect)
+        if not keys:
+            return True
+        for key in keys:
+            name = key[len("event:"):]
+            providers = tuple(
+                provider
+                for provider in self._effect_table
+                if provider.effect_id != effect.effect_id
+                and provider.effect_type == "buff"
+                and provider.name == name
+            )
+            if not providers:
+                return False
+            for provider in providers:
+                if self._named_event_keys(provider):
+                    return False
+                if provider.parameters.get("event_scope") not in (None, "", "squad", "recipients"):
+                    return False
+                if not provider.target_spec.runtime_supported:
+                    return False
+                if not self.is_executable_effect(provider):
+                    return False
+        return True
+
     def is_runtime_executable_effect(self, effect: "CompiledEffect") -> bool:
         family = self._gauge_family(effect)
         if (
@@ -361,6 +462,8 @@ class TriggerDispatcher:
         if self._timed_shield_shape_supported(effect):
             return True
         if self.is_executable_effect(effect):
+            if not self._named_event_source_runtime_safe(effect):
+                return False
             return self._bullet_lifetime_runtime_safe(effect)
         if self.damage_sink is None:
             return False
@@ -386,7 +489,9 @@ class TriggerDispatcher:
         )
 
     def can_activate_effect(self, effect: "CompiledEffect") -> bool:
-        return self.is_runtime_executable_effect(effect) or self._is_state_dependency(effect)
+        if self.is_runtime_executable_effect(effect):
+            return True
+        return self._is_state_dependency(effect) and self._named_event_source_runtime_safe(effect)
 
     def _rule_matches(
         self,
@@ -506,6 +611,19 @@ class TriggerDispatcher:
                 actor_targets = tuple(int(target) for target in targets)
                 if not self._force_reload_sink(actor_targets, now):
                     return False
+            elif stat == "named_buff_duration_extend":
+                if any(target == ENEMY for target in targets):
+                    return False
+                target_effect = effect.parameters.get("target_effect")
+                if not isinstance(target_effect, str) or not target_effect:
+                    return False
+                self.effects.extend_named_states(
+                    tuple(int(target) for target in targets),
+                    target_effect,
+                    value,
+                    now=now,
+                    scheduler=self.scheduler,
+                )
             elif stat in self._GAUGE_STATS:
                 family = self._gauge_family(effect)
                 if (
@@ -555,7 +673,22 @@ class TriggerDispatcher:
         elif effect.effect_type == "buff":
             if stat in self._SHIELD_STATS and any(target == ENEMY for target in targets):
                 return False
-            self.effects.activate_group(effect, targets, now, self.scheduler)
+            was_active = self.effects.group_active(effect.effect_id, targets, now=now)
+            activated_group = self.effects.activate_group(effect, targets, now, self.scheduler)
+            max_stack = effect.max_stack if effect.max_stack is not None else 1.0
+            if (
+                activated_group
+                and effect.name
+                and effect.name in self._named_event_names_needed
+                and (not was_active or float(max_stack) != 1.0)
+            ):
+                from .burst import BurstSignal
+                if effect.parameters.get("event_scope") == "recipients":
+                    audience = tuple(int(target) for target in targets if target != ENEMY)
+                else:
+                    audience = tuple(range(len(self.squad.members)))
+                for observer in audience:
+                    self.dispatch(BurstSignal(now, f"event:{effect.name}", observer, observer))
             if stat in self._SHIELD_STATS:
                 from .burst import BurstSignal
                 actor_targets = tuple(int(target) for target in targets)

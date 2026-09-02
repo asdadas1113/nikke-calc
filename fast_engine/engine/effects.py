@@ -404,6 +404,74 @@ class ActiveEffectStore:
             self.state.touch(target, StateDomain.EFFECT)
         return tuple(removed)
 
+    def group_active(
+        self,
+        effect_id: int,
+        targets: Iterable[int],
+        *,
+        now: float,
+    ) -> bool:
+        """Return whether this exact Moris target cohort is already active."""
+
+        cohort = self._cohort(targets)
+        if not cohort:
+            return False
+        return any(
+            (active := self._active.get((int(effect_id), target, cohort))) is not None
+            and active.active(now)
+            for target in cohort
+        )
+
+    def extend_named_states(
+        self,
+        targets: Iterable[int],
+        name: str,
+        delta: float,
+        *,
+        now: float,
+        scheduler: EventScheduler,
+    ) -> tuple[int, ...]:
+        """Extend finite active ``name``/``name N`` states by one sparse boundary."""
+
+        selected = frozenset(int(target) for target in targets)
+        amount = float(delta)
+        if not selected or not name or amount <= 0.0:
+            return ()
+        prefix = name + " "
+        changed: list[int] = []
+        touched: set[int] = set()
+        for active in tuple(self._active.values()):
+            if active.target not in selected or not active.active(now):
+                continue
+            effect = self._effects[active.effect_id]
+            effect_name = effect.name or ""
+            if effect_name != name and not effect_name.startswith(prefix):
+                continue
+            if active.expires_at == inf:
+                continue
+            if effect.parameters.get("duration_bullets") is not None:
+                raise NotImplementedError(
+                    "Fast named duration extension over bullet lifetime not certified"
+                )
+            active.expires_at += amount
+            active.generation = self._next_generation()
+            scheduler.schedule(
+                active.expires_at,
+                EventKind.STATE_EXPIRE,
+                actor=active.target,
+                payload=EffectExpiryToken(
+                    active.effect_id,
+                    active.target,
+                    active.cohort,
+                    active.generation,
+                ),
+            )
+            changed.append(active.effect_id)
+            touched.add(active.target)
+        for target in touched:
+            self.state.touch(target, StateDomain.EFFECT)
+        return tuple(changed)
+
     def has_stat(self, target: int, stat: str, *, now: float) -> bool:
         return bool(self._active_keys(self._by_target_stat, target, stat, now))
 

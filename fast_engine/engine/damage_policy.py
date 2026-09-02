@@ -138,6 +138,16 @@ def _timing_supported(rule) -> bool:
         return is_static_expected_core_count_rule(rule)
     if rule.event_key in _SAFE_EVENT_KEYS:
         return True
+    if (
+        rule.mode is TriggerMode.EVENT
+        and rule.event_key
+        and rule.event_key.startswith("event:")
+        and not rule.event_key.startswith("event:state_end:")
+    ):
+        # Runtime can represent a named-buff activation signal. Score
+        # certification separately proves that a concrete executable provider
+        # exists, so external events such as heal_received remain fail-closed.
+        return True
     if rule.event_key and rule.event_key.startswith("burst_enter:"):
         return True
     if rule.event_key and rule.event_key.startswith("squad_burst_cast:"):

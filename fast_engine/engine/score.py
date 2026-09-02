@@ -627,10 +627,39 @@ def _shield_runtime_dependency_score_safe(squad: CompiledSquad, effect) -> bool:
     return True
 
 
+def _named_buff_event_dependency_score_safe(squad: CompiledSquad, effect) -> bool:
+    keys = TriggerDispatcher._named_event_keys(effect)
+    if not keys:
+        return True
+    for key in keys:
+        name = key[len("event:"):]
+        providers = tuple(
+            provider
+            for provider in squad.effects
+            if provider.effect_id != effect.effect_id
+            and provider.effect_type == "buff"
+            and provider.name == name
+        )
+        if not providers:
+            return False
+        for provider in providers:
+            if TriggerDispatcher._named_event_keys(provider):
+                return False
+            if provider.parameters.get("event_scope") not in (None, "", "squad", "recipients"):
+                return False
+            if not provider.target_spec.runtime_supported:
+                return False
+            if not TriggerDispatcher.is_executable_effect(provider):
+                return False
+    return True
+
+
 def _direct_damage_buff_score_supported(squad: CompiledSquad, effect) -> bool:
     if not is_direct_damage_buff_runtime_supported(effect):
         return False
     if _uses_shield_runtime_semantics(effect) and not _shield_runtime_dependency_score_safe(squad, effect):
+        return False
+    if not _named_buff_event_dependency_score_safe(squad, effect):
         return False
     if effect.parameters.get("duration_bullets") is None:
         return True
