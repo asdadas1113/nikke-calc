@@ -1,0 +1,72 @@
+name: Fast Anchor reload diagnostics
+
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+    paths: [.github/workflows/_fast_anchor_reload_diag.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Diagnose Anchor reload blocker
+        shell: bash
+        run: |
+          python - <<'PY'
+          from context.snapshot import SQUADS
+          from context.spec import build_squad
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import (
+              static_score_blockers,
+              _possible_ally_targets,
+              _rapid_actor_score_safe,
+              _charge_actor_score_safe,
+              _actor_has_live_max_ammo_mutation,
+          )
+          needle='cadence:앵커 : 이노센트 메이드:말미잘(모양) 파스타 3:reload_speed_pct'
+          for squad_name,row in SQUADS.items():
+              if squad_name.startswith('지그_'):
+                  continue
+              members=list(row.get('members') or ())
+              if len(members)!=5 or '앵커 : 이노센트 메이드' not in members:
+                  continue
+              squad=compile_moris_squad(build_squad(members))
+              blockers=static_score_blockers(squad)
+              if needle not in blockers:
+                  continue
+              effect=next((e for e in squad.effects if e.name=='말미잘(모양) 파스타 3' and (e.stat or '')=='reload_speed_pct'),None)
+              print('\nTEAM',squad_name,'MEMBERS',members)
+              print('BLOCKERS', [b for b in blockers if '앵커 : 이노센트 메이드' in b or b.startswith('control:')])
+              if effect is None:
+                  print('NO EFFECT'); continue
+              print('EFFECT',effect.effect_type,effect.value,effect.target,effect.duration,effect.parameters)
+              print('TRIGGERS',[(r.raw,r.event_key,getattr(r.mode,'value',str(r.mode)),r.threshold) for r in effect.triggers])
+              print('CONDS',[repr(r) for r in effect.condition_rules])
+              targets=_possible_ally_targets(squad,effect)
+              print('TARGETS',[(i,squad.members[i].name) for i in targets])
+              for i in targets:
+                  m=squad.members[i]
+                  mode=str(m.weapon.get('fire_mode') or '')
+                  print(' RECIP',i,m.name,'mode',mode,'control',m.weapon.get('control'),
+                        'live_max_ammo',_actor_has_live_max_ammo_mutation(squad,i),
+                        'rapid_safe',_rapid_actor_score_safe(squad,i) if mode in {'auto','auto_warmup'} else None,
+                        'charge_safe',_charge_actor_score_safe(squad,i) if mode=='charge' else None)
+          PY
+      - name: Remove helper
+        shell: bash
+        run: |
+          rm .github/workflows/_fast_anchor_reload_diag.yml
+          git config user.name fast-engine-bot
+          git config user.email fast-engine-bot@users.noreply.github.com
+          git add -A
+          git commit -m "chore: remove Anchor reload diagnostic helper" || exit 0
+          git push origin HEAD:fast-engine-phase2-20260901
