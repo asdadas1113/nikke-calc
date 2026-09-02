@@ -12,7 +12,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Quency normal damage diagnosis
+      - name: Quency post-burst damage diagnosis
         run: |
           python - <<'PY'
           from collections import defaultdict
@@ -20,12 +20,15 @@ jobs:
           from calculator.sim_result import _is_normal
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import score_static_squad, static_score_blockers
+          from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
 
           members = ['라피 : 레드 후드','레드 후드','프리카','민트','퀀시 : 이스케이프 퀸']
           target = '퀀시 : 이스케이프 퀸'
+          qi = members.index(target)
           enemy = dict(DEFAULT_ENEMY)
 
           for duration in (2.5, 10.0, 30.0, 180.0):
@@ -34,32 +37,46 @@ jobs:
               moris_cfg = spec.build_config(squad, dict(cfg))
               moris = simulate(squad, config=moris_cfg, enemy=dict(enemy), seed=42, verbose=True)
               compiled = compile_moris_squad(squad)
-              blockers = static_score_blockers(compiled)
-              assert not blockers, blockers
+              assert not static_score_blockers(compiled)
               policy = compile_burst_policy(squad, compiled, dict(cfg))
-              fast = score_static_squad(compiled, policy, EnemyStaticProfile(
-                  defense=float(enemy.get('def',31784.0)), element=enemy.get('code'),
-                  core_uptime=0.0, core_px=0.0, duration=duration,
-              ))
-              assert not fast.unsupported, fast.unsupported
+              ep = EnemyStaticProfile(defense=float(enemy.get('def',31784.0)), element=enemy.get('code'), core_uptime=0.0, core_px=0.0, duration=duration)
+              sink = SimpleDamageScoreSink(compiled, ep)
+              runtime = BurstRuntime(compiled, policy, ep, damage_sink=sink)
+              observer = StaticNormalAttackObserver(runtime, duration=duration)
+              result = runtime.run(duration=duration, score_observer=observer)
+              normal = observer.finish(events_processed=result.events_processed)
+              fast_normal = normal.char_total[qi]
+              fast_skill = sink.char_total[qi]
+              fast_total = fast_normal + fast_skill
 
-              idx = members.index(target)
               mhits = [e for e in moris.hits if e.caster == target]
-              normals = [e for e in mhits if _is_normal(e)]
-              skills = [e for e in mhits if not _is_normal(e)]
-              normal_dmg = sum(e.damage for e in normals)
-              skill_dmg = sum(e.damage for e in skills)
+              mnorm = [e for e in mhits if _is_normal(e)]
+              mskill = [e for e in mhits if not _is_normal(e)]
+              mn = sum(e.damage for e in mnorm)
+              ms = sum(e.damage for e in mskill)
               print('DURATION', duration)
-              print('TOTAL', moris.char_total[target], fast.char_total[idx], fast.char_total[idx]/moris.char_total[target]-1.0)
-              print('MORIS_NORMAL', normal_dmg, 'HITS', len(normals), 'AVG', normal_dmg/len(normals) if normals else 0)
-              print('MORIS_SKILL', skill_dmg, 'HITS', len(skills))
-              print('FIRST_NORMALS')
-              for e in normals[:20]:
-                  print(e.t, e.damage, e.hit_tag, e.skill_name)
+              print('M_NORMAL', mn, 'F_NORMAL', fast_normal, 'ERR', fast_normal/mn-1 if mn else 0)
+              print('M_SKILL', ms, 'F_SKILL', fast_skill, 'ERR', fast_skill/ms-1 if ms else 0)
+              print('M_TOTAL', moris.char_total[target], 'F_TOTAL', fast_total, 'ERR', fast_total/moris.char_total[target]-1)
               by_skill = defaultdict(lambda:[0,0])
-              for e in skills:
+              for e in mskill:
                   by_skill[e.skill_name][0] += e.damage
                   by_skill[e.skill_name][1] += 1
-              print('SKILLS', dict(by_skill))
+              print('M_SKILLS', dict(by_skill))
               print('---')
+
+          # One 30s verbose pass: show buffs actually activated on Quency and source effects.
+          cfg = {'duration':30.0,'first_burst_time':3.0,'rng_mode':'expected'}
+          squad = spec.build_squad(members)
+          moris_cfg = spec.build_config(squad, dict(cfg))
+          moris = simulate(squad, config=moris_cfg, enemy=dict(enemy), seed=42, verbose=True)
+          print('QUENCY_BUFF_EVENTS_30S')
+          for e in moris.log.buff_events:
+              if e.target == target and e.kind == 'activate':
+                  print(e.t, e.name, e.caster, e.stat, e.value, e.stack, e.expires_at)
+          compiled = compile_moris_squad(squad)
+          print('QUENCY_RELEVANT_COMPILED_EFFECTS')
+          for eff in compiled.effects:
+              if eff.stat in {'atk_pct','atk_flat','atk_caster_based_pct','atk_dmg_pct','normal_atk_dmg_pct','crit_rate','normal_atk_crit_rate','crit_dmg','normal_atk_crit_dmg','received_dmg_pct','personal_received_dmg_pct','def_pct','personal_enemy_def_down_pct'}:
+                  print(compiled.members[eff.actor].name, eff.name, eff.stat, eff.value, eff.duration, eff.target_spec.mode.value, [(r.event_key, r.mode.value, r.threshold) for r in eff.triggers])
           PY
