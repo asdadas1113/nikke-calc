@@ -1,4 +1,4 @@
-name: Fast damage blocker diagnostics
+name: Fast Frika named-event diagnostics
 
 on:
   push:
@@ -13,53 +13,38 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Diagnose repeated damage gates
+      - name: Inspect Frika chain and Moris event semantics
         run: |
           python - <<'PY'
           from context.snapshot import SQUADS
           from context.spec import build_squad
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_supported
-          from fast_engine.engine.score import _direct_damage_buff_score_supported, _possible_ally_targets
 
-          owners = {"리버렐리오", "나유타", "프리카"}
-          seen = set()
-          for squad_name, row in SQUADS.items():
-              if squad_name.startswith("지그_"):
+          names = next(row['members'] for key, row in SQUADS.items() if key == '레이드_레드후드퀀시')
+          squad = compile_moris_squad(build_squad(list(names)))
+          for effect in squad.effects:
+              owner = squad.members[effect.actor].name
+              if owner != '프리카':
                   continue
-              members = list(row.get("members") or ())
-              if len(members) != 5 or not owners.intersection(members):
-                  continue
-              squad = compile_moris_squad(build_squad(members))
-              for effect in squad.effects:
-                  owner = squad.members[effect.actor].name
-                  if owner not in owners:
-                      continue
-                  if (effect.stat or "") not in {
-                      "atk_pct", "atk_dmg_pct", "core_dmg_pct", "atk_caster_based_pct", "accuracy_pct"
-                  }:
-                      continue
-                  key = (owner, effect.name, effect.stat, effect.effect_type, str(effect.target), str(effect.triggers), str(effect.condition_rules), str(effect.parameters))
-                  if key in seen:
-                      continue
-                  seen.add(key)
-                  print("=== EFFECT ===")
-                  print("OWNER", owner)
-                  print("NAME", effect.name)
-                  print("STAT", effect.stat)
-                  print("TYPE", effect.effect_type)
-                  print("VALUE", effect.value)
-                  print("DURATION", effect.duration)
-                  print("TARGET", effect.target)
-                  print("TARGET_MODE", effect.target_spec.mode.value)
-                  print("TARGET_STATIC", effect.target_spec.runtime_supported)
-                  print("PARAMETERS", effect.parameters)
-                  print("TRIGGERS", [(r.event_key, getattr(r.mode, 'value', str(r.mode)), r.threshold, r.interval, getattr(r, 'runtime_supported', None)) for r in effect.triggers])
-                  print("CONDITIONS", [(getattr(r.mode, 'value', str(r.mode)), getattr(r, 'is_runtime_supported', None), getattr(r, 'name', None), getattr(r, 'value', None), repr(r)) for r in effect.condition_rules])
-                  print("DISPATCH_EXECUTABLE", TriggerDispatcher.is_executable_effect(effect))
-                  print("DAMAGE_RUNTIME_SUPPORTED", is_direct_damage_buff_runtime_supported(effect))
-                  print("DAMAGE_SCORE_SUPPORTED", _direct_damage_buff_score_supported(squad, effect))
-                  print("RECIPIENTS", [(i, squad.members[i].name) for i in _possible_ally_targets(squad, effect)])
-                  print("SQUAD_EXAMPLE", squad_name)
+              print('=== FRIKA ===')
+              print('ID', effect.effect_id, 'NAME', effect.name, 'TYPE', effect.effect_type, 'STAT', effect.stat)
+              print('VALUE', effect.value, 'DURATION', effect.duration, 'TARGET', effect.target)
+              print('PARAM', effect.parameters)
+              print('TRIGGERS', [(r.raw, r.event_key, getattr(r.mode, 'value', str(r.mode)), r.threshold, r.interval) for r in effect.triggers])
+              print('CONDS', [repr(r) for r in effect.condition_rules])
+              print('CAP', effect.capability.disposition.value, effect.capability.blockers)
+              print('EXEC', TriggerDispatcher.is_executable_effect(effect))
+          print('=== SOURCE GREP ===')
+          import pathlib
+          for root in ['calculator', 'fast_engine']:
+              for p in pathlib.Path(root).rglob('*.py'):
+                  text = p.read_text(encoding='utf-8')
+                  for needle in ['notify_event', 'event:', 'effect.name', 'named_event']:
+                      if needle in text and ('notify_event' in text or 'effect.name' in text or 'named_event' in text):
+                          lines = text.splitlines()
+                          hits = [(i+1, line.strip()) for i, line in enumerate(lines) if needle in line]
+                          if hits:
+                              print('FILE', p, 'NEEDLE', needle)
+                              for hit in hits[:20]: print(' ', hit)
           PY
