@@ -1,0 +1,53 @@
+name: Fast named NOP public audit
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+permissions:
+  contents: write
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Audit standard public squads
+        shell: bash
+        run: |
+          python - <<'PY'
+          from context.snapshot import SQUADS
+          from context.spec import build_squad
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+
+          rows=[]
+          for name,row in SQUADS.items():
+              if name.startswith('지그_'):
+                  continue
+              members=list(row.get('members') or ())
+              if len(members)!=5:
+                  continue
+              squad=compile_moris_squad(build_squad(members))
+              blockers=static_score_blockers(squad)
+              rows.append((name,blockers))
+          print('PUBLIC_COUNT',len(rows))
+          certified=[name for name,b in rows if not b]
+          print('CERTIFIED_COUNT',len(certified))
+          print('CERTIFIED',certified)
+          for name,b in rows:
+              if name=='레이드_레드후드퀀시':
+                  print('REDHOOD_BLOCKERS',list(b))
+          PY
+      - name: Remove helper
+        if: always()
+        shell: bash
+        run: |
+          rm .github/workflows/_fast_named_nop_public_audit.yml
+          git config user.name fast-engine-bot
+          git config user.email fast-engine-bot@users.noreply.github.com
+          git add -A
+          git commit -m "chore: remove named NOP public audit helper" || exit 0
+          git push origin HEAD:fast-engine-phase2-20260901
