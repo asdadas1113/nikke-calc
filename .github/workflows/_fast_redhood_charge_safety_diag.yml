@@ -1,0 +1,43 @@
+name: Red Hood charge safety diagnosis
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+    paths: ['.github/workflows/_fast_redhood_charge_safety_diag.yml']
+permissions:
+  contents: write
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13'}
+      - name: Diagnose charge safety
+        run: |
+          python - <<'PY'
+          from context.spec import build_squad
+          from fast_engine.engine.compiler import compile_moris_squad
+          import fast_engine.engine.score as sc
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+          from fast_engine.engine.core_events import is_static_expected_core_count_rule
+          names=["라피 : 레드 후드", "레드 후드", "프리카", "민트", "퀀시 : 이스케이프 퀸"]
+          squad=compile_moris_squad(build_squad(names)); a=1; m=squad.members[a]
+          print('FINAL',sc._charge_actor_score_safe(squad,a))
+          print('mode',m.weapon.get('fire_mode'),'control',m.weapon.get('control'),'clip',m.weapon.get('is_clip'),'cover',m.weapon.get('cover_during_delay'),'reload_bound',sc._reload_speed_positive_upper_bound(squad,a))
+          print('weapon_changes',[(e.name,e.actor,sc._possible_ally_targets(squad,e)) for e in squad.effects if e.effect_type=='weapon_change' and a in sc._possible_ally_targets(squad,e)])
+          print('core_count',[(e.name,[(r.raw,r.event_key,r.mode.value,r.threshold) for r in e.triggers if is_static_expected_core_count_rule(r)]) for e in m.effects if TriggerDispatcher.is_executable_effect(e) and any(is_static_expected_core_count_rule(r) for r in e.triggers)])
+          for keys in [frozenset({'last_bullet_fire','event:full_reload','full_reload'}),frozenset({'pellet_hit'})]:
+              print('eventcheck',sorted(keys),sc._actor_has_executable_event(squad,a,keys))
+          print('on_attack',[(e.name,e.stat,TriggerDispatcher._on_attack_charge_speed_shape_supported(e),TriggerDispatcher.is_executable_effect(e)) for e in m.effects if any(r.event_key=='on_attack' for r in e.triggers)])
+          print('hit_unhandled',sc._actor_has_unhandled_count_event(squad,a,frozenset({'hit_count'})))
+          print('hit_effects',[(e.name,e.stat,[(r.raw,r.mode.value,r.threshold,r.trigger_count_reducible) for r in e.triggers if r.event_key=='hit_count']) for e in m.effects if TriggerDispatcher.is_executable_effect(e) and any(r.event_key=='hit_count' for r in e.triggers)])
+          PY
+      - name: Remove helper
+        if: always()
+        run: |
+          rm -f .github/workflows/_fast_redhood_charge_safety_diag.yml
+          git config user.name fast-engine-bot
+          git config user.email fast-engine-bot@users.noreply.github.com
+          git add -A
+          git commit -m "chore: remove charge safety diagnosis helper" || exit 0
+          git push origin HEAD:fast-engine-phase2-20260901
