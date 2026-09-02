@@ -46,6 +46,39 @@ def _character(*, pellets: int = 10, muzzles: int = 1) -> CompiledCharacter:
     )
 
 
+def _rl_character() -> CompiledCharacter:
+    return CompiledCharacter(
+        name="synthetic-rl",
+        base_atk=80000.0,
+        base_def=100.0,
+        base_hp=10000.0,
+        element="전격",
+        character_class="화력형",
+        squad_group=None,
+        burst_stage="3",
+        burst_cooldown=40.0,
+        burst_regen_time=2.0,
+        weapon_type="RL",
+        weapon={
+            "weapon_type": "RL",
+            "fire_mode": "charge",
+            "max_ammo": 6,
+            "reload_time": 2.0,
+            "fire_rate": 1.0,
+            "charge_time": 1.0,
+            "pellets": 1,
+            "muzzles": 1,
+            "damage_coeff": 61.3,
+            "core_dmg_mult": 200.0,
+            "full_charge_mult": 250.0,
+            "normal_hit_coeff": 1.0,
+        },
+        effects=(),
+        skill_levels={},
+        favorite_stage=0,
+    )
+
+
 class NormalAttackScoringTests(unittest.TestCase):
     def test_compiled_weapon_carries_moris_normal_hit_coeff(self):
         squad = compile_moris_squad(
@@ -106,6 +139,37 @@ class NormalAttackScoringTests(unittest.TestCase):
         )
         moris_linear = moris_per_pellet * 10 * 0.9
         self.assertAlmostEqual(fast, moris_linear, places=9)
+
+    def test_rl_normal_attack_routes_projectile_explosion_bonus_like_moris(self):
+        char = _rl_character()
+        spec = compile_normal_attack_spec(char)
+        self.assertTrue(spec.is_projectile_explosion)
+
+        terms = DamageTerms(
+            crit_rate=0.0,
+            projectile_explosion_dmg_pct=20.0,
+        )
+        fast = expected_normal_shot_damage(
+            spec,
+            base_atk=char.base_atk,
+            enemy_def=31784.0,
+            terms=terms,
+            core_prob=0.0,
+        )
+        moris = calc_damage_avg(
+            char.base_atk,
+            {
+                "crit_rate": 0.0,
+                "projectile_explosion_dmg": 20.0,
+            },
+            char.weapon,
+            hit_type=default_hit_type(
+                is_full_charge=True,
+                is_projectile_explosion=True,
+            ),
+            enemy_def=31784.0,
+        )
+        self.assertAlmostEqual(fast, moris, places=9)
 
     def test_muzzles_multiply_hits_without_dividing_coefficient_again(self):
         one = compile_normal_attack_spec(_character(muzzles=1))
