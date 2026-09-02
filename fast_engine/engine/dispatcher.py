@@ -329,6 +329,103 @@ class TriggerDispatcher:
             and effect.triggers[0].event_key == "battle_start"
         )
 
+    @staticmethod
+    def _trigger_count_reduce_shape_supported(effect: "CompiledEffect") -> bool:
+        return (
+            effect.effect_type == "buff"
+            and (effect.stat or "") == "trigger_count_reduce"
+            and effect.target_spec.mode is TargetMode.SELF
+            and effect.value is not None
+            and float(effect.value) > 0.0
+            and float(effect.value).is_integer()
+            and effect.duration is not None
+            and float(effect.duration) > 0.0
+            and effect.max_stack in (None, 1, 1.0)
+            and set(effect.parameters) == {"target_effect"}
+            and isinstance(effect.parameters.get("target_effect"), str)
+            and bool(effect.parameters.get("target_effect"))
+            and all(rule.is_runtime_supported for rule in effect.condition_rules)
+            and bool(effect.triggers)
+            and all(
+                rule.mode is TriggerMode.EVENT
+                and (rule.event_key or "") in {"burst_cast", "full_burst_start", "full_burst_end"}
+                for rule in effect.triggers
+            )
+        )
+
+    def _trigger_count_reduce_runtime_supported(self, effect: "CompiledEffect") -> bool:
+        if not self._trigger_count_reduce_shape_supported(effect):
+            return False
+        name = str(effect.parameters.get("target_effect") or "")
+        targets = [
+            other for other in self._effect_table
+            if other.actor == effect.actor and other.name == name
+        ]
+        if len(targets) != 1:
+            return False
+        target = targets[0]
+        return (
+            len(target.triggers) == 1
+            and target.triggers[0].mode is TriggerMode.MODULO
+            and target.triggers[0].trigger_count_reducible
+            and target.triggers[0].event_key == "hit_count"
+            and int(target.triggers[0].threshold or 0) > int(float(effect.value))
+        )
+
+    @staticmethod
+    def _enemy_named_stack_marker_shape_supported(effect: "CompiledEffect") -> bool:
+        return (
+            effect.effect_type == "buff"
+            and (effect.stat or "") == "buff_stack_add"
+            and bool(effect.name)
+            and effect.target_spec.mode is TargetMode.ENEMY
+            and effect.value is not None
+            and abs(float(effect.value) - 1.0) <= 1e-9
+            and effect.duration in (None, -1.0)
+            and effect.max_stack == -1
+            and not effect.parameters
+            and all(rule.is_runtime_supported for rule in effect.condition_rules)
+            and len(effect.triggers) == 1
+            and effect.triggers[0].mode is TriggerMode.EVENT
+            and (effect.triggers[0].event_key or "").startswith("weapon_hit:")
+        )
+
+    def _enemy_named_stack_marker_runtime_supported(self, effect: "CompiledEffect") -> bool:
+        if not self._enemy_named_stack_marker_shape_supported(effect) or self.damage_sink is None:
+            return False
+        source = (effect.triggers[0].event_key or "")[len("weapon_hit:"):]
+        return self.damage_sink.supports_weapon_hit_source(effect.actor, source)
+
+    @staticmethod
+    def _enemy_remove_named_state_shape_supported(effect: "CompiledEffect") -> bool:
+        return (
+            effect.effect_type == "instant"
+            and (effect.stat or "") == "remove_named_buff"
+            and effect.target_spec.mode is TargetMode.ENEMY
+            and set(effect.parameters) == {"target_effect"}
+            and isinstance(effect.parameters.get("target_effect"), str)
+            and bool(effect.parameters.get("target_effect"))
+            and all(rule.is_runtime_supported for rule in effect.condition_rules)
+            and bool(effect.triggers)
+            and all(
+                rule.mode is TriggerMode.EVENT
+                and (rule.event_key or "") in {"burst_cast", "full_burst_start", "full_burst_end"}
+                for rule in effect.triggers
+            )
+        )
+
+    def _enemy_remove_named_state_runtime_supported(self, effect: "CompiledEffect") -> bool:
+        if not self._enemy_remove_named_state_shape_supported(effect):
+            return False
+        name = str(effect.parameters.get("target_effect") or "")
+        providers = [
+            other for other in self._effect_table
+            if other.actor == effect.actor
+            and other.name == name
+            and self._enemy_named_stack_marker_shape_supported(other)
+        ]
+        return len(providers) == 1 and self._enemy_named_stack_marker_runtime_supported(providers[0])
+
     @classmethod
     def _timed_shield_shape_supported(cls, effect: "CompiledEffect") -> bool:
         """Certify the presence-only timed shield slice owned by Fast."""
@@ -595,6 +692,12 @@ class TriggerDispatcher:
     def is_runtime_executable_effect(self, effect: "CompiledEffect") -> bool:
         if self._temporary_self_charge_weapon_change_runtime_supported(effect):
             return True
+        if self._trigger_count_reduce_runtime_supported(effect):
+            return True
+        if self._enemy_named_stack_marker_runtime_supported(effect):
+            return True
+        if self._enemy_remove_named_state_runtime_supported(effect):
+            return True
         family = self._gauge_family(effect)
         if (
             family is not None
@@ -642,6 +745,22 @@ class TriggerDispatcher:
             return True
         return self._is_state_dependency(effect) and self._named_event_source_runtime_safe(effect)
 
+    def _effective_reducible_threshold(
+        self, effect: "CompiledEffect", base: int, *, now: float
+    ) -> int:
+        if base <= 0 or not effect.name:
+            return base
+        total = 0
+        for reducer, active in self.effects.iter_stat("trigger_count_reduce", now=now):
+            if (
+                active.source_actor == effect.actor
+                and active.target == effect.actor
+                and reducer.parameters.get("target_effect") == effect.name
+                and self._trigger_count_reduce_runtime_supported(reducer)
+            ):
+                total += int(float(reducer.value or 0.0))
+        return max(1, int(base) - total)
+
     def _rule_matches(
         self,
         effect: "CompiledEffect",
@@ -661,6 +780,8 @@ class TriggerDispatcher:
             return event_count == int(rule.threshold or 0)
         if rule.mode is TriggerMode.MODULO:
             n = int(rule.threshold or 0)
+            if rule.trigger_count_reducible:
+                n = self._effective_reducible_threshold(effect, n, now=now)
             return n > 0 and event_count % n == 0
         if rule.mode is TriggerMode.VALUE_AT_LEAST:
             return context.value is not None and context.value >= float(rule.threshold or 0.0)
@@ -773,6 +894,11 @@ class TriggerDispatcher:
                     now=now,
                     scheduler=self.scheduler,
                 )
+            elif stat == "remove_named_buff" and self._enemy_remove_named_state_runtime_supported(effect):
+                name = str(effect.parameters.get("target_effect") or "")
+                if tuple(targets) != (ENEMY,):
+                    return False
+                self.effects.remove_named_state(ENEMY, name, now=now)
             elif stat in self._GAUGE_STATS:
                 family = self._gauge_family(effect)
                 if (
@@ -871,6 +997,13 @@ class TriggerDispatcher:
                 context=context,
             ):
                 return False
+            weapon_hit_key = self.damage_sink.post_damage_weapon_hit_key(effect)
+            if weapon_hit_key is not None:
+                from .burst import BurstSignal
+                self.dispatch(
+                    BurstSignal(now, weapon_hit_key, effect.actor, effect.actor),
+                    context=context,
+                )
         else:
             return False
 

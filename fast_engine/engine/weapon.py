@@ -69,6 +69,43 @@ class WeaponTriggerBoundary:
     count_increment: int
 
 
+def reducible_threshold_candidates(
+    effect: "CompiledEffect", all_effects, base: int
+) -> tuple[int, ...]:
+    """Return sparse modulo boundaries for one exact-name count reducer.
+
+    This slice is deliberately narrow: one same-actor finite self buff may reduce
+    one exact named hit_count effect by a positive integer. Runtime still decides
+    whether the reducer is active at each candidate crossing.
+    """
+    values = {int(base)}
+    if base <= 0 or not effect.name:
+        return tuple(sorted(values))
+    reducers = []
+    for other in all_effects:
+        if not (
+            other.actor == effect.actor
+            and other.effect_type == "buff"
+            and (other.stat or "") == "trigger_count_reduce"
+            and other.target_spec.mode.value == "self"
+            and other.parameters.get("target_effect") == effect.name
+            and set(other.parameters) == {"target_effect"}
+            and other.value is not None
+            and float(other.value) > 0.0
+            and float(other.value).is_integer()
+            and other.duration is not None
+            and float(other.duration) > 0.0
+            and other.max_stack in (None, 1, 1.0)
+            and all(rule.is_runtime_supported for rule in other.condition_rules)
+            and bool(other.triggers)
+        ):
+            continue
+        reducers.append(other)
+    if len(reducers) == 1:
+        values.add(max(1, int(base) - int(float(reducers[0].value))))
+    return tuple(sorted(values))
+
+
 class _WeaponBoundaryCollector:
     __slots__ = ("actor", "thresholds", "totals", "dispatched", "boundaries")
 
@@ -98,7 +135,9 @@ class _WeaponBoundaryCollector:
                     continue
                 n = int(rule.threshold or 0)
                 if n > 0:
-                    thresholds.setdefault(rule.event_key, set()).add(n)
+                    thresholds.setdefault(rule.event_key, set()).update(
+                        reducible_threshold_candidates(effect, character.effects, n)
+                    )
         return cls(actor, {key: tuple(sorted(values)) for key, values in thresholds.items()})
 
     def add_block(

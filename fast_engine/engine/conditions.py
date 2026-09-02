@@ -225,7 +225,7 @@ class ConditionEvaluator:
         if mode is ConditionMode.NOT_TARGET_STATE:
             return not self.effects.has_named_state(ENEMY, rule.key or "", now=now)
         if mode is ConditionMode.SELF_STACK_AT_LEAST:
-            return self.effects.named_stack(owner_actor, rule.key or "", now=now) >= (rule.value or 0.0)
+            return self.effects.source_named_stack(owner_actor, rule.key or "", now=now) >= (rule.value or 0.0)
         if mode is ConditionMode.TARGET_STACK_AT_LEAST:
             return self.effects.named_stack(ENEMY, rule.key or "", now=now) >= (rule.value or 0.0)
         if mode in {ConditionMode.GAUGE_AT_LEAST, ConditionMode.GAUGE_BELOW, ConditionMode.GAUGE_EQUAL, ConditionMode.GAUGE_MOD}:

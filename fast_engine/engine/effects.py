@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Iterable
 
 from .scheduler import EventKind, EventScheduler, ScheduledEvent
 from .shot_blocks import next_static_shot_after
-from .state import StateDomain, StateStore
+from .state import ENEMY, StateDomain, StateStore
 
 if TYPE_CHECKING:
     from .model import CompiledEffect, CompiledSquad
@@ -374,6 +374,21 @@ class ActiveEffectStore:
             ),
             default=0.0,
         )
+
+    def source_named_stack(self, source_actor: int, name: str, *, now: float) -> float:
+        """Moris self_stack_above: same-caster named state on self or enemy."""
+        values = []
+        for active in self._active.values():
+            if (
+                active.source_actor != int(source_actor)
+                or active.target not in {int(source_actor), ENEMY}
+                or not active.active(now)
+            ):
+                continue
+            effect = self._effects[active.effect_id]
+            if effect.name == name:
+                values.append(active.stacks)
+        return max(values, default=0.0)
 
     def adjust_named_stack(
         self,

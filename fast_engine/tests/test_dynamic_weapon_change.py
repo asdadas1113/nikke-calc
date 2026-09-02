@@ -18,11 +18,7 @@ class DynamicWeaponChangeTest(unittest.TestCase):
     def test_red_hood_mint_frika_team_clears_weapon_change_and_max_ammo_blockers(self):
         squad, compiled = self._team("레이드_레드후드퀀시")
         blockers = static_score_blockers(compiled)
-        rapi_damage = tuple(
-            item for item in blockers
-            if item.startswith("skill_damage:라피 : 레드 후드:")
-        )
-        self.assertEqual(len(rapi_damage), 4)
+        self.assertEqual(blockers, ())
         self.assertFalse(any("weapon_change" in item or "max_ammo" in item for item in blockers))
         cfg = spec.build_config(squad, {
             "duration": 30.0,
@@ -30,12 +26,13 @@ class DynamicWeaponChangeTest(unittest.TestCase):
             "rng_mode": "expected",
         })
         policy = compile_burst_policy(squad, compiled, cfg)
-        with self.assertRaises(NotImplementedError):
-            score_static_squad(
-                compiled,
-                policy,
-                EnemyStaticProfile(defense=31784.0, duration=30.0),
-            )
+        score = score_static_squad(
+            compiled,
+            policy,
+            EnemyStaticProfile(defense=31784.0, duration=30.0),
+        )
+        self.assertEqual(score.unsupported, ())
+        self.assertGreater(score.squad_total, 0.0)
 
     def test_red_hood_transform_activates_and_restores_effective_weapon(self):
         from fast_engine.engine.burst import BurstPolicy, BurstSignal

@@ -55,6 +55,7 @@ _STACK_COUNT_SAFE_CONDITIONS = frozenset({
     ConditionMode.GAUGE_BELOW,
     ConditionMode.GAUGE_EQUAL,
     ConditionMode.GAUGE_MOD,
+    ConditionMode.SELF_STACK_AT_LEAST,
 })
 _PATTERNLESS_UNREACHABLE_STATE_EVENTS = frozenset({
     "enemy_death",
@@ -85,7 +86,7 @@ class SimpleDamageScoreSink:
         "squad", "enemy", "specs", "pending_specs", "dot_specs", "stack_specs",
         "stateful_dot_specs", "unsupported_effect_ids", "char_total", "runtime",
         "resolver", "_pending_effect_ids", "_effect_actor", "_dot_generation",
-        "_stateful_dot_names",
+        "_stateful_dot_names", "_weapon_hit_source_ids",
     )
 
     def __init__(self, squad: "CompiledSquad", enemy: "EnemyStaticProfile") -> None:
@@ -106,6 +107,7 @@ class SimpleDamageScoreSink:
         }
         self._dot_generation: dict[int, int] = {}
         self._stateful_dot_names: dict[str, list[int]] = {}
+        self._weapon_hit_source_ids: set[int] = set()
 
         downstream_keys = set(squad.trigger_index.by_event)
         scaled_names = {
@@ -149,11 +151,16 @@ class SimpleDamageScoreSink:
                 continue
             if effect.name and (
                 f"hit_count:{effect.name}" in downstream_keys
-                or f"weapon_hit:{effect.name}" in downstream_keys
                 or effect.name in scaled_names
+                or (
+                    f"weapon_hit:{effect.name}" in downstream_keys
+                    and not self._weapon_hit_chain_shape_supported(effect)
+                )
             ):
                 self.unsupported_effect_ids.add(effect.effect_id)
                 continue
+            if effect.name and f"weapon_hit:{effect.name}" in downstream_keys:
+                self._weapon_hit_source_ids.add(effect.effect_id)
 
             if stack is not None:
                 if not self._stack_count_shape_supported(effect, stack):
@@ -192,13 +199,126 @@ class SimpleDamageScoreSink:
                 self.unsupported_effect_ids.add(effect_id)
 
     def _has_later_same_actor_burst_cast_buff(self, effect: "CompiledEffect") -> bool:
-        return any(
-            other.actor == effect.actor
-            and other.actor_effect_index > effect.actor_effect_index
-            and other.effect_type == "buff"
-            and any(rule.raw == "burst_cast" for rule in other.triggers)
-            for other in self.squad.effects
+        """Reject only later burst-cast buffs that can change pending B3 damage.
+
+        Moris evaluates the queued B3 bonus before later same-cast buffs can alter
+        that hit. Fast flushes at full-burst entry, so any later general damage
+        modifier must remain fail-closed. A Moris-NOP, trigger-count control, or
+        a damage-family modifier that provably does not apply to this pending hit
+        cannot change its value and is safe to ignore for this ordering guard.
+        """
+        pending = compile_pending_b3_bonus_damage_event(
+            effect, self.squad.members[effect.actor]
         )
+        if pending is None:
+            return True
+        unrelated = {
+            "trigger_count_reduce",
+        }
+        for other in self.squad.effects:
+            if not (
+                other.actor == effect.actor
+                and other.actor_effect_index > effect.actor_effect_index
+                and other.effect_type == "buff"
+                and any(rule.raw == "burst_cast" for rule in other.triggers)
+            ):
+                continue
+            if other.capability.disposition.value == "mirror_moris_nop":
+                continue
+            stat = other.stat or ""
+            if stat in unrelated:
+                continue
+            if stat in {"projectile_attachment_dmg", "projectile_attachment_dmg_pct"}:
+                if not pending.hit.is_projectile_attachment:
+                    continue
+            elif stat in {"projectile_explosion_dmg", "projectile_explosion_dmg_pct"}:
+                if not pending.hit.is_projectile_explosion:
+                    continue
+            elif stat == "sequential_dmg_pct":
+                if not pending.hit.is_sequential:
+                    continue
+            elif stat in {"dot_dmg", "dot_dmg_pct"}:
+                if not pending.hit.is_dot:
+                    continue
+            # Any general modifier, or a family modifier matching this pending hit,
+            # can change the queued damage and therefore preserves fail-closed.
+            return True
+        return False
+
+    @staticmethod
+    def _enemy_named_stack_marker_shape_supported(effect: "CompiledEffect") -> bool:
+        return (
+            effect.effect_type == "buff"
+            and (effect.stat or "") == "buff_stack_add"
+            and bool(effect.name)
+            and effect.target_spec.mode is TargetMode.ENEMY
+            and effect.value is not None
+            and abs(float(effect.value) - 1.0) <= 1e-9
+            and effect.duration in (None, -1.0)
+            and effect.max_stack == -1
+            and not effect.parameters
+            and all(rule.is_runtime_supported for rule in effect.condition_rules)
+            and len(effect.triggers) == 1
+            and effect.triggers[0].mode is TriggerMode.EVENT
+            and (effect.triggers[0].event_key or "").startswith("weapon_hit:")
+        )
+
+    def _weapon_hit_chain_shape_supported(self, source: "CompiledEffect") -> bool:
+        if (
+            source.effect_type != "damage"
+            or not source.name
+            or source.target_spec.mode is not TargetMode.ENEMY
+            or compile_simple_damage_event(source, self.squad.members[source.actor]) is None
+            or not all(rule.is_runtime_supported for rule in source.condition_rules)
+        ):
+            return False
+        key = f"weapon_hit:{source.name}"
+        consumers = [
+            other for other in self.squad.effects
+            if other.actor == source.actor
+            and any(rule.event_key == key for rule in other.triggers)
+        ]
+        if not consumers:
+            return False
+        for consumer in consumers:
+            matching = [rule for rule in consumer.triggers if rule.event_key == key]
+            if not matching or any(rule.mode is not TriggerMode.EVENT for rule in matching):
+                return False
+            if consumer.effect_type == "damage":
+                if (
+                    consumer.target_spec.mode is not TargetMode.ENEMY
+                    or compile_simple_damage_event(
+                        consumer, self.squad.members[consumer.actor]
+                    ) is None
+                    or not all(rule.is_runtime_supported for rule in consumer.condition_rules)
+                ):
+                    return False
+                continue
+            if self._enemy_named_stack_marker_shape_supported(consumer):
+                continue
+            return False
+        # Any exact-name count reducer must also stay inside the one-reducer slice.
+        reducers = [
+            other for other in self.squad.effects
+            if other.actor == source.actor
+            and (other.stat or "") == "trigger_count_reduce"
+            and other.parameters.get("target_effect") == source.name
+        ]
+        return len(reducers) <= 1
+
+    def supports_weapon_hit_source(self, actor: int, source_name: str) -> bool:
+        return any(
+            effect.effect_id in self._weapon_hit_source_ids
+            and effect.actor == actor
+            and effect.name == source_name
+            and self.supports(effect)
+            for effect in self.squad.effects
+        )
+
+    def post_damage_weapon_hit_key(self, effect: "CompiledEffect") -> str | None:
+        if effect.effect_id not in self._weapon_hit_source_ids or not self.supports(effect):
+            return None
+        return f"weapon_hit:{effect.name}"
 
     def _stack_count_shape_supported(
         self,
@@ -210,12 +330,20 @@ class SimpleDamageScoreSink:
             for rule in effect.condition_rules
         ):
             return False
-        return any(
+        if any(
             other.actor == effect.actor
             and other.parameters.get("gauge_id") == spec.ref
             and (other.stat or "") in {"gauge_charge", "gauge_consume"}
             for other in self.squad.effects
-        )
+        ):
+            return True
+        providers = [
+            other for other in self.squad.effects
+            if other.actor == effect.actor
+            and other.name == spec.ref
+            and self._enemy_named_stack_marker_shape_supported(other)
+        ]
+        return len(providers) == 1
 
     def _gauge_ref_runtime_supported(self, actor: int, ref: str) -> bool:
         runtime = self.runtime
@@ -232,7 +360,27 @@ class SimpleDamageScoreSink:
 
     def _stack_count_runtime_supported(self, effect: "CompiledEffect") -> bool:
         spec = self.stack_specs.get(effect.effect_id)
-        return bool(spec is not None and self._gauge_ref_runtime_supported(effect.actor, spec.ref))
+        if spec is None:
+            return False
+        has_gauge = any(
+            other.actor == effect.actor
+            and other.parameters.get("gauge_id") == spec.ref
+            and (other.stat or "") in {"gauge_charge", "gauge_consume"}
+            for other in self.squad.effects
+        )
+        if has_gauge:
+            return self._gauge_ref_runtime_supported(effect.actor, spec.ref)
+        providers = [
+            other for other in self.squad.effects
+            if other.actor == effect.actor
+            and other.name == spec.ref
+            and self._enemy_named_stack_marker_shape_supported(other)
+        ]
+        if len(providers) != 1:
+            return False
+        if self.runtime is None:
+            return True
+        return self.runtime.dispatcher.can_activate_effect(providers[0])
 
     @staticmethod
     def _state_effect_patternless_unreachable(effect: "CompiledEffect") -> bool:
@@ -390,8 +538,19 @@ class SimpleDamageScoreSink:
                 return True
         return False
 
-    @staticmethod
-    def _delivery_supported(effect: "CompiledEffect") -> bool:
+    def _weapon_hit_consumer_source_proven(
+        self, effect: "CompiledEffect", event_key: str
+    ) -> bool:
+        source_name = event_key[len("weapon_hit:"):]
+        sources = [
+            source for source in self.squad.effects
+            if source.actor == effect.actor
+            and source.effect_type == "damage"
+            and source.name == source_name
+        ]
+        return len(sources) == 1 and self._weapon_hit_chain_shape_supported(sources[0])
+
+    def _delivery_supported(self, effect: "CompiledEffect") -> bool:
         if effect.target_spec.mode is not TargetMode.ENEMY:
             return False
         if not all(rule.is_runtime_supported for rule in effect.condition_rules):
@@ -404,7 +563,11 @@ class SimpleDamageScoreSink:
                     return False
                 continue
             if rule.event_key not in _SAFE_EVENT_KEYS:
-                return False
+                if not (
+                    (rule.event_key or "").startswith("weapon_hit:")
+                    and self._weapon_hit_consumer_source_proven(effect, rule.event_key or "")
+                ):
+                    return False
             if rule.event_key == "core_hit" and not is_static_expected_core_count_rule(rule):
                 return False
         return True

@@ -6,7 +6,9 @@ from typing import Callable, TYPE_CHECKING
 from .scheduler import EventKind, EventScheduler, ScheduledEvent
 from .state import StateStore
 from .triggers import TriggerMode
-from .weapon import WeaponCadenceMachine, _EPS, _round_half_up
+from .weapon import (
+    WeaponCadenceMachine, _EPS, _round_half_up, reducible_threshold_candidates,
+)
 
 if TYPE_CHECKING:
     from .effects import ActiveEffectStore
@@ -121,10 +123,13 @@ class DynamicRapidReloadRuntime:
                     threshold = int(rule.threshold or 0)
                     if threshold <= 0:
                         continue
+                    candidates = reducible_threshold_candidates(
+                        effect, squad.effects, threshold
+                    )
                     if rule.event_key == "hit_count":
-                        hits.add(threshold)
+                        hits.update(candidates)
                     elif rule.event_key == "pellet_hit":
-                        pellets.add(threshold)
+                        pellets.update(candidates)
             if hits:
                 hit_thresholds[actor] = tuple(sorted(hits))
             if pellets:
