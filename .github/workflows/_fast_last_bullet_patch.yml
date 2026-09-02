@@ -1,0 +1,166 @@
+name: Fast last-bullet boundary patch
+
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+    paths: [.github/workflows/_fast_last_bullet_patch.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Apply generic last-bullet rapid boundary
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('fast_engine/engine/dynamic_reload.py')
+          s = p.read_text(encoding='utf-8')
+          old = '''        "_hit_thresholds",\n        "_pellet_thresholds",\n        "_states",'''
+          new = '''        "_hit_thresholds",\n        "_pellet_thresholds",\n        "_last_bullet_actors",\n        "_states",'''
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = '''        hit_thresholds: dict[int, tuple[int, ...]] = {}\n        pellet_thresholds: dict[int, tuple[int, ...]] = {}\n        for actor, character in enumerate(squad.members):\n            hits: set[int] = set()\n            pellets: set[int] = set()\n            for effect in character.effects:\n                if not effect_filter(effect):\n                    continue\n                for rule in effect.triggers:\n                    if rule.mode is not TriggerMode.MODULO or not rule.trigger_count_reducible:\n                        continue'''
+          new = '''        hit_thresholds: dict[int, tuple[int, ...]] = {}\n        pellet_thresholds: dict[int, tuple[int, ...]] = {}\n        last_bullet_actors: set[int] = set()\n        for actor, character in enumerate(squad.members):\n            hits: set[int] = set()\n            pellets: set[int] = set()\n            for effect in character.effects:\n                if not effect_filter(effect):\n                    continue\n                for rule in effect.triggers:\n                    if rule.event_key == "last_bullet":\n                        last_bullet_actors.add(actor)\n                    if rule.mode is not TriggerMode.MODULO or not rule.trigger_count_reducible:\n                        continue'''
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = '''        self._hit_thresholds = hit_thresholds\n        self._pellet_thresholds = pellet_thresholds\n'''
+          new = '''        self._hit_thresholds = hit_thresholds\n        self._pellet_thresholds = pellet_thresholds\n        self._last_bullet_actors = frozenset(last_bullet_actors)\n'''
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = '''    def _shot_is_boundary(self, st: _RapidActorState) -> bool:\n        next_hit = st.hit_count + 1\n'''
+          new = '''    def _shot_is_boundary(self, st: _RapidActorState) -> bool:\n        # Keep ordinary rapid shots compressed, but materialize the magazine's\n        # final physical shot when an executable last_bullet consumer exists.\n        # BurstRuntime already dispatches last_bullet after scoring this boundary.\n        if st.actor in self._last_bullet_actors and st.ammo <= 1:\n            return True\n        next_hit = st.hit_count + 1\n'''
+          assert old in s
+          s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8')
+
+          p = Path('fast_engine/engine/score.py')
+          s = p.read_text(encoding='utf-8')
+          old = '''            "last_bullet_fire",\n            "last_bullet",\n            "on_attack",'''
+          new = '''            "last_bullet_fire",\n            "on_attack",'''
+          assert old in s
+          s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8')
+
+          test = r'''from __future__ import annotations
+
+import unittest
+
+from context.spec import build_squad
+from fast_engine.engine.burst import BurstPolicy
+from fast_engine.engine.burst_runtime import BurstRuntime
+from fast_engine.engine.capabilities import CapabilityDisposition, EffectCapability, EffectCategory
+from fast_engine.engine.compiler import compile_moris_squad
+from fast_engine.engine.model import CompiledEffect, EnemyStaticProfile
+from fast_engine.engine.score import StaticNormalAttackObserver, static_normal_score_blockers, static_score_blockers
+from fast_engine.engine.targets import compile_target
+from fast_engine.engine.triggers import TriggerMode, TriggerRule
+from fast_engine.tests.test_damage_dynamic_reload_scoring import _reload_effect, _squad_many
+
+
+def _last_bullet_effect() -> CompiledEffect:
+    return CompiledEffect(
+        effect_id=1,
+        actor=0,
+        actor_effect_index=1,
+        source="synthetic",
+        source_tag="skill",
+        name="last bullet atk",
+        effect_type="buff",
+        stat="atk_pct",
+        polarity="beneficial",
+        target="self",
+        target_spec=compile_target("self", actor_by_name={"synthetic-reload": 0}),
+        conditions=(),
+        condition_rules=(),
+        triggers=(TriggerRule("last_bullet", "last_bullet", TriggerMode.EVENT),),
+        value=25.0,
+        duration=10.0,
+        max_stack=None,
+        max_trigger=None,
+        tick_interval=None,
+        parameters={},
+        capability=EffectCapability(
+            character="synthetic-reload",
+            index=1,
+            source="synthetic",
+            name="last bullet atk",
+            effect_type="buff",
+            stat="atk_pct",
+            category=EffectCategory.HIT_FORMULA,
+            timing_families=("weapon_hit",),
+            condition_families=(),
+            target_family="ally_static",
+            advanced_fields=(),
+            disposition=CapabilityDisposition.READY,
+            blockers=(),
+        ),
+    )
+
+
+class DynamicLastBulletBoundaryTests(unittest.TestCase):
+    def test_last_bullet_consumer_no_longer_blocks_dynamic_reload_owner(self):
+        reload_effect = _reload_effect(duration=1.5)
+        last = _last_bullet_effect()
+        blockers = static_normal_score_blockers(_squad_many((reload_effect, last)))
+        self.assertNotIn(
+            "cadence:synthetic-reload:live reload:reload_speed_pct",
+            blockers,
+        )
+
+    def test_magazine_final_shot_dispatches_last_bullet_once(self):
+        reload_effect = _reload_effect(duration=1.5)
+        last = _last_bullet_effect()
+        squad = _squad_many((reload_effect, last))
+        runtime = BurstRuntime(
+            squad,
+            BurstPolicy(duration=1.2, first_burst_time=30.0),
+            EnemyStaticProfile(defense=0.0, duration=1.2),
+        )
+        runtime.dispatcher.effects.activate(reload_effect, 0, 0.0, runtime.scheduler)
+        observer = StaticNormalAttackObserver(runtime, duration=1.2)
+        result = runtime.run(duration=1.2, score_observer=observer)
+        observer.finish(events_processed=result.events_processed)
+        self.assertEqual(runtime.dispatcher._activation_counts.get(1, 0), 1)
+        self.assertEqual(runtime.weapons._rapid_reload._states[0].hit_count, 2)
+
+    def test_public_privaty_reload_blocker_is_removed_but_max_ammo_stays_closed(self):
+        names = ["리틀 머메이드", "크라운", "라피 : 레드 후드", "앨리스", "프리바티"]
+        compiled = compile_moris_squad(build_squad(names))
+        blockers = static_score_blockers(compiled)
+        self.assertNotIn("cadence:프리바티:EX 매거진 2:reload_speed_pct", blockers)
+        self.assertIn("cadence:프리바티:EX 매거진 3:max_ammo_pct", blockers)
+
+
+if __name__ == "__main__":
+    unittest.main()
+'''
+          Path('fast_engine/tests/test_dynamic_last_bullet_boundary.py').write_text(test, encoding='utf-8')
+          PY
+      - name: Run focused and Fast tests
+        run: |
+          python -m unittest fast_engine.tests.test_dynamic_last_bullet_boundary
+          python -m unittest fast_engine.tests.test_damage_dynamic_reload_scoring
+          python -m unittest discover -s fast_engine/tests -p 'test_*.py'
+      - name: Commit patch and remove helper
+        shell: bash
+        run: |
+          rm .github/workflows/_fast_last_bullet_patch.yml
+          git config user.name "fast-engine-bot"
+          git config user.email "fast-engine-bot@users.noreply.github.com"
+          git add -A
+          git commit -m "impl: materialize rapid last-bullet boundary"
+          git push origin HEAD:fast-engine-phase2-20260901
