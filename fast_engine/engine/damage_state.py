@@ -96,6 +96,30 @@ class DamageTermResolver:
     def _sum_aliases(self, actor: int, stats: tuple[str, ...], now: float) -> float:
         return sum(self._sum(actor, stat, now) for stat in stats)
 
+    def _caster_based_charge_speed(self, actor: int, now: float) -> float:
+        target_base = float(self.squad.members[actor].weapon.get("charge_time") or 0.0)
+        if target_base <= 1e-12:
+            return 0.0
+        total = 0.0
+        for effect, active in self.effects.iter_stat(
+            "charge_speed_caster_based_pct", now=now
+        ):
+            if active.target != actor or not self._runtime_condition_ok(effect):
+                continue
+            caster_base = float(
+                self.squad.members[active.source_actor].weapon.get("charge_time") or 0.0
+            )
+            total += caster_base * float(effect.value or 0.0) * active.stacks / target_base
+        return total
+
+    def _charge_overflow_damage_pct(self, actor: int, now: float) -> float:
+        conv = self._sum(actor, "charge_speed_overflow_conversion_pct", now)
+        if conv <= 0.0:
+            return 0.0
+        speed = self._sum(actor, "charge_speed_pct", now) + self._caster_based_charge_speed(actor, now)
+        overflow = max(0.0, speed - 100.0)
+        return overflow * conv / 100.0
+
     def _caster_based_atk_flat(self, actor: int, now: float) -> float:
         total = 0.0
         for effect, active in self.effects.iter_stat("atk_caster_based_pct", now=now):
@@ -176,7 +200,10 @@ class DamageTermResolver:
             part_dmg_pct=self._sum_aliases(
                 actor, ("part_dmg", "part_dmg_pct"), now
             ),
-            charge_dmg_pct=self._sum(actor, "charge_dmg_pct", now),
+            charge_dmg_pct=(
+                self._sum(actor, "charge_dmg_pct", now)
+                + self._charge_overflow_damage_pct(actor, now)
+            ),
             charge_dmg_mag_pct=self._sum(actor, "charge_dmg_mag_pct", now),
             received_dmg_pct=received,
             split_dmg_pct=self._sum(actor, "split_dmg_pct", now),

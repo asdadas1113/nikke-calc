@@ -18,6 +18,8 @@ from fast_engine.engine.model import (
 )
 from fast_engine.engine.normal_attack import expected_normal_block_damage
 from fast_engine.engine.score import StaticNormalAttackObserver, static_normal_score_blockers
+from context.spec import build_squad
+from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.targets import compile_target
 from fast_engine.engine.triggers import TriggerIndex, TriggerMode, TriggerRule
 
@@ -184,6 +186,52 @@ class DynamicChargeScoringTests(unittest.TestCase):
         # weapon runtime itself.
         total, per_shot = _run_live_speed_case(effect)
         self.assertAlmostEqual(total, per_shot * 4.0, places=6)
+
+    def test_public_red_hood_glaring_eyes_pair_is_certified(self):
+        names = ["라피 : 레드 후드", "레드 후드", "프리카", "민트", "퀀시 : 이스케이프 퀸"]
+        squad = compile_moris_squad(build_squad(names))
+        blockers = static_normal_score_blockers(squad)
+        self.assertFalse(any("레드 후드:글레링 아이즈:charge_speed_pct" in x for x in blockers))
+        self.assertFalse(any("레드 후드:글레링 아이즈 2:charge_speed_overflow_conversion_pct" in x for x in blockers))
+        self.assertTrue(any("민트:다 함께 불러주세요! 2:max_ammo_pct" in x for x in blockers))
+
+    def test_on_attack_charge_speed_stacks_after_consuming_shot(self):
+        base = _charge_speed_effect()
+        planned = replace(base.capability, disposition=CapabilityDisposition.PLANNED, blockers=("timing:weapon_hit",))
+        effect = replace(
+            base,
+            value=60.0,
+            duration=5.0,
+            max_stack=2.0,
+            triggers=(TriggerRule("on_attack", "on_attack", TriggerMode.EVENT),),
+            capability=planned,
+        )
+        squad = _squad(effect)
+        self.assertFalse(static_normal_score_blockers(squad))
+        runtime = BurstRuntime(squad, BurstPolicy(duration=2.1, first_burst_time=10.0), EnemyStaticProfile(defense=0.0, core_uptime=0.0, core_px=0.0, duration=2.1))
+        observer = StaticNormalAttackObserver(runtime, duration=2.1)
+        runtime.run(duration=2.1, score_observer=observer)
+        # First shot is at base 1.0s. Only then does +60% activate, replanning the
+        # next charge from its post-shot start; the effect must have one stack.
+        self.assertAlmostEqual(runtime.dispatcher.effects.sum_stat(0, "charge_speed_pct", now=1.01), 60.0, places=9)
+
+    def test_charge_speed_overflow_adds_charge_damage_only_above_100(self):
+        speed = _charge_speed_effect()
+        speed = replace(speed, value=120.0, duration=-1.0, max_stack=None, triggers=(TriggerRule("battle_start", "battle_start", TriggerMode.EVENT),))
+        conv_cap = _ready_capability(stat="charge_speed_overflow_conversion_pct")
+        conv = replace(
+            speed,
+            effect_id=1, actor_effect_index=1, name="overflow",
+            stat="charge_speed_overflow_conversion_pct", value=240.0, capability=conv_cap,
+        )
+        member = _squad(speed).members[0]
+        member = replace(member, effects=(speed, conv))
+        squad = CompiledSquad((member,), TriggerIndex.from_effects((speed, conv), actor_count=1))
+        runtime = BurstRuntime(squad, BurstPolicy(duration=1.0, first_burst_time=10.0), EnemyStaticProfile(defense=0.0, core_uptime=0.0, core_px=0.0, duration=1.0))
+        runtime.dispatcher.dispatch(__import__('fast_engine.engine.burst', fromlist=['BurstSignal']).BurstSignal(0.0, 'battle_start', 0, 0))
+        from fast_engine.engine.damage_state import DamageTermResolver
+        terms = DamageTermResolver(squad, runtime.dispatcher.effects, runtime.state, runtime.enemy).resolve(0, now=0.01)
+        self.assertAlmostEqual(terms.charge_dmg_pct, 48.0, places=9)
 
     def test_uncertified_charge_speed_delivery_remains_fail_closed(self):
         effect = _charge_speed_effect()

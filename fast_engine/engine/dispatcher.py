@@ -289,6 +289,46 @@ class TriggerDispatcher:
             and int(rule.threshold or 0) > 0
         )
 
+    @staticmethod
+    def _on_attack_charge_speed_shape_supported(effect: "CompiledEffect") -> bool:
+        """Bridge only a simple self charge-speed stack driven by one physical attack."""
+        if not (
+            effect.capability.disposition is CapabilityDisposition.PLANNED
+            and set(effect.capability.blockers) == {"timing:weapon_hit"}
+            and effect.effect_type == "buff"
+            and (effect.stat or "") == "charge_speed_pct"
+            and effect.target_spec.mode is TargetMode.SELF
+            and effect.value is not None
+            and effect.duration is not None
+            and float(effect.duration) > 0.0
+            and effect.max_stack is not None
+            and float(effect.max_stack) >= 1.0
+            and not effect.parameters
+            and not effect.condition_rules
+            and len(effect.triggers) == 1
+        ):
+            return False
+        rule = effect.triggers[0]
+        return rule.mode is TriggerMode.EVENT and rule.event_key == "on_attack"
+
+    @staticmethod
+    def _charge_overflow_conversion_shape_supported(effect: "CompiledEffect") -> bool:
+        """Certify immutable self charge-speed overflow conversion."""
+        return (
+            effect.effect_type == "buff"
+            and (effect.stat or "") == "charge_speed_overflow_conversion_pct"
+            and effect.target_spec.mode is TargetMode.SELF
+            and effect.value is not None
+            and float(effect.value) >= 0.0
+            and effect.duration in (None, -1.0)
+            and effect.max_stack in (None, 1, 1.0)
+            and not effect.parameters
+            and not effect.condition_rules
+            and len(effect.triggers) == 1
+            and effect.triggers[0].mode is TriggerMode.EVENT
+            and effect.triggers[0].event_key == "battle_start"
+        )
+
     @classmethod
     def _timed_shield_shape_supported(cls, effect: "CompiledEffect") -> bool:
         """Certify the presence-only timed shield slice owned by Fast."""
@@ -418,6 +458,8 @@ class TriggerDispatcher:
         if (
             TriggerDispatcher._named_event_control_shape_supported(effect)
             or TriggerDispatcher._named_duration_extend_shape_supported(effect)
+            or TriggerDispatcher._on_attack_charge_speed_shape_supported(effect)
+            or TriggerDispatcher._charge_overflow_conversion_shape_supported(effect)
         ):
             return True
         if stat in TriggerDispatcher._AUXILIARY_STATS:

@@ -85,7 +85,6 @@ _UNRESOLVED_NORMAL_DAMAGE_STATS = frozenset({
     "atk_copy",
     "atk_buff_mag_pct",
     "charge_dmg_per_max_ammo_pct",
-    "charge_speed_overflow_conversion_pct",
     "dmg_scale_mag_pct",
 })
 
@@ -226,9 +225,16 @@ def _charge_actor_score_safe(squad: CompiledSquad, actor: int) -> bool:
     if _actor_has_executable_event(
         squad,
         actor,
-        frozenset({"last_bullet_fire", "on_attack", "event:full_reload", "full_reload"}),
+        frozenset({"last_bullet_fire", "event:full_reload", "full_reload"}),
     ):
         return False
+    for effect in squad.members[actor].effects:
+        if not any(rule.event_key == "on_attack" for rule in effect.triggers):
+            continue
+        if not TriggerDispatcher.is_executable_effect(effect):
+            continue
+        if not TriggerDispatcher._on_attack_charge_speed_shape_supported(effect):
+            return False
     if _actor_has_executable_event(squad, actor, frozenset({"pellet_hit"})):
         return False
     return not _actor_has_unhandled_count_event(
@@ -715,6 +721,11 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
 
         if stat == "element_code_override":
             if not is_static_element_override_score_supported(effect):
+                blockers.append(f"normal_state:{label}")
+            continue
+
+        if stat == "charge_speed_overflow_conversion_pct":
+            if not TriggerDispatcher._charge_overflow_conversion_shape_supported(effect):
                 blockers.append(f"normal_state:{label}")
             continue
 

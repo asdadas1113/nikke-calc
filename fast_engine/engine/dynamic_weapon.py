@@ -48,6 +48,7 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
     __slots__ = (
         "_hit_thresholds",
         "_raw_full_charge_actors",
+        "_raw_on_attack_actors",
         "_score_actors",
         "_score_shot_sink",
         "_rapid_reload",
@@ -74,6 +75,7 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
 
         hit_thresholds: dict[int, tuple[int, ...]] = {}
         raw_full_charge_actors: set[int] = set()
+        raw_on_attack_actors: set[int] = set()
         for actor, character in enumerate(squad.members):
             values: set[int] = set()
             for effect in character.effects:
@@ -93,10 +95,15 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
                         and rule.mode is TriggerMode.EVENT
                     ):
                         raw_full_charge_actors.add(actor)
+                    if (
+                        rule.event_key == "on_attack"
+                        and rule.mode is TriggerMode.EVENT
+                    ):
+                        raw_on_attack_actors.add(actor)
             if values:
                 hit_thresholds[actor] = tuple(sorted(values))
 
-        interesting = set(hit_thresholds) | raw_full_charge_actors
+        interesting = set(hit_thresholds) | raw_full_charge_actors | raw_on_attack_actors
         for actor in interesting:
             character = squad.members[actor]
             if str(character.weapon.get("fire_mode") or "") != "charge":
@@ -105,9 +112,15 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
                         "Fast raw full_charge_hit consumer on non-charge weapon is not certified: "
                         + character.name
                     )
+                if actor in raw_on_attack_actors:
+                    raise NotImplementedError(
+                        "Fast raw on_attack consumer on non-charge weapon is not certified: "
+                        + character.name
+                    )
 
         self._hit_thresholds = hit_thresholds
         self._raw_full_charge_actors = frozenset(raw_full_charge_actors)
+        self._raw_on_attack_actors = frozenset(raw_on_attack_actors)
         self._score_actors: frozenset[int] = frozenset()
         self._score_shot_sink: Callable[[int, float], None] | None = None
         self._rapid_reload = DynamicRapidCadenceRuntime(
@@ -247,6 +260,7 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         return actor in self.actors and (
             self.emits_each_charge_hit
             or actor in self._raw_full_charge_actors
+            or actor in self._raw_on_attack_actors
             or actor in self._score_actors
         )
 
@@ -259,7 +273,11 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         return actor in self.actors and self.emits_each_charge_hit
 
     def _shot_is_boundary(self, actor: int, absolute_count: int) -> bool:
-        if actor in self._score_actors or actor in self._raw_full_charge_actors:
+        if (
+            actor in self._score_actors
+            or actor in self._raw_full_charge_actors
+            or actor in self._raw_on_attack_actors
+        ):
             return True
         if super()._shot_is_boundary(actor, absolute_count):
             return True
@@ -316,6 +334,8 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
             signals.append(DynamicCountSignal("full_charge_hit", count_increment))
         if actor in self._hit_thresholds:
             signals.append(DynamicCountSignal("hit_count", count_increment))
+        if actor in self._raw_on_attack_actors:
+            signals.append(DynamicCountSignal("on_attack", 1))
         if self.effects.has_dynamic_bullet_lifetime(actor, now=float(event.time)):
             # The consuming charge shot is scored above and its hit/full-charge
             # signals are delivered first. Remove bullet-duration state only at
