@@ -14,7 +14,7 @@ from .damage_state import DamageTermResolver
 from .dispatcher import TriggerDispatcher
 from .dynamic_rapid import is_supported_rapid_cover_control
 from .model import CompiledSquad, EnemyStaticProfile, FastScore
-from .normal_attack import compile_normal_attack_spec, expected_normal_block_damage
+from .normal_attack import NormalAttackSpec, compile_normal_attack_spec, expected_normal_block_damage
 from .shot_blocks import (
     ShotBlockCursor,
     compile_static_shot_blocks,
@@ -203,6 +203,31 @@ def _reload_speed_positive_upper_bound(squad: CompiledSquad, actor: int) -> floa
     return total
 
 
+def _temporary_self_charge_weapon_change_score_supported(
+    squad: CompiledSquad, effect
+) -> bool:
+    if not TriggerDispatcher._temporary_self_charge_weapon_change_shape_supported(effect):
+        return False
+    member = squad.members[effect.actor]
+    params = effect.parameters
+    charge = float(params.get("charge_seconds", params.get("charge_time", 1.0)))
+    if not (
+        str(member.weapon.get("fire_mode") or "") == "charge"
+        and str(member.weapon.get("weapon_type") or member.weapon_type) == str(params.get("weapon_type"))
+        and abs(float(member.weapon.get("charge_time") or 0.0) - charge) <= 1e-9
+        and not member.weapon.get("control")
+        and not member.weapon.get("is_clip")
+    ):
+        return False
+    related = tuple(
+        other
+        for other in squad.effects
+        if other.effect_type == "weapon_change"
+        and effect.actor in _possible_ally_targets(squad, other)
+    )
+    return len(related) == 1 and related[0].effect_id == effect.effect_id
+
+
 def _charge_actor_score_safe(squad: CompiledSquad, actor: int) -> bool:
     """Safety contract for per-shot dynamic SR/RL score ownership."""
 
@@ -217,9 +242,17 @@ def _charge_actor_score_safe(squad: CompiledSquad, actor: int) -> bool:
     ):
         return False
 
-    for effect in squad.effects:
-        if effect.effect_type == "weapon_change" and actor in _possible_ally_targets(squad, effect):
-            return False
+    weapon_changes = tuple(
+        effect
+        for effect in squad.effects
+        if effect.effect_type == "weapon_change"
+        and actor in _possible_ally_targets(squad, effect)
+    )
+    if weapon_changes and not (
+        len(weapon_changes) == 1
+        and _temporary_self_charge_weapon_change_score_supported(squad, weapon_changes[0])
+    ):
+        return False
 
     if _actor_has_executable_core_count(squad, actor):
         return False
@@ -570,6 +603,12 @@ def _dynamic_charge_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
     actors.update(charge & set(_dynamic_ammo_charge_score_actors(squad)))
     actors.update(charge & set(_dynamic_max_ammo_score_actors(squad)))
     actors.update(_dynamic_charge_bullet_lifetime_score_actors(squad))
+    actors.update(
+        effect.actor
+        for effect in squad.effects
+        if effect.effect_type == "weapon_change"
+        and _temporary_self_charge_weapon_change_score_supported(squad, effect)
+    )
     return tuple(sorted(actors))
 
 
@@ -741,7 +780,7 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
             continue
 
         if effect.effect_type == "weapon_change":
-            if not TriggerDispatcher.is_executable_effect(effect):
+            if not _temporary_self_charge_weapon_change_score_supported(squad, effect):
                 blockers.append(f"weapon_change:{owner}:{effect.name or 'unnamed'}")
             continue
 
@@ -796,6 +835,30 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
 
 def static_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
     blockers = list(static_normal_score_blockers(squad))
+
+    # Mirror the damage sink's compile-time support decision before running the
+    # combat timeline. Unsupported comparison-critical skill damage must fail
+    # closed here instead of burning a full Fast evaluation and only appearing
+    # later in FastScore.unsupported. Runtime-dependent gauge checks remain safe:
+    # SimpleDamageScoreSink treats an unattached runtime as compile-time proof.
+    from .damage_runtime import SimpleDamageScoreSink
+    from .model import EnemyStaticProfile
+
+    damage_sink = SimpleDamageScoreSink(
+        squad, EnemyStaticProfile(defense=0.0, duration=1.0)
+    )
+    for effect in squad.effects:
+        if (
+            effect.effect_type == "damage"
+            and not _is_patternless_unreachable(effect)
+            and not damage_sink.supports(effect)
+        ):
+            owner = squad.members[effect.actor].name
+            blockers.append(
+                f"skill_damage:{owner}:"
+                f"{effect.name or effect.stat or '?'}:{effect.stat or '?'}"
+            )
+
     for effect in squad.effects:
         if effect.effect_type != "buff" or _is_patternless_unreachable(effect):
             continue
@@ -878,13 +941,27 @@ class StaticNormalAttackObserver:
         if count <= 0:
             return
         member = self.runtime.squad.members[actor]
+        weapon = self.runtime.weapons.effective_weapon(actor, eval_time)
+        spec = self.specs[actor]
+        if weapon is not member.weapon:
+            pellets = max(1, int(weapon.get("pellets", 1)))
+            muzzles = max(1, int(weapon.get("muzzles", 1)))
+            total_coeff = float(weapon.get("damage_coeff", 0.0))
+            spec = NormalAttackSpec(
+                coeff_per_hit=total_coeff / pellets if pellets > 1 else total_coeff,
+                hits_per_shot=pellets * muzzles,
+                core_dmg_mult=float(weapon.get("core_dmg_mult", 200.0)),
+                full_charge_mult=float(weapon.get("full_charge_mult", 100.0)),
+                normal_hit_coeff=float(weapon.get("normal_hit_coeff", 1.0)),
+                is_full_charge=str(weapon.get("fire_mode") or "") == "charge",
+            )
         terms = self.resolver.resolve(actor, now=eval_time)
         core_prob = self.runtime.enemy.core_rate_for_weapon(
-            member.weapon,
+            weapon,
             accuracy_pct=terms.accuracy_pct,
         )
         self.char_total[actor] += expected_normal_block_damage(
-            self.specs[actor],
+            spec,
             shot_count=count,
             base_atk=member.base_atk,
             enemy_def=self.runtime.enemy.defense,

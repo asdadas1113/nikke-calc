@@ -452,6 +452,72 @@ class TriggerDispatcher:
             return False
         return True
 
+    @classmethod
+    def _temporary_self_charge_weapon_change_shape_supported(cls, effect: "CompiledEffect") -> bool:
+        params = effect.parameters
+        allowed = {
+            "weapon_type", "damage_coeff", "max_ammo", "reload_seconds",
+            "reload_time", "charge_seconds", "charge_time", "full_charge_mult",
+            "post_fire_delay", "cover_during_delay",
+        }
+        if not (
+            effect.capability.disposition is CapabilityDisposition.PLANNED
+            and set(effect.capability.blockers).issubset({
+                "stat:None",
+                "field:weapon_type",
+                "field:damage_coeff",
+                "field:max_ammo",
+                "field:full_charge_mult",
+                "field:post_fire_delay",
+                "field:cover_during_delay",
+                "field:reload_seconds",
+                "field:reload_time",
+                "field:charge_seconds",
+                "field:charge_time",
+            })
+            and effect.effect_type == "weapon_change"
+            and effect.target_spec.mode.value == "self"
+            and effect.duration is not None
+            and float(effect.duration) > 0.0
+            and effect.max_stack in (None, 1, 1.0)
+            and not effect.condition_rules
+            and bool(effect.triggers)
+            and not (set(params) - allowed)
+            and params.get("weapon_type") in {"SR", "RL"}
+            and params.get("max_ammo") == -1
+            and isinstance(params.get("damage_coeff"), (int, float))
+            and isinstance(params.get("full_charge_mult"), (int, float))
+            and isinstance(params.get("post_fire_delay"), (int, float))
+        ):
+            return False
+        charge = params.get("charge_seconds", params.get("charge_time", 1.0))
+        if not isinstance(charge, (int, float)) or float(charge) < 0.0:
+            return False
+        for rule in effect.triggers:
+            if rule.mode is not TriggerMode.EVENT:
+                return False
+            key = rule.event_key or ""
+            if key == "burst_cast" or key.startswith("squad_burst_cast:"):
+                continue
+            return False
+        return True
+
+    def _temporary_self_charge_weapon_change_runtime_supported(
+        self, effect: "CompiledEffect"
+    ) -> bool:
+        if not self._temporary_self_charge_weapon_change_shape_supported(effect):
+            return False
+        member = self.squad.members[effect.actor]
+        params = effect.parameters
+        charge = float(params.get("charge_seconds", params.get("charge_time", 1.0)))
+        return (
+            str(member.weapon.get("fire_mode") or "") == "charge"
+            and str(member.weapon.get("weapon_type") or member.weapon_type) == str(params.get("weapon_type"))
+            and abs(float(member.weapon.get("charge_time") or 0.0) - charge) <= 1e-9
+            and not member.weapon.get("control")
+            and not member.weapon.get("is_clip")
+        )
+
     @staticmethod
     def is_executable_effect(effect: "CompiledEffect") -> bool:
         stat = effect.stat or ""
@@ -527,6 +593,8 @@ class TriggerDispatcher:
         return True
 
     def is_runtime_executable_effect(self, effect: "CompiledEffect") -> bool:
+        if self._temporary_self_charge_weapon_change_runtime_supported(effect):
+            return True
         family = self._gauge_family(effect)
         if (
             family is not None
@@ -786,6 +854,13 @@ class TriggerDispatcher:
                     )
                 else:
                     self.burst.set_stage_override(effect.actor, suffix)
+        elif effect.effect_type == "weapon_change":
+            if (
+                not self._temporary_self_charge_weapon_change_runtime_supported(effect)
+                or tuple(targets) != (effect.actor,)
+            ):
+                return False
+            self.effects.activate_group(effect, targets, now, self.scheduler)
         elif effect.effect_type == "damage":
             if self.damage_sink is None or not self.damage_sink.supports(effect):
                 return False

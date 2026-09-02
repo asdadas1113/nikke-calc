@@ -451,6 +451,7 @@ class _ChargeActorState:
     phase: str
     phase_end: float
     charge_start: float
+    weapon_change_id: int | None = None
     full_charge_count: int = 0
     dispatched_count: int = 0
     generation: int = 0
@@ -530,8 +531,39 @@ class DynamicChargeCadenceRuntime:
     def _active_sum(self, actor: int, stat: str, now: float) -> float:
         return self.effects.sum_stat(actor, stat, now=now)
 
+    def _active_weapon_change(self, actor: int, now: float):
+        return self.effects.active_effect_of_type(actor, "weapon_change", now=now)
+
+    def _weapon_change_id(self, actor: int, now: float) -> int | None:
+        row = self._active_weapon_change(actor, now)
+        return None if row is None else int(row[0].effect_id)
+
+    def effective_weapon(self, actor: int, now: float):
+        base = self.squad.members[actor].weapon
+        row = self._active_weapon_change(actor, now)
+        if row is None:
+            return base
+        effect, _active = row
+        params = effect.parameters
+        weapon = dict(base)
+        for key in (
+            "weapon_type", "damage_coeff", "max_ammo", "full_charge_mult",
+            "post_fire_delay", "cover_during_delay",
+        ):
+            if key in params:
+                weapon[key] = params[key]
+        if "reload_seconds" in params:
+            weapon["reload_time"] = float(params["reload_seconds"])
+        elif "reload_time" in params:
+            weapon["reload_time"] = float(params["reload_time"])
+        if "charge_seconds" in params:
+            weapon["charge_time"] = float(params["charge_seconds"])
+        elif "charge_time" in params:
+            weapon["charge_time"] = float(params["charge_time"])
+        return weapon
+
     def _caster_based_charge_speed(self, actor: int, now: float) -> float:
-        target_base = float(self.squad.members[actor].weapon.get("charge_time") or 0.0)
+        target_base = float(self.effective_weapon(actor, now).get("charge_time") or 0.0)
         if target_base <= _EPS:
             return 0.0
         total = 0.0
@@ -541,7 +573,7 @@ class DynamicChargeCadenceRuntime:
             if active.target != actor:
                 continue
             caster_base = float(
-                self.squad.members[active.source_actor].weapon.get("charge_time") or 0.0
+                self.effective_weapon(active.source_actor, now).get("charge_time") or 0.0
             )
             total += (
                 caster_base
@@ -552,7 +584,9 @@ class DynamicChargeCadenceRuntime:
         return total
 
     def _signature(self, actor: int, now: float) -> tuple[float, ...]:
+        wc_id = self._weapon_change_id(actor, now)
         return (
+            float(-1 if wc_id is None else wc_id),
             self._active_sum(actor, "max_ammo_pct", now),
             self._active_sum(actor, "max_ammo_flat", now),
             self._active_sum(actor, "reload_speed_pct", now),
@@ -562,8 +596,10 @@ class DynamicChargeCadenceRuntime:
         )
 
     def _full_ammo(self, actor: int, now: float) -> int:
-        member = self.squad.members[actor]
-        base = int(member.weapon["max_ammo"])
+        weapon = self.effective_weapon(actor, now)
+        base = int(weapon["max_ammo"])
+        if base < 0:
+            return 999999
         pct = self._active_sum(actor, "max_ammo_pct", now)
         flat = self._active_sum(actor, "max_ammo_flat", now)
         return max(
@@ -577,8 +613,7 @@ class DynamicChargeCadenceRuntime:
         return max(0.0, 1.0 - self._active_sum(actor, "reload_speed_pct", now) / 100.0)
 
     def _reload_duration_from_empty(self, actor: int, now: float) -> float:
-        member = self.squad.members[actor]
-        weapon = member.weapon
+        weapon = self.effective_weapon(actor, now)
         factor = self._reload_factor(actor, now)
         one = float(weapon["reload_time"]) * factor
         if not weapon.get("is_clip"):
@@ -589,8 +624,8 @@ class DynamicChargeCadenceRuntime:
         return one * clips
 
     def _effective_charge_time(self, actor: int, now: float) -> float:
-        member = self.squad.members[actor]
-        base = float(member.weapon.get("charge_time") or 0.0)
+        weapon = self.effective_weapon(actor, now)
+        base = float(weapon.get("charge_time") or 0.0)
         speed = (
             self._active_sum(actor, "charge_speed_pct", now)
             + self._caster_based_charge_speed(actor, now)
@@ -617,14 +652,14 @@ class DynamicChargeCadenceRuntime:
         st.full_charge_count += 1
         st.phase = "post_fire_reload" if st.ammo <= 0 else "post_fire"
         st.phase_end = shot_time + float(
-            self.squad.members[st.actor].weapon.get("post_fire_delay", 0.0)
+            self.effective_weapon(st.actor, shot_time).get("post_fire_delay", 0.0)
         )
 
     def _finish_nonshot_phase(
         self, st: _ChargeActorState, transition_time: float, now_for_mods: float
     ) -> None:
         actor = st.actor
-        weapon = self.squad.members[actor].weapon
+        weapon = self.effective_weapon(actor, now_for_mods)
         if st.phase == "post_fire":
             self._enter_charge(st, transition_time, now_for_mods)
             return
@@ -730,6 +765,7 @@ class DynamicChargeCadenceRuntime:
                 phase="charging",
                 phase_end=float(now) + charge,
                 charge_start=float(now),
+                weapon_change_id=self._weapon_change_id(actor, now),
                 signature=self._signature(actor, now),
             )
             self._states[actor] = st
@@ -743,15 +779,29 @@ class DynamicChargeCadenceRuntime:
             while st.phase != "charging" and st.phase_end <= now + _EPS:
                 self._finish_nonshot_phase(st, st.phase_end, now)
 
+            current_wc_id = self._weapon_change_id(actor, now)
+            wc_changed = current_wc_id != st.weapon_change_id
+            if wc_changed:
+                entering = current_wc_id is not None
+                st.weapon_change_id = current_wc_id
+                self._invalidate(st)
+                st.ammo = self._full_ammo(actor, now)
+                if entering and st.phase == "charging":
+                    st.charge_start = float(now)
+                    st.phase_end = float(now) + self._effective_charge_time(actor, now)
+                elif st.phase in {"post_fire_reload", "reloading", "post_reload"}:
+                    self._enter_charge(st, float(now), float(now))
+                elif not entering and st.phase == "charging":
+                    st.phase_end = st.charge_start + self._effective_charge_time(actor, now)
+
             signature = self._signature(actor, now)
             changed = signature != st.signature
             if changed:
                 st.signature = signature
-                self._invalidate(st)
-                if st.phase == "charging":
-                    # Moris recomputes the full-charge threshold from the
-                    # original charge start when charge speed changes mid-charge.
-                    st.phase_end = st.charge_start + self._effective_charge_time(actor, now)
+                if not wc_changed:
+                    self._invalidate(st)
+                    if st.phase == "charging":
+                        st.phase_end = st.charge_start + self._effective_charge_time(actor, now)
             if st.scheduled_time is None:
                 self._plan(actor, now)
             self.state.set_ammo(actor, st.ammo)

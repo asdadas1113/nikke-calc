@@ -59,6 +59,8 @@ def _source_corpus() -> tuple[tuple[tuple[str, ...], str], ...]:
     seen: set[tuple[str, ...]] = set()
     rows: list[tuple[tuple[str, ...], str]] = []
     for name, case in snapshot.SQUADS.items():
+        if str(name).startswith("지그_"):
+            continue
         members = tuple(str(member) for member in case["members"])
         if len(members) != 5:
             continue

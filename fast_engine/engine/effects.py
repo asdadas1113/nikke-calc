@@ -353,6 +353,19 @@ class ActiveEffectStore:
     def has_named_state(self, target: int, name: str, *, now: float) -> bool:
         return bool(self._active_keys(self._by_target_name, target, name, now))
 
+    def active_effect_of_type(self, target: int, effect_type: str, *, now: float):
+        """Return the newest live effect of ``effect_type`` on one target."""
+        rows = []
+        for active in self._active.values():
+            if active.target != int(target) or not active.active(now):
+                continue
+            effect = self._effects[active.effect_id]
+            if effect.effect_type == effect_type:
+                rows.append((effect, active))
+        if not rows:
+            return None
+        return max(rows, key=lambda row: row[1].generation)
+
     def named_stack(self, target: int, name: str, *, now: float) -> float:
         return max(
             (

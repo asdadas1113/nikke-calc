@@ -127,13 +127,23 @@ def _trigger_value(effect: dict[str, Any], skill_level: str) -> float | None:
     return _level_value(effect.get("trigger_values"), skill_level)
 
 
-def _parameters(effect: dict[str, Any]) -> dict[str, Any]:
+def _parameters(effect: dict[str, Any], skill_level: str) -> dict[str, Any]:
     # Private Moris metadata is provenance/cache information, not Fast semantics.
-    return {
+    params = {
         key: value
         for key, value in effect.items()
         if key not in _CORE_EFFECT_KEYS and not key.startswith("_")
     }
+    # Weapon-change advanced fields can carry the same per-skill-level tables as
+    # ordinary ``values``. Resolve only the comparison-critical coefficient used
+    # by the first Fast weapon-change slice; unrelated advanced maps stay opaque.
+    if effect.get("type") == "weapon_change":
+        raw_coeff = params.get("damage_coeff")
+        if isinstance(raw_coeff, dict):
+            resolved = _level_value(raw_coeff, skill_level)
+            if resolved is not None:
+                params["damage_coeff"] = resolved
+    return params
 
 
 def _promote_exact_last_bullet_capability(capability, timings, effect, owner_meta):
@@ -249,7 +259,7 @@ def compile_moris_squad(squad: list[dict], *, require_five: bool = True) -> Comp
                 max_stack=(None if effect.get("max_stack") is None else float(effect["max_stack"])),
                 max_trigger=(None if effect.get("max_trigger") is None else int(effect["max_trigger"])),
                 tick_interval=(None if effect.get("tick_interval") is None else float(effect["tick_interval"])),
-                parameters=_parameters(effect),
+                parameters=_parameters(effect, skill_level),
                 capability=capability,
             )
         )
