@@ -649,7 +649,10 @@ def _named_buff_event_dependency_score_safe(squad: CompiledSquad, effect) -> boo
                 return False
             if not provider.target_spec.runtime_supported:
                 return False
-            if not TriggerDispatcher.is_executable_effect(provider):
+            if not (
+                TriggerDispatcher.is_executable_effect(provider)
+                or TriggerDispatcher._named_event_marker_nop_shape_supported(provider)
+            ):
                 return False
     return True
 

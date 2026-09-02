@@ -382,6 +382,36 @@ class TriggerDispatcher:
             )
         )
 
+    @classmethod
+    def _named_event_marker_nop_shape_supported(cls, effect: "CompiledEffect") -> bool:
+        """Allow a Moris-NOP buff to exist only as a named-event marker.
+
+        The underlying stat remains intentionally ignored. This bridge is limited
+        to simple one-stack buffs on controller/burst events so it cannot turn an
+        arbitrary unsupported mechanic into an executable Fast effect.
+        """
+        if not (
+            effect.capability.disposition is CapabilityDisposition.MIRROR_MORIS_NOP
+            and effect.effect_type == "buff"
+            and bool(effect.name)
+            and effect.max_stack in (None, 1, 1.0)
+            and not effect.parameters
+            and effect.target_spec.runtime_supported
+            and not effect.condition_rules
+            and bool(effect.triggers)
+        ):
+            return False
+        for rule in effect.triggers:
+            if rule.mode is not TriggerMode.EVENT:
+                return False
+            key = rule.event_key or ""
+            if key in cls._SHIELD_SAFE_EVENT_KEYS:
+                continue
+            if key.startswith("burst_enter:") or key.startswith("squad_burst_cast:"):
+                continue
+            return False
+        return True
+
     @staticmethod
     def is_executable_effect(effect: "CompiledEffect") -> bool:
         stat = effect.stat or ""
@@ -447,7 +477,10 @@ class TriggerDispatcher:
                     return False
                 if not provider.target_spec.runtime_supported:
                     return False
-                if not self.is_executable_effect(provider):
+                if not (
+                    self.is_executable_effect(provider)
+                    or self._named_event_marker_nop_shape_supported(provider)
+                ):
                     return False
         return True
 
@@ -490,6 +523,12 @@ class TriggerDispatcher:
 
     def can_activate_effect(self, effect: "CompiledEffect") -> bool:
         if self.is_runtime_executable_effect(effect):
+            return True
+        if (
+            effect.name
+            and effect.name in self._named_event_names_needed
+            and self._named_event_marker_nop_shape_supported(effect)
+        ):
             return True
         return self._is_state_dependency(effect) and self._named_event_source_runtime_safe(effect)
 

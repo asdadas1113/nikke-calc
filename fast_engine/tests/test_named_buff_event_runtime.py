@@ -86,6 +86,27 @@ class NamedBuffEventRuntimeTests(unittest.TestCase):
             runtime.dispatcher.effects.has_named_state(frika, "퍼포먼스", now=46.01)
         )
 
+    def test_moris_nop_named_marker_can_drive_supported_consumer(self):
+        squad, runtime = self._runtime()
+        red = NAMES.index("레드 후드")
+        blockers = static_score_blockers(squad)
+        self.assertFalse(any("레드 후드:와일드 투스 4:atk_pct" in item for item in blockers))
+        self.assertTrue(any("레드 후드:글레링 아이즈:charge_speed_pct" in item for item in blockers))
+
+        marker = next(e for e in squad.members[red].effects if e.name == "레드 울프")
+        consumer = next(e for e in squad.members[red].effects if e.name == "와일드 투스 4")
+        self.assertTrue(runtime.dispatcher._named_event_marker_nop_shape_supported(marker))
+        self.assertFalse(runtime.dispatcher.is_executable_effect(marker))
+
+        runtime.dispatcher.dispatch(BurstSignal(1.0, "squad_burst_cast:3", red, red))
+        self.assertEqual(runtime.dispatcher._activation_counts.get(marker.effect_id, 0), 1)
+        self.assertEqual(runtime.dispatcher._activation_counts.get(consumer.effect_id, 0), 1)
+        self.assertAlmostEqual(
+            runtime.dispatcher.effects.sum_stat(red, "atk_pct", now=1.01),
+            float(consumer.value or 0.0),
+            places=9,
+        )
+
     def test_named_event_without_executable_named_buff_provider_stays_blocked(self):
         names = ["리틀 머메이드", "나유타", "크라운", "아스카 : WILLE", "루드밀라 : 윈터 오너"]
         squad = compile_moris_squad(build_squad(names))
