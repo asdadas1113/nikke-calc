@@ -7,10 +7,12 @@ public, mechanic-rich collection that predates the Fast ranking experiment. Its
 per-case config/enemy/build overrides are deliberately NOT reused here: mixing
 scores from different scenarios would make the ranking itself invalid.
 
-The probe therefore keeps only real five-character ordered squads, deduplicates
-identical ordered squads, rebuilds all squads with the same public defaults, and
-evaluates every squad under one common config/enemy. Fast blockers or unsupported
-damage remain coverage gaps rather than artificial low scores.
+The probe therefore keeps every real non-``지그_*`` five-character source case,
+rebuilds each squad with the same public defaults, and evaluates every source
+case under one common config/enemy. Two source cases with identical ordered
+memberships remain two source cases in the standardized 24-case corpus even
+though their rebuilt standardized inputs are identical. Fast blockers or
+unsupported damage remain coverage gaps rather than artificial low scores.
 
 This is a first engine-ranking diagnosis, not a production optimizer benchmark.
 The corpus is curated and small, so its recall numbers are not production
@@ -56,7 +58,6 @@ class ProbeRow:
 
 
 def _source_corpus() -> tuple[tuple[tuple[str, ...], str], ...]:
-    seen: set[tuple[str, ...]] = set()
     rows: list[tuple[tuple[str, ...], str]] = []
     for name, case in snapshot.SQUADS.items():
         if str(name).startswith("지그_"):
@@ -66,9 +67,6 @@ def _source_corpus() -> tuple[tuple[tuple[str, ...], str], ...]:
             continue
         if any(member.startswith("test_") for member in members):
             continue
-        if members in seen:
-            continue
-        seen.add(members)
         rows.append((members, str(name)))
     return tuple(rows)
 
@@ -220,8 +218,8 @@ def run_public_probe(*, top_n: int = 10, top_k: int = 20) -> dict:
     )
 
     return {
-        "corpus": "unique real five-person memberships from context.snapshot.SQUADS",
-        "candidate_source": "fixed public memberships; optimizer candidate generation bypassed",
+        "corpus": "fixed non-지그_* real five-person source cases from context.snapshot.SQUADS",
+        "candidate_source": "fixed public source cases; optimizer candidate generation bypassed",
         "scenario_contract": {
             "build": "context.spec public defaults; snapshot chars overrides ignored",
             "config": dict(COMMON_CONFIG),
@@ -251,7 +249,7 @@ def run_public_probe(*, top_n: int = 10, top_k: int = 20) -> dict:
 
 def main() -> None:
     report = run_public_probe()
-    print("=== Fast vs Moris standardized public-membership ranking probe ===")
+    print("=== Fast vs Moris standardized public-source-case ranking probe ===")
     print(
         f"teams={report['team_count']} certified={report['certified_team_count']} "
         f"coverage_gaps={report['coverage_gap_count']}"
@@ -260,24 +258,12 @@ def main() -> None:
         f"moris_seconds={report['moris_sim_seconds']:.3f} "
         f"fast_seconds={report['fast_score_seconds_certified_or_attempted']:.3f}"
     )
-    coverage = report["certified_top_n_in_top_k"]
-    print(
-        "coverage: "
-        f"top{coverage['top_n']} certified survival in Fast top{coverage['top_k']}="
-        f"{coverage['top_n_recall']:.3f}; blocked={coverage['top_n_blocked']}; "
-        f"ranked_out={coverage['top_n_ranked_out']}"
-    )
-    clean = report["clean_ranking"]
-    if clean is not None:
-        print(
-            "clean: "
-            f"teams={clean['candidate_count']} pairwise={clean['pairwise_accuracy']} "
-            f"top{clean['top_n']}_in_top{clean['top_k']}={clean['top_n_recall']:.3f}"
-        )
-    print("clean_relative_error=", report["clean_relative_error"])
-    print("blocker_families=", report["blocker_family_counts"])
-    print("unsupported_families=", report["unsupported_family_counts"])
-    print("PUBLIC_RANKING_REPORT=" + json.dumps(report, ensure_ascii=False, sort_keys=True))
+    print("clean_relative_error=", json.dumps(report["clean_relative_error"], ensure_ascii=False))
+    print("clean_ranking=", json.dumps(report["clean_ranking"], ensure_ascii=False))
+    print("blocker_family_counts=", report["blocker_family_counts"])
+    print("unsupported_family_counts=", report["unsupported_family_counts"])
+    for row in report["rows"]:
+        print(json.dumps(row, ensure_ascii=False, sort_keys=True))
 
 
 if __name__ == "__main__":
