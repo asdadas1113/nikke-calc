@@ -249,6 +249,31 @@ class TriggerDispatcher:
         )
 
     @staticmethod
+    def _weapon_count_ammo_timing_is_only_runtime_blocker(effect: "CompiledEffect") -> bool:
+        """Bridge only reducible physical-count instant ammo refills."""
+
+        blockers = effect.capability.blockers
+        if not (
+            effect.capability.disposition is CapabilityDisposition.PLANNED
+            and set(blockers) == {"timing:weapon_hit"}
+            and effect.effect_type == "instant"
+            and (effect.stat or "") in {"ammo_charge_pct", "ammo_charge_flat"}
+            and effect.value is not None
+            and float(effect.value) >= 0.0
+            and effect.target_spec.runtime_supported
+            and not effect.condition_rules
+            and len(effect.triggers) == 1
+        ):
+            return False
+        rule = effect.triggers[0]
+        return (
+            rule.mode is TriggerMode.MODULO
+            and rule.trigger_count_reducible
+            and rule.event_key in {"hit_count", "pellet_hit"}
+            and int(rule.threshold or 0) > 0
+        )
+
+    @staticmethod
     def is_executable_effect(effect: "CompiledEffect") -> bool:
         stat = effect.stat or ""
         if stat in TriggerDispatcher._AUXILIARY_STATS:
@@ -263,6 +288,7 @@ class TriggerDispatcher:
             effect.capability.disposition is CapabilityDisposition.READY
             or TriggerDispatcher._periodic_timing_is_only_blocker(effect)
             or TriggerDispatcher._state_end_timing_is_only_runtime_blocker(effect)
+            or TriggerDispatcher._weapon_count_ammo_timing_is_only_runtime_blocker(effect)
         )
         if not capability_ok:
             return False

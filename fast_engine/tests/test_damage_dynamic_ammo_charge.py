@@ -57,6 +57,27 @@ def _ammo_effect(*, stat: str = "ammo_charge_flat", value: float = 1.0, name: st
     )
 
 
+def _weapon_count_ammo_effect(*, reducible: bool = True) -> CompiledEffect:
+    rule = (
+        TriggerRule("hit_count:2", "hit_count", TriggerMode.MODULO, threshold=2.0, trigger_count_reducible=True)
+        if reducible
+        else TriggerRule("hit_count", "hit_count", TriggerMode.EVENT)
+    )
+    return CompiledEffect(
+        effect_id=0, actor=0, actor_effect_index=0, source="synthetic", source_tag="skill",
+        name="count refill", effect_type="instant", stat="ammo_charge_flat", polarity="beneficial",
+        target="self", target_spec=compile_target("self", actor_by_name={"synthetic-reload": 0}),
+        conditions=(), condition_rules=(), triggers=(rule,), value=2.0, duration=None, max_stack=None,
+        max_trigger=None, tick_interval=None, parameters={},
+        capability=EffectCapability(
+            character="synthetic-reload", index=0, source="synthetic", name="count refill",
+            effect_type="instant", stat="ammo_charge_flat", category=EffectCategory.CADENCE_TIMELINE,
+            timing_families=("weapon_hit",), condition_families=(), target_family="ally_static",
+            advanced_fields=(), disposition=CapabilityDisposition.PLANNED, blockers=("timing:weapon_hit",),
+        ),
+    )
+
+
 def _named_consumer(effect_id: int = 1) -> CompiledEffect:
     return CompiledEffect(
         effect_id=effect_id,
@@ -145,12 +166,34 @@ class DynamicAmmoChargeTests(unittest.TestCase):
         # max ammo 2 -> round(0.6652) == 1, capped at 2
         self.assertEqual(st.ammo, 2)
 
+    def test_reducible_hit_count_refill_replans_rapid_cadence(self):
+        effect = _weapon_count_ammo_effect()
+        squad = _squad((effect,))
+        self.assertNotIn("cadence:synthetic-reload:count refill:ammo_charge_flat", static_score_blockers(squad))
+        runtime = BurstRuntime(squad, BurstPolicy(duration=2.1, first_burst_time=30.0), EnemyStaticProfile(defense=0.0, duration=2.1))
+        observer = StaticNormalAttackObserver(runtime, duration=2.1)
+        result = runtime.run(duration=2.1, score_observer=observer)
+        observer.finish(events_processed=result.events_processed)
+        self.assertEqual(runtime.weapons._rapid_reload._states[0].hit_count, 5)
+        self.assertEqual(runtime.dispatcher._activation_counts.get(0, 0), 2)
+
+    def test_nonreducible_hit_count_refill_stays_fail_closed(self):
+        effect = _weapon_count_ammo_effect(reducible=False)
+        self.assertIn("cadence:synthetic-reload:count refill:ammo_charge_flat", static_score_blockers(_squad((effect,))))
+
     def test_named_event_consumer_keeps_ammo_effect_fail_closed(self):
         refill = _ammo_effect()
         followup = _named_consumer()
         squad = _squad((refill, followup))
         blockers = static_score_blockers(squad)
         self.assertIn("cadence:synthetic-reload:refill:ammo_charge_flat", blockers)
+
+    def test_public_asuka_ludmilla_weapon_count_ammo_blocker_is_removed(self):
+        names = ["리틀 머메이드", "나가", "크라운", "아스카 : WILLE", "루드밀라 : 윈터 오너"]
+        compiled = __import__("fast_engine.engine.compiler", fromlist=["compile_moris_squad"]).compile_moris_squad(build_squad(names))
+        blockers = static_score_blockers(compiled)
+        self.assertNotIn("cadence:루드밀라 : 윈터 오너:여왕의 시선 3:ammo_charge_flat", blockers)
+        self.assertIn("normal_delivery:크라운:로얄 에타이어 4:atk_dmg_pct", blockers)
 
     def test_public_squad1_little_mermaid_ammo_blocker_is_removed(self):
         names = ["리틀 머메이드", "크라운", "라피 : 레드 후드", "미하라 : 본딩 체인", "헬름"]
