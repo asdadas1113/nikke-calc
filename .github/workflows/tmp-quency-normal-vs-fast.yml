@@ -4,6 +4,7 @@ on:
     branches: [fast-engine-phase2-20260901]
   workflow_dispatch:
 
+# diagnostic rerun after conditional-passive fix
 jobs:
   probe:
     runs-on: ubuntu-latest
