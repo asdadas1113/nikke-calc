@@ -14,7 +14,7 @@ jobs:
           python-version: '3.12'
       - name: Quency post-burst damage diagnosis
         run: |
-          python - <<'PY'
+          python - <<'PY' | tee quency-diagnosis.txt
           from collections import defaultdict
           from calculator.timeline import DEFAULT_ENEMY, simulate
           from calculator.sim_result import _is_normal
@@ -65,7 +65,6 @@ jobs:
               print('M_SKILLS', dict(by_skill))
               print('---')
 
-          # One 30s verbose pass: show buffs actually activated on Quency and source effects.
           cfg = {'duration':30.0,'first_burst_time':3.0,'rng_mode':'expected'}
           squad = spec.build_squad(members)
           moris_cfg = spec.build_config(squad, dict(cfg))
@@ -80,3 +79,8 @@ jobs:
               if eff.stat in {'atk_pct','atk_flat','atk_caster_based_pct','atk_dmg_pct','normal_atk_dmg_pct','crit_rate','normal_atk_crit_rate','crit_dmg','normal_atk_crit_dmg','received_dmg_pct','personal_received_dmg_pct','def_pct','personal_enemy_def_down_pct'}:
                   print(compiled.members[eff.actor].name, eff.name, eff.stat, eff.value, eff.duration, eff.target_spec.mode.value, [(r.event_key, r.mode.value, r.threshold) for r in eff.triggers])
           PY
+      - name: Upload diagnosis
+        uses: actions/upload-artifact@v4
+        with:
+          name: quency-diagnosis
+          path: quency-diagnosis.txt
