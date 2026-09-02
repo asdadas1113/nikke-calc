@@ -15,6 +15,7 @@ jobs:
           python fast_engine/research/_tmp_weapon_change_probe.py patch
           python fast_engine/research/_tmp_weapon_change_fix_v2.py
           python fast_engine/research/_tmp_weapon_change_fix_v3.py
+          python fast_engine/research/_tmp_weapon_change_fix_v4.py
       - name: Focused weapon-change tests
         run: python -m unittest fast_engine.tests.test_dynamic_weapon_change -v
       - name: Full Fast regression
