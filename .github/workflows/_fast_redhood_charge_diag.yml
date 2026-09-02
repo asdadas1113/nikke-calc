@@ -1,0 +1,63 @@
+name: Fast Red Hood charge diagnostics
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+permissions:
+  contents: write
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Diagnose Red Hood charge blockers
+        shell: bash
+        run: |
+          python - <<'PY'
+          from context.snapshot import SQUADS
+          from context.spec import build_squad
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers, _charge_actor_score_safe, _possible_ally_targets
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+
+          needles=(
+            'cadence:레드 후드:글레링 아이즈:charge_speed_pct',
+            'normal_delivery:레드 후드:글레링 아이즈 2:charge_speed_overflow_conversion_pct',
+            'skill_state_delivery:레드 후드:글레링 아이즈 2:charge_speed_overflow_conversion_pct',
+          )
+          for squad_name,row in SQUADS.items():
+              if squad_name.startswith('지그_'):
+                  continue
+              members=list(row.get('members') or ())
+              if len(members)!=5 or '레드 후드' not in members:
+                  continue
+              squad=compile_moris_squad(build_squad(members))
+              blockers=static_score_blockers(squad)
+              hit=[b for b in blockers if any(x in b for x in ('레드 후드','control:'))]
+              print('\nTEAM',squad_name,'MEMBERS',members)
+              print('BLOCKERS',hit)
+              actor=members.index('레드 후드')
+              member=squad.members[actor]
+              print('WEAPON',member.weapon)
+              print('CHARGE_SAFE',_charge_actor_score_safe(squad,actor))
+              for e in member.effects:
+                  if e.name.startswith('글레링 아이즈'):
+                      print('EFFECT',e.effect_id,e.name,e.effect_type,e.stat,e.value,e.target,e.duration,e.max_stack,e.parameters)
+                      print('  TRIGGERS',[(r.raw,r.event_key,getattr(r.mode,'value',str(r.mode)),r.threshold) for r in e.triggers])
+                      print('  CONDS',[repr(r) for r in e.condition_rules])
+                      print('  EXEC',TriggerDispatcher.is_executable_effect(e),'TARGETS',[(i,squad.members[i].name) for i in _possible_ally_targets(squad,e)])
+          PY
+      - name: Remove helper
+        if: always()
+        shell: bash
+        run: |
+          rm .github/workflows/_fast_redhood_charge_diag.yml
+          git config user.name fast-engine-bot
+          git config user.email fast-engine-bot@users.noreply.github.com
+          git add -A
+          git commit -m "chore: remove Red Hood charge diagnostic helper" || exit 0
+          git push origin HEAD:fast-engine-phase2-20260901
