@@ -11,6 +11,6 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Inspect Moris shield semantics
+      - name: Inspect Fast condition lifetime tests
         run: |
-          grep -RIn -C 8 -E 'shield_from_max_hp_pct|shield_applied|during_shield|set_shield|\.shield' calculator context | head -n 500
+          grep -RIn -C 6 -E 'during_full_burst|not_during_full_burst|self_state|target_state|runtime condition|condition.*expire|condition.*buff' fast_engine/tests fast_engine/engine | head -n 700
