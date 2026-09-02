@@ -234,6 +234,11 @@ class DynamicChargeScoringTests(unittest.TestCase):
         terms = DamageTermResolver(squad, runtime.dispatcher.effects, runtime.state, runtime.enemy).resolve(0, now=0.01)
         self.assertAlmostEqual(terms.charge_dmg_pct, 48.0, places=9)
 
+    def test_public_red_wolf_weapon_change_is_explicit_fail_closed(self):
+        names=["라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸"]
+        blockers=static_normal_score_blockers(compile_moris_squad(build_squad(names)))
+        self.assertTrue(any(x.startswith("weapon_change:레드 후드:레드 울프 무기변경") for x in blockers))
+
     def test_uncertified_charge_speed_delivery_remains_fail_closed(self):
         effect = _charge_speed_effect()
         planned = replace(

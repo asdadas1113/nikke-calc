@@ -348,6 +348,26 @@ class DynamicReloadScoringTests(unittest.TestCase):
             blockers,
         )
 
+    def test_live_max_ammo_refills_new_cap_without_changing_current_magazine(self):
+        base=_reload_effect(duration=5.0)
+        effect=replace(base,name="live max ammo",stat="max_ammo_pct",value=100.0,capability=_capability("max_ammo_pct"))
+        squad=_squad(effect); self.assertEqual(static_normal_score_blockers(squad),())
+        runtime=BurstRuntime(squad,BurstPolicy(duration=4.0,first_burst_time=10.0),EnemyStaticProfile(defense=0.0,core_uptime=0.0,core_px=0.0,duration=4.0))
+        StaticNormalAttackObserver(runtime,duration=4.0); runtime.start(duration=4.0); rapid=runtime.weapons._rapid_reload
+        runtime.weapons.advance_to(0.25,inclusive=True); self.assertEqual(rapid._states[0].ammo,1)
+        runtime.dispatcher.effects.activate(effect,0,0.25,runtime.scheduler); runtime.weapons.sync(0.25)
+        self.assertEqual(rapid._states[0].ammo,1); self.assertEqual(rapid._full_ammo(0,0.25),4)
+        runtime.weapons.advance_to(3.01,inclusive=True); self.assertEqual(rapid._states[0].ammo,3)
+
+    def test_live_max_ammo_expiry_does_not_clamp_current_ammo(self):
+        base=_reload_effect(duration=0.2)
+        effect=replace(base,name="live max ammo",stat="max_ammo_pct",value=200.0,capability=_capability("max_ammo_pct"))
+        squad=_squad(effect); runtime=BurstRuntime(squad,BurstPolicy(duration=1.0,first_burst_time=10.0),EnemyStaticProfile(defense=0.0,core_uptime=0.0,core_px=0.0,duration=1.0))
+        StaticNormalAttackObserver(runtime,duration=1.0); runtime.start(duration=1.0); rapid=runtime.weapons._rapid_reload
+        runtime.dispatcher.effects.activate(effect,0,0.01,runtime.scheduler); runtime.weapons.sync(0.01); rapid._states[0].ammo=5
+        self.assertEqual(rapid._full_ammo(0,0.02),6); runtime.weapons.sync(0.25)
+        self.assertEqual(rapid._full_ammo(0,0.25),2); self.assertEqual(rapid._states[0].ammo,5)
+
     def test_reload_time_fixed_is_explicit_cadence_blocker(self):
         base = _reload_effect()
         fixed = replace(

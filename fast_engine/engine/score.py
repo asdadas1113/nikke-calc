@@ -54,6 +54,7 @@ _DYNAMIC_CHARGE_SCORE_STATS = frozenset({
     "charge_speed_caster_based_pct",
 })
 _DYNAMIC_RELOAD_SCORE_STATS = frozenset({"reload_speed_pct"})
+_DYNAMIC_MAX_AMMO_SCORE_STATS = frozenset({"max_ammo_pct", "max_ammo_flat"})
 
 _NORMAL_DIRECT_DAMAGE_STATS = frozenset({
     "atk_pct",
@@ -444,6 +445,43 @@ def _reload_recipient_score_safe(squad: CompiledSquad, actor: int) -> bool:
     return False
 
 
+def _max_ammo_recipient_score_safe(squad: CompiledSquad, actor: int) -> bool:
+    mode = str(squad.members[actor].weapon.get("fire_mode") or "")
+    if mode in {"auto", "auto_warmup"}:
+        return _rapid_actor_score_safe(squad, actor)
+    if mode == "charge":
+        return _charge_actor_score_safe(squad, actor)
+    return False
+
+
+def _is_dynamic_max_ammo_score_supported(squad: CompiledSquad, effect) -> bool:
+    if (effect.stat or "") not in _DYNAMIC_MAX_AMMO_SCORE_STATS:
+        return False
+    # Permanent unconditional self modifiers stay in the existing static cadence
+    # compiler. Promoting them would turn ordinary teams into dynamic weapon sims.
+    if _is_folded_static_self_modifier(effect):
+        return False
+    if (
+        effect.effect_type != "buff"
+        or effect.value is None
+        or effect.parameters
+        or effect.condition_rules
+        or not target_scope_is_static(effect.target_spec)
+        or not TriggerDispatcher.is_executable_effect(effect)
+    ):
+        return False
+    targets = _possible_ally_targets(squad, effect)
+    return bool(targets) and all(_max_ammo_recipient_score_safe(squad, a) for a in targets)
+
+
+def _dynamic_max_ammo_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
+    actors: set[int] = set()
+    for effect in squad.effects:
+        if _is_dynamic_max_ammo_score_supported(squad, effect):
+            actors.update(_possible_ally_targets(squad, effect))
+    return tuple(sorted(actors))
+
+
 def _valid_dynamic_bullet_lifetime(effect) -> bool:
     bullets = effect.parameters.get("duration_bullets")
     if bullets is None:
@@ -530,6 +568,7 @@ def _dynamic_charge_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
             actors.update(charge)
     actors.update(charge & set(_dynamic_reload_score_actors(squad)))
     actors.update(charge & set(_dynamic_ammo_charge_score_actors(squad)))
+    actors.update(charge & set(_dynamic_max_ammo_score_actors(squad)))
     actors.update(_dynamic_charge_bullet_lifetime_score_actors(squad))
     return tuple(sorted(actors))
 
@@ -555,6 +594,7 @@ def _dynamic_rapid_reload_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
     )
     actors.update(_dynamic_mg_warmup_score_actors(squad))
     actors.update(_dynamic_force_reload_score_actors(squad))
+    actors.update(a for a in _dynamic_max_ammo_score_actors(squad) if str(squad.members[a].weapon.get("fire_mode") or "") in {"auto", "auto_warmup"})
     return tuple(sorted(actors))
 
 
@@ -700,6 +740,11 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
         if _is_patternless_unreachable(effect):
             continue
 
+        if effect.effect_type == "weapon_change":
+            if not TriggerDispatcher.is_executable_effect(effect):
+                blockers.append(f"weapon_change:{owner}:{effect.name or 'unnamed'}")
+            continue
+
         if stat in _CADENCE_OR_SHAPE_STATS:
             if _is_folded_static_self_modifier(effect):
                 continue
@@ -709,6 +754,8 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
             ):
                 continue
             if stat == "reload_speed_pct" and _is_dynamic_reload_score_supported(squad, effect):
+                continue
+            if stat in _DYNAMIC_MAX_AMMO_SCORE_STATS and _is_dynamic_max_ammo_score_supported(squad, effect):
                 continue
             if stat in {"ammo_charge_pct", "ammo_charge_flat"} and _is_dynamic_ammo_charge_score_supported(squad, effect):
                 continue

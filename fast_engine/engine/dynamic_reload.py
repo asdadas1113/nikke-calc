@@ -6,7 +6,7 @@ from typing import Callable, TYPE_CHECKING
 from .scheduler import EventKind, EventScheduler, ScheduledEvent
 from .state import StateStore
 from .triggers import TriggerMode
-from .weapon import WeaponCadenceMachine, _EPS
+from .weapon import WeaponCadenceMachine, _EPS, _round_half_up
 
 if TYPE_CHECKING:
     from .effects import ActiveEffectStore
@@ -170,6 +170,31 @@ class DynamicRapidReloadRuntime:
         speed = self.effects.sum_stat(actor, "reload_speed_pct", now=now)
         return max(0.0, 1.0 - speed / 100.0)
 
+    @staticmethod
+    def _is_static_folded_max_ammo(effect: "CompiledEffect") -> bool:
+        return (
+            (effect.stat or "") in {"max_ammo_pct", "max_ammo_flat"}
+            and effect.effect_type == "buff"
+            and effect.target_spec.mode.value == "self"
+            and effect.duration in (None, -1.0)
+            and not effect.condition_rules
+            and bool(effect.triggers)
+            and all(rule.event_key == "battle_start" for rule in effect.triggers)
+        )
+
+    def _full_ammo(self, actor: int, now: float) -> int:
+        base_full = self._machine(actor)._full_ammo()
+        base_weapon = int(self.squad.members[actor].weapon["max_ammo"])
+        pct_gain = 0; flat_gain = 0.0
+        for stat in ("max_ammo_pct", "max_ammo_flat"):
+            for effect, active in self.effects.iter_stat(stat, now=now):
+                if active.target != actor or self._is_static_folded_max_ammo(effect):
+                    continue
+                value=float(effect.value or 0.0)*active.stacks
+                if stat=="max_ammo_pct": pct_gain += _round_half_up(base_weapon*value/100.0)
+                else: flat_gain += value
+        return max(1, base_full+pct_gain+_round_half_up(flat_gain))
+
     def _signature(self, actor: int, now: float) -> tuple[float, ...]:
         mode = str(self.squad.members[actor].weapon.get("fire_mode") or "auto")
         warmup_speed = (
@@ -180,6 +205,7 @@ class DynamicRapidReloadRuntime:
         return (
             self.effects.sum_stat(actor, "reload_speed_pct", now=now),
             warmup_speed,
+            float(self._full_ammo(actor, now)),
         )
 
     def _hits_per_shot(self, actor: int) -> int:
@@ -251,7 +277,7 @@ class DynamicRapidReloadRuntime:
             ) * factor
             return
         if st.phase == "reloading":
-            st.ammo = self._machine(actor)._full_ammo()
+            st.ammo = self._full_ammo(actor, transition_time)
             factor = self._reload_factor(actor, transition_time)
             next_shot = transition_time + float(
                 weapon.get("post_reload_delay", 0.0)
@@ -363,7 +389,7 @@ class DynamicRapidReloadRuntime:
 
     def start(self, now: float = 0.0) -> None:
         for actor in self.actors:
-            full = self._machine(actor)._full_ammo()
+            full = self._full_ammo(actor, now)
             st = _RapidActorState(
                 actor=actor,
                 ammo=full,

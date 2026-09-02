@@ -153,7 +153,7 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
             ) * factor
             return
         if st.phase == "reloading":
-            st.ammo = self._machine(actor)._full_ammo()
+            st.ammo = self._full_ammo(actor, transition_time)
             factor = self._reload_factor(actor, transition_time)
             st.phase = "firing"
             st.phase_end = transition_time + float(
@@ -237,7 +237,7 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
             st = self._states[actor]
             self._cover_until[actor] = max(self._cover_end(actor), until)
 
-            full = self._machine(actor)._full_ammo()
+            full = self._full_ammo(actor, now)
             if st.phase != "reloading" and st.ammo < full:
                 # Manual cover reload: no reload_start_delay. The reload action
                 # itself snapshots live reload speed at cover entry and remains

@@ -222,7 +222,7 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
                 st = runtime._states.get(actor)
                 if st is None:
                     return False
-                full = runtime._machine(actor)._full_ammo()
+                full = runtime._full_ammo(actor, float(now))
                 gain = self._ammo_charge_gain(full, stat, value)
                 st.ammo = min(full, st.ammo + gain)
                 if st.phase == "reload_wait" and st.ammo > 0:
