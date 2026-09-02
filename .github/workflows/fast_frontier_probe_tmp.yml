@@ -22,71 +22,13 @@ jobs:
           python fast_engine/research/_tmp_weapon_change_fix_v4.py
           python fast_engine/research/_tmp_weapon_change_fix_v5.py
       - name: Focused regression
-        run: python -m unittest fast_engine.tests.test_dynamic_weapon_change -v 2>&1 | tee /tmp/focused.txt
+        run: python -m unittest fast_engine.tests.test_dynamic_weapon_change -v
       - name: Full Fast regression
-        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py' 2>&1 | tee /tmp/full.txt
+        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
       - name: Standard 24-team audit
         env:
           PYTHONPATH: .
-        run: python fast_engine/research/_tmp_weapon_change_probe.py audit 2>&1 | tee /tmp/audit.txt
-      - name: Write checkpoint
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          audit = Path('/tmp/audit.txt').read_text(encoding='utf-8')
-          full = Path('/tmp/full.txt').read_text(encoding='utf-8')
-          focused = Path('/tmp/focused.txt').read_text(encoding='utf-8')
-          def pick(prefix, text):
-              return next((line for line in text.splitlines() if line.startswith(prefix)), '')
-          red = pick('RED_HOOD_BLOCKERS', audit)
-          certified = pick('CERTIFIED_COUNT', audit)
-          teams = pick('STANDARD_TEAM_COUNT', audit)
-          ranking = pick('RANKING_STARTED', audit)
-          ran = next((line.strip() for line in full.splitlines() if line.strip().startswith('Ran ')), '')
-          focused_ran = next((line.strip() for line in focused.splitlines() if line.strip().startswith('Ran ')), '')
-          text = f'''# Same-class charge weapon-change checkpoint — 2026-09-02
-
-## Scope
-
-This checkpoint adds a narrow generic Fast contract for deterministic temporary self `weapon_change` on an existing SR/RL charge actor when the transformed weapon remains the same weapon class, has finite duration, uses infinite ammo, and is driven by a deterministic burst event. It does not encode any character pairing or team-construction rule.
-
-Cross-class transforms remain fail-closed. Crown `heal_received` remains deferred. Candidate generation remains bypassed.
-
-## Runtime / compiler contract
-
-- Resolve level-mapped `weapon_change.damage_coeff` at the Fast compiler boundary.
-- Track the currently active weapon-change effect as sparse state.
-- Re-plan dynamic charge cadence at transform entry/expiry through the existing generation/signature mechanism; no global frame loop or unrestricted per-shot scheduler is introduced.
-- Use transformed damage coefficient, full-charge multiplier, post-fire delay, ammo semantics and optional charge/reload fields while active.
-- Treat negative transformed `max_ammo` as the Moris infinite-magazine contract for this slice.
-- Restore the base weapon when the timed state expires.
-- Keep cross-class and otherwise non-proven weapon changes blocked.
-
-## Static fail-closed improvement
-
-Unsupported comparison-critical skill-damage effects are now surfaced by `static_score_blockers()` using `SimpleDamageScoreSink`'s compile-time support decision. This prevents a full Fast timeline run from occurring only to discover the same unsupported damage afterward.
-
-The standardized public probe now explicitly excludes `지그_*`, preserving the fixed 24-team public audit universe.
-
-## Validation
-
-- Focused weapon-change suite: {focused_ran or 'completed successfully'}
-- Full Fast suite: {ran or 'completed successfully'}
-- {teams}
-- {certified}
-- {ranking}
-- Red Hood public team after this checkpoint:
-  - weapon-change blocker removed
-  - Mint max-ammo blocker removed
-  - remaining unrelated Rapi: Red Hood skill-damage gaps are static fail-closed
-  - `{red}`
-
-## Ranking gate
-
-Ranking validation starts only when at least two real public teams are certified. If the audit remains below two certified teams, coverage work remains the active phase.
-'''
-          Path('fast_engine/research/SAME_CLASS_WEAPON_CHANGE_CHECKPOINT_20260902.md').write_text(text, encoding='utf-8')
-          PY
+        run: python fast_engine/research/_tmp_weapon_change_probe.py audit
       - name: Remove temporary probe helpers
         run: |
           git rm .github/workflows/fast_frontier_probe_tmp.yml
@@ -99,7 +41,7 @@ Ranking validation starts only when at least two real public teams are certified
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add fast_engine/engine fast_engine/tests fast_engine/research/public_ranking_probe.py fast_engine/research/SAME_CLASS_WEAPON_CHANGE_CHECKPOINT_20260902.md
+          git add fast_engine/engine fast_engine/tests fast_engine/research/public_ranking_probe.py
           git status --short
           git commit -m 'impl: support same-class charge weapon change'
           git push origin HEAD:fast-engine-phase2-20260901
