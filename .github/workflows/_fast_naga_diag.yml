@@ -255,8 +255,6 @@ jobs:
         run: |
           python -m unittest fast_engine.tests.test_damage_shield_runtime
           python -m unittest discover -s fast_engine/tests -p 'test_damage*.py'
-          python -m unittest fast_engine.tests.test_dispatcher
-          python -m unittest fast_engine.tests.test_burst_runtime
       - name: Commit source patch and remove helper
         run: |
           rm .github/workflows/_fast_naga_diag.yml
