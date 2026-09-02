@@ -10,37 +10,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Inspect weapon-change shapes
+      - name: Inspect Moris weapon-change semantics
         run: |
           python - <<'PY'
-          from context import snapshot, spec
-          from fast_engine.engine.compiler import compile_moris_squad
-
-          seen_effects=set()
-          for case_name, case in snapshot.SQUADS.items():
-              if str(case_name).startswith('지그_'):
-                  continue
-              members=tuple(str(x) for x in case['members'])
-              if len(members)!=5:
-                  continue
-              squad=spec.build_squad(list(members))
-              compiled=compile_moris_squad(squad)
-              for e in compiled.effects:
-                  if e.effect_type!='weapon_change':
-                      continue
-                  key=(compiled.members[e.actor].name,e.name,repr(e.parameters))
-                  if key in seen_effects:
-                      continue
-                  seen_effects.add(key)
-                  m=compiled.members[e.actor]
-                  print('=== WEAPON_CHANGE ===')
-                  print('CASE',case_name)
-                  print('OWNER',m.name,'ACTOR',e.actor)
-                  print('BASE_WEAPON',repr(m.weapon))
-                  print('NAME',e.name,'STAT',e.stat,'VALUE',e.value,'DURATION',e.duration,'MAX_STACK',e.max_stack)
-                  print('TARGET',e.target_spec.mode.value,'TARGET_RAW',repr(e.target_spec))
-                  print('PARAMS',repr(e.parameters))
-                  print('CONDITIONS',repr(e.condition_rules))
-                  print('TRIGGERS',repr(e.triggers))
-                  print('CAP',e.capability.disposition.value,repr(e.capability.blockers))
+          from pathlib import Path
+          for path in Path('calculator').glob('*.py'):
+              lines=path.read_text(encoding='utf-8').splitlines()
+              hits=[i for i,line in enumerate(lines) if 'weapon_change' in line or 'weapon change' in line.lower()]
+              for i in hits:
+                  lo=max(0,i-22); hi=min(len(lines),i+45)
+                  print(f'=== {path}:{i+1} ===')
+                  for j in range(lo,hi):
+                      print(f'{j+1:05d}: {lines[j]}')
           PY
