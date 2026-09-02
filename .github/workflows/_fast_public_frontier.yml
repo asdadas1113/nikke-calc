@@ -1,4 +1,4 @@
-name: Fast Frika named-event diagnostics
+name: Fast Frika chorus producer diagnostics
 
 on:
   push:
@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect Frika chain and Moris event semantics
+      - name: Locate chorus producer
         run: |
           python - <<'PY'
           from context.snapshot import SQUADS
@@ -23,28 +23,38 @@ jobs:
 
           names = next(row['members'] for key, row in SQUADS.items() if key == '레이드_레드후드퀀시')
           squad = compile_moris_squad(build_squad(list(names)))
+          print('MEMBERS', list(names))
           for effect in squad.effects:
-              owner = squad.members[effect.actor].name
-              if owner != '프리카':
+              trigger_text = ' '.join((r.event_key or '') + ' ' + (r.raw or '') for r in effect.triggers)
+              param_text = repr(effect.parameters)
+              if '떼창' not in (effect.name or '') and '떼창' not in trigger_text and '떼창' not in param_text:
                   continue
-              print('=== FRIKA ===')
-              print('ID', effect.effect_id, 'NAME', effect.name, 'TYPE', effect.effect_type, 'STAT', effect.stat)
-              print('VALUE', effect.value, 'DURATION', effect.duration, 'TARGET', effect.target)
-              print('PARAM', effect.parameters)
+              owner = squad.members[effect.actor].name
+              print('=== MATCH ===')
+              print('OWNER', owner, 'ID', effect.effect_id, 'NAME', effect.name)
+              print('TYPE', effect.effect_type, 'STAT', effect.stat, 'VALUE', effect.value, 'DURATION', effect.duration)
+              print('TARGET', effect.target, 'PARAM', effect.parameters)
               print('TRIGGERS', [(r.raw, r.event_key, getattr(r.mode, 'value', str(r.mode)), r.threshold, r.interval) for r in effect.triggers])
               print('CONDS', [repr(r) for r in effect.condition_rules])
               print('CAP', effect.capability.disposition.value, effect.capability.blockers)
               print('EXEC', TriggerDispatcher.is_executable_effect(effect))
-          print('=== SOURCE GREP ===')
+
+          print('=== RAW CHARACTER DATA MATCHES ===')
           import pathlib
-          for root in ['calculator', 'fast_engine']:
-              for p in pathlib.Path(root).rglob('*.py'):
+          for p in pathlib.Path('.').rglob('*'):
+              if not p.is_file() or p.suffix not in {'.py','.json','.md'}:
+                  continue
+              try:
                   text = p.read_text(encoding='utf-8')
-                  for needle in ['notify_event', 'event:', 'effect.name', 'named_event']:
-                      if needle in text and ('notify_event' in text or 'effect.name' in text or 'named_event' in text):
-                          lines = text.splitlines()
-                          hits = [(i+1, line.strip()) for i, line in enumerate(lines) if needle in line]
-                          if hits:
-                              print('FILE', p, 'NEEDLE', needle)
-                              for hit in hits[:20]: print(' ', hit)
+              except Exception:
+                  continue
+              if '떼창' not in text:
+                  continue
+              print('FILE', p)
+              lines=text.splitlines()
+              for i,line in enumerate(lines):
+                  if '떼창' in line:
+                      lo=max(0,i-3); hi=min(len(lines),i+4)
+                      for j in range(lo,hi): print(f'{j+1}: {lines[j]}')
+                      print('---')
           PY
