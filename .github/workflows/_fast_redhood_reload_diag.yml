@@ -1,0 +1,40 @@
+name: Red Hood reload-speed diagnosis
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+    paths: ['.github/workflows/_fast_redhood_reload_diag.yml']
+permissions:
+  contents: write
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13'}
+      - name: Diagnose reload buffs
+        run: |
+          python - <<'PY'
+          from context.spec import build_squad
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import _possible_ally_targets, _reload_speed_positive_upper_bound
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+          names=["라피 : 레드 후드", "레드 후드", "프리카", "민트", "퀀시 : 이스케이프 퀸"]
+          squad=compile_moris_squad(build_squad(names))
+          red=names.index('레드 후드')
+          print('UPPER_BOUND',_reload_speed_positive_upper_bound(squad,red))
+          for e in squad.effects:
+              if (e.stat or '')!='reload_speed_pct': continue
+              targets=_possible_ally_targets(squad,e)
+              if red not in targets: continue
+              print('EFFECT',squad.members[e.actor].name,e.name,'value=',e.value,'duration=',e.duration,'max_stack=',e.max_stack,'target=',e.target_spec.mode.value,'conditions=',[(r.raw,r.mode.value,r.key,r.threshold) for r in e.condition_rules],'triggers=',[(r.raw,r.event_key,r.mode.value,r.threshold) for r in e.triggers],'exec=',TriggerDispatcher.is_executable_effect(e),'params=',e.parameters)
+          PY
+      - name: Remove helper
+        if: always()
+        run: |
+          rm -f .github/workflows/_fast_redhood_reload_diag.yml
+          git config user.name fast-engine-bot
+          git config user.email fast-engine-bot@users.noreply.github.com
+          git add -A
+          git commit -m "chore: remove Red Hood reload diagnosis helper" || exit 0
+          git push origin HEAD:fast-engine-phase2-20260901
