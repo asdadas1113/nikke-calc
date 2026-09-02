@@ -450,6 +450,32 @@ class ActiveEffectStore:
             for target in cohort
         )
 
+
+    def deactivate_group(
+        self,
+        effect_id: int,
+        targets: Iterable[int],
+        *,
+        now: float,
+    ) -> tuple[int, ...]:
+        """Remove one exact activation cohort without synthesizing expiry events."""
+
+        cohort = self._cohort(targets)
+        if not cohort:
+            return ()
+        removed: list[int] = []
+        for target in cohort:
+            key: ActiveKey = (int(effect_id), target, cohort)
+            active = self._active.pop(key, None)
+            if active is None:
+                continue
+            self._bullet_remaining.pop(key, None)
+            effect = self._effects[active.effect_id]
+            self._index_remove(effect, key)
+            self.state.touch(target, StateDomain.EFFECT)
+            removed.append(target)
+        return tuple(removed)
+
     def extend_named_states(
         self,
         targets: Iterable[int],

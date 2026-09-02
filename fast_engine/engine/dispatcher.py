@@ -37,7 +37,8 @@ class TriggerDispatcher:
     __slots__ = (
         "squad", "state", "enemy", "burst", "scheduler", "effects", "targets",
         "conditions", "damage_sink", "_effect_table", "_event_counts", "_conditional_counts",
-        "_activation_counts", "_state_dependency_names", "_gauge_maxima",
+        "_activation_counts", "_state_dependency_names", "_self_stack_passive_ids",
+        "_self_stack_dependency_names", "_gauge_maxima",
         "_unsafe_gauge_families", "_strict_score_delivery", "_ammo_charge_sink",
         "_force_reload_sink", "_named_event_names_needed",
     )
@@ -160,6 +161,18 @@ class TriggerDispatcher:
             if self.is_runtime_executable_effect(effect)
             for rule in effect.condition_rules
             if rule.mode in state_modes and rule.key
+        )
+        self._self_stack_passive_ids = tuple(
+            effect.effect_id
+            for effect in self._effect_table
+            if self._self_stack_conditional_passive_shape_supported(effect)
+            and self.is_runtime_executable_effect(effect)
+        )
+        self._self_stack_dependency_names = frozenset(
+            rule.key
+            for effect_id in self._self_stack_passive_ids
+            for rule in self._effect_table[effect_id].condition_rules
+            if rule.key
         )
 
     def enable_strict_score_delivery(self) -> None:
@@ -734,6 +747,61 @@ class TriggerDispatcher:
             and all(rule.is_runtime_supported for rule in effect.condition_rules)
         )
 
+    @staticmethod
+    def _self_stack_conditional_passive_shape_supported(effect: "CompiledEffect") -> bool:
+        """Certify sparse Moris-style permanent passives gated by self stacks.
+
+        Moris registers these passives at battle start even while their condition
+        is false, then gates their contribution as the referenced named stack
+        changes. Fast materializes only the true intervals instead: stack-provider
+        transitions are sparse weapon boundaries, so no frame polling is needed.
+        """
+        return (
+            effect.effect_type == "buff"
+            and effect.duration in (None, -1.0)
+            and effect.max_stack in (None, 1, 1.0)
+            and target_scope_is_static(effect.target_spec)
+            and effect.target_spec.runtime_supported
+            and len(effect.triggers) == 1
+            and effect.triggers[0].mode is TriggerMode.EVENT
+            and effect.triggers[0].raw == "passive"
+            and bool(effect.condition_rules)
+            and all(
+                rule.mode is ConditionMode.SELF_STACK_AT_LEAST and bool(rule.key)
+                for rule in effect.condition_rules
+            )
+        )
+
+    def _sync_self_stack_conditional_passives(self, *, now: float) -> None:
+        """Materialize/de-materialize certified conditional passives on stack edges."""
+        for effect_id in self._self_stack_passive_ids:
+            effect = self._effect_table[effect_id]
+            named_target = (
+                effect.target_spec.count
+                if effect.target_spec.mode.value == "named_actor"
+                else None
+            )
+            should_be_active = self.conditions.evaluate_all(
+                effect.condition_rules,
+                effect_id=effect.effect_id,
+                owner_actor=effect.actor,
+                target_actor=named_target,
+                now=now,
+                context=SignalContext(),
+            )
+            targets = self.targets.resolve(
+                effect.target_spec,
+                owner_actor=effect.actor,
+                now=now,
+            )
+            is_active = self.effects.group_active(effect.effect_id, targets, now=now)
+            if should_be_active and not is_active:
+                # Moris False->True here is a condition-gating transition, not
+                # a fresh trigger count or generic named-buff event broadcast.
+                self.effects.activate_group(effect, targets, now, self.scheduler)
+            elif not should_be_active and is_active:
+                self.effects.deactivate_group(effect.effect_id, targets, now=now)
+
     def can_activate_effect(self, effect: "CompiledEffect") -> bool:
         if self.is_runtime_executable_effect(effect):
             return True
@@ -950,6 +1018,12 @@ class TriggerDispatcher:
                 return False
             was_active = self.effects.group_active(effect.effect_id, targets, now=now)
             activated_group = self.effects.activate_group(effect, targets, now, self.scheduler)
+            if (
+                activated_group
+                and effect.name
+                and effect.name in self._self_stack_dependency_names
+            ):
+                self._sync_self_stack_conditional_passives(now=now)
             max_stack = effect.max_stack if effect.max_stack is not None else 1.0
             if (
                 activated_group
@@ -1019,7 +1093,12 @@ class TriggerDispatcher:
         owner = signal.owner_actor
         event_key = signal.event_key
         if event_key == _INTERNAL_BULLET_CONSUME_EVENT:
-            self.effects.consume_dynamic_bullet(owner, now=signal.time, count=1)
+            removed = self.effects.consume_dynamic_bullet(owner, now=signal.time, count=1)
+            if any(
+                self._effect_table[effect_id].name in self._self_stack_dependency_names
+                for effect_id in removed
+            ):
+                self._sync_self_stack_conditional_passives(now=signal.time)
             return DispatchResult(())
 
         counter_key = (owner, event_key)
@@ -1150,6 +1229,8 @@ class TriggerDispatcher:
         expired = self.effects.handle_expiry(event)
         if expired is None:
             return
+        if expired.name and expired.name in self._self_stack_dependency_names:
+            self._sync_self_stack_conditional_passives(now=event.time)
 
         # Moris removes all timed states first, then emits named state_end events.
         # The first Fast bridge is deliberately restricted to a one-target self
