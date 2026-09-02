@@ -1,0 +1,41 @@
+name: Fast Red Hood Red Wolf provider diagnostics
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+permissions:
+  contents: write
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Diagnose Red Wolf providers
+        shell: bash
+        run: |
+          python - <<'PY'
+          from context.spec import build_squad
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+
+          names=['라피 : 레드 후드','레드 후드','프리카','민트','퀀시 : 이스케이프 퀸']
+          squad=compile_moris_squad(build_squad(names))
+          for e in squad.effects:
+              if '레드 울프' in (e.name or '') or any((r.event_key or '')=='event:레드 울프' for r in e.triggers):
+                  print('MATCH',e.effect_id,'owner',squad.members[e.actor].name,'name',e.name,'type',e.effect_type,'stat',e.stat,'target',e.target,'duration',e.duration,'params',e.parameters,'cap',e.capability.disposition,e.capability.blockers,'exec',TriggerDispatcher.is_executable_effect(e))
+                  print('TRIGGERS',[(r.raw,r.event_key,getattr(r.mode,'value',str(r.mode)),r.threshold) for r in e.triggers])
+          PY
+      - name: Remove helper
+        if: always()
+        shell: bash
+        run: |
+          rm .github/workflows/_fast_redhood_redwolf_provider_diag.yml
+          git config user.name fast-engine-bot
+          git config user.email fast-engine-bot@users.noreply.github.com
+          git add -A
+          git commit -m "chore: remove Red Wolf provider diagnostic helper" || exit 0
+          git push origin HEAD:fast-engine-phase2-20260901
