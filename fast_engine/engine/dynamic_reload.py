@@ -78,6 +78,7 @@ class DynamicRapidReloadRuntime:
         "_machines",
         "_hit_thresholds",
         "_pellet_thresholds",
+        "_last_bullet_actors",
         "_states",
         "_score_sink",
     )
@@ -105,6 +106,7 @@ class DynamicRapidReloadRuntime:
 
         hit_thresholds: dict[int, tuple[int, ...]] = {}
         pellet_thresholds: dict[int, tuple[int, ...]] = {}
+        last_bullet_actors: set[int] = set()
         for actor, character in enumerate(squad.members):
             hits: set[int] = set()
             pellets: set[int] = set()
@@ -112,6 +114,8 @@ class DynamicRapidReloadRuntime:
                 if not effect_filter(effect):
                     continue
                 for rule in effect.triggers:
+                    if rule.event_key == "last_bullet":
+                        last_bullet_actors.add(actor)
                     if rule.mode is not TriggerMode.MODULO or not rule.trigger_count_reducible:
                         continue
                     threshold = int(rule.threshold or 0)
@@ -127,6 +131,7 @@ class DynamicRapidReloadRuntime:
                 pellet_thresholds[actor] = tuple(sorted(pellets))
         self._hit_thresholds = hit_thresholds
         self._pellet_thresholds = pellet_thresholds
+        self._last_bullet_actors = frozenset(last_bullet_actors)
 
     def attach_score_sink(
         self,
@@ -203,6 +208,11 @@ class DynamicRapidReloadRuntime:
         return any(before // threshold != after // threshold for threshold in thresholds)
 
     def _shot_is_boundary(self, st: _RapidActorState) -> bool:
+        # Keep ordinary rapid shots compressed, but materialize the magazine's
+        # final physical shot when an executable post-shot last_bullet consumer
+        # exists. BurstRuntime dispatches last_bullet only after this shot scores.
+        if st.actor in self._last_bullet_actors and st.ammo <= 1:
+            return True
         next_hit = st.hit_count + 1
         if any(next_hit % threshold == 0 for threshold in self._hit_thresholds.get(st.actor, ())):
             return True

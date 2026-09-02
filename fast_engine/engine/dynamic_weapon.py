@@ -252,7 +252,7 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
 
     def supports_dynamic_last_bullet(self, actor: int) -> bool:
         if actor in self._rapid_reload.actors:
-            return False
+            return actor in self._rapid_reload._last_bullet_actors
         return self.emits_every_charge_shot(actor)
 
     def emits_squad_body_hit(self, actor: int) -> bool:

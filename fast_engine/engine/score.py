@@ -271,7 +271,6 @@ def _rapid_actor_score_safe(
         actor,
         frozenset({
             "last_bullet_fire",
-            "last_bullet",
             "on_attack",
             "event:full_reload",
             "full_reload",
