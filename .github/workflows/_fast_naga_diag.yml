@@ -14,37 +14,34 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Diagnose Naga delivery blockers
+      - name: Diagnose Naga shield chain
         run: |
           python - <<'PY'
           from context.spec import build_squad
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.score import static_score_blockers
           from fast_engine.engine.dispatcher import TriggerDispatcher
-          import fast_engine.engine.score as score
 
           names = ["리틀 머메이드", "나가", "크라운", "아스카 : WILLE", "루드밀라 : 윈터 오너"]
-          squad = compile_moris_squad(build_squad(names))
+          raw = build_squad(names)
+          squad = compile_moris_squad(raw)
           actor = names.index("나가")
           print("BLOCKERS", static_score_blockers(squad))
+          print("--- NAGA EFFECTS ---")
           for e in squad.members[actor].effects:
-              if e.name in {"우정의 가드 2", "친구들과 함께라면! 3"}:
-                  print("EFFECT", e.name)
-                  print(" type/stat/value/duration", e.effect_type, e.stat, e.value, e.duration)
-                  print(" target", e.target, e.target_spec)
-                  print(" triggers", [(r.raw, r.event_key, r.mode.value, r.threshold, r.trigger_count_reducible) for r in e.triggers])
-                  print(" conditions", e.conditions, e.condition_rules)
-                  print(" capability", e.capability.disposition.value, e.capability.blockers, e.capability.category.value, e.capability.timing_families, e.capability.condition_families, e.capability.target_family)
-                  print(" dispatcher_exec", TriggerDispatcher.is_executable_effect(e))
-
-          print("--- SCORE SOURCE HITS ---")
-          import inspect
-          src = inspect.getsource(score)
-          lines = src.splitlines()
-          needles = ("core_dmg_pct", "atk_caster_based_pct", "normal_delivery", "skill_state_delivery", "damage_delivery")
-          for i, line in enumerate(lines):
-              if any(n in line for n in needles):
-                  lo=max(0,i-8); hi=min(len(lines),i+13)
-                  print(f"@@ {i+1} @@")
-                  print("\n".join(f"{j+1}: {lines[j]}" for j in range(lo,hi)))
+              print("EFFECT", e.effect_id, e.name, e.effect_type, e.stat, e.value, e.duration)
+              print(" target", e.target, e.target_spec)
+              print(" triggers", [(r.raw, r.event_key, r.mode.value, r.threshold, r.trigger_count_reducible) for r in e.triggers])
+              print(" conditions", e.conditions, e.condition_rules)
+              print(" params", e.parameters)
+              print(" capability", e.capability.disposition.value, e.capability.blockers, e.capability.category.value)
+              print(" dispatcher_exec", TriggerDispatcher.is_executable_effect(e))
+          print("--- ALL SHIELD-LIKE EFFECTS ---")
+          for e in squad.effects:
+              text = " ".join([str(e.name or ""), str(e.stat or ""), str(e.effect_type or ""), str(e.parameters)])
+              if "shield" in text.lower() or "보호막" in text or "실드" in text:
+                  print(squad.members[e.actor].name, e.effect_id, e.name, e.effect_type, e.stat, e.value, e.duration, e.target, [r.raw for r in e.triggers], e.conditions, e.parameters, e.capability.disposition.value, e.capability.blockers)
+          print("--- RAW NAGA ---")
+          import pprint
+          pprint.pp(raw[actor])
           PY
