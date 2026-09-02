@@ -1,0 +1,48 @@
+name: Fast frontier probe tmp
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Probe current 24-team blocker frontier
+        run: |
+          python - <<'PY'
+          from collections import Counter
+          from context import snapshot, spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+
+          rows=[]
+          seen=set()
+          for name, case in snapshot.SQUADS.items():
+              if str(name).startswith('지그_'):
+                  continue
+              members=tuple(str(x) for x in case['members'])
+              if len(members)!=5 or any(x.startswith('test_') for x in members) or members in seen:
+                  continue
+              seen.add(members)
+              squad=spec.build_squad(list(members))
+              compiled=compile_moris_squad(squad)
+              blockers=tuple(dict.fromkeys(static_score_blockers(compiled)))
+              rows.append((str(name), members, blockers))
+
+          print('TEAM_COUNT', len(rows))
+          for name,members,blockers in sorted(rows,key=lambda r:(len(r[2]),r[0])):
+              print('TEAM',name,'COUNT',len(blockers))
+              for b in blockers:
+                  print('  B',b)
+
+          exact=Counter(b for _,_,bs in rows for b in bs)
+          print('EXACT_TOP')
+          for b,n in exact.most_common(80):
+              print(n,b)
+
+          fam=Counter(b.split(':',1)[0] for _,_,bs in rows for b in bs)
+          print('FAMILY',fam.most_common())
+          PY
