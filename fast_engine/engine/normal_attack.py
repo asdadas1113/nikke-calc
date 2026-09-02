@@ -17,7 +17,7 @@ class NormalAttackSpec:
     full_charge_mult: float
     normal_hit_coeff: float
     is_full_charge: bool
-    is_projectile_explosion: bool
+    is_projectile_explosion: bool = False
 
 
 def compile_normal_attack_spec(character: CompiledCharacter) -> NormalAttackSpec:
