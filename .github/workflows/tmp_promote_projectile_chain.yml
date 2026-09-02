@@ -1,0 +1,81 @@
+name: Promote projectile-chain checkpoint tmp
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+permissions:
+  contents: write
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply clean validated diff
+        run: |
+          git fetch origin tmp-fast-frontier-diag-20260903
+          git diff c8a986792e56ec49bee35378b7c10a2199391ff6 ce7920f8f1c163d897bdc50f2b40604b5bf2f7a3 -- fast_engine/engine fast_engine/tests > /tmp/projectile.patch
+          git apply /tmp/projectile.patch
+      - name: Focused regressions
+        run: |
+          python -m unittest fast_engine.tests.test_projectile_named_stack_chain -v
+          python -m unittest fast_engine.tests.test_damage_pending_runtime -v
+          python -m unittest fast_engine.tests.test_dynamic_weapon_change -v
+      - name: Full Fast regression
+        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
+      - name: Certified-only ranking gate
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          from context import snapshot, spec
+          from calculator.timeline import DEFAULT_ENEMY, simulate
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.score import static_score_blockers, score_static_squad
+          from fast_engine.engine.model import EnemyStaticProfile
+          cfg0={'duration':180.0,'first_burst_time':3.0,'rng_mode':'expected'}
+          rows=[]
+          for name,case in snapshot.SQUADS.items():
+              if str(name).startswith('지그_'): continue
+              members=tuple(str(x) for x in case['members'])
+              if len(members)!=5 or any(x.startswith('test_') for x in members): continue
+              squad=spec.build_squad(list(members))
+              compiled=compile_moris_squad(squad)
+              rows.append((str(name),squad,compiled,tuple(dict.fromkeys(static_score_blockers(compiled)))))
+          clean=[]
+          for name,squad,compiled,blockers in rows:
+              if blockers: continue
+              cfg=spec.build_config(squad,dict(cfg0))
+              policy=compile_burst_policy(squad,compiled,cfg)
+              fast=score_static_squad(compiled,policy,EnemyStaticProfile(defense=31784.0,duration=180.0))
+              if fast.unsupported: continue
+              moris=simulate(squad,config=cfg,enemy=dict(DEFAULT_ENEMY),seed=42,verbose=False)
+              clean.append((name,float(moris.squad_total),float(fast.squad_total)))
+          print('TEAM_COUNT',len(rows))
+          print('CERTIFIED_COUNT',len(clean))
+          for row in clean:
+              print('CERTIFIED',row[0],'MORIS',row[1],'FAST',row[2],'REL',row[2]/row[1]-1.0)
+          pairs=correct=0
+          for i in range(len(clean)):
+              for j in range(i+1,len(clean)):
+                  a,b=clean[i],clean[j]
+                  if a[1]==b[1] or a[2]==b[2]: continue
+                  pairs+=1
+                  correct+=int((a[1]>b[1])==(a[2]>b[2]))
+          print('PAIRWISE',correct,pairs,correct/pairs if pairs else None)
+          if len(rows)!=24 or len(clean)<2 or pairs<1 or correct!=pairs:
+              raise SystemExit('ranking gate not satisfied')
+          PY
+      - name: Remove promoter and commit implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/tmp_promote_projectile_chain.yml
+          git add fast_engine/engine fast_engine/tests
+          git status --short
+          git commit -m 'impl: support projectile named-stack chain'
+          git push origin HEAD:fast-engine-phase2-20260901
