@@ -1,0 +1,48 @@
+name: Fast Red Hood charge safety reason
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+permissions:
+  contents: write
+jobs:
+  diag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Diagnose charge safety reason
+        shell: bash
+        run: |
+          python - <<'PY'
+          from context.spec import build_squad
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import _possible_ally_targets,_reload_speed_positive_upper_bound,_actor_has_executable_core_count,_actor_has_executable_event,_actor_has_unhandled_count_event
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+          names=['라피 : 레드 후드','레드 후드','프리카','민트','퀀시 : 이스케이프 퀸']
+          squad=compile_moris_squad(build_squad(names)); actor=1; m=squad.members[actor]
+          print('control',m.weapon.get('control'),'is_clip',m.weapon.get('is_clip'),'cover',m.weapon.get('cover_during_delay'))
+          print('reload_upper',_reload_speed_positive_upper_bound(squad,actor))
+          print('core_count',_actor_has_executable_core_count(squad,actor))
+          print('events', {k:_actor_has_executable_event(squad,actor,frozenset({k})) for k in ['last_bullet_fire','on_attack','event:full_reload','full_reload','pellet_hit']})
+          print('unhandled_hit_count',_actor_has_unhandled_count_event(squad,actor,frozenset({'hit_count'})))
+          for e in squad.effects:
+              if e.effect_type=='weapon_change' and actor in _possible_ally_targets(squad,e):
+                  print('WEAPON_CHANGE',e.actor,squad.members[e.actor].name,e.name,e.parameters,e.capability.disposition,e.capability.blockers,TriggerDispatcher.is_executable_effect(e))
+          for e in m.effects:
+              if e.name.startswith('글레링 아이즈'):
+                  print('GLARE_CAP',e.name,e.capability.disposition,e.capability.blockers)
+          PY
+      - name: Remove helper
+        if: always()
+        shell: bash
+        run: |
+          rm .github/workflows/_fast_redhood_charge_reason_diag.yml
+          git config user.name fast-engine-bot
+          git config user.email fast-engine-bot@users.noreply.github.com
+          git add -A
+          git commit -m "chore: remove Red Hood charge reason helper" || exit 0
+          git push origin HEAD:fast-engine-phase2-20260901
