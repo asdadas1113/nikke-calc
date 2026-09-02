@@ -210,9 +210,10 @@ class DynamicChargeScoringTests(unittest.TestCase):
         self.assertFalse(static_normal_score_blockers(squad))
         runtime = BurstRuntime(squad, BurstPolicy(duration=2.1, first_burst_time=10.0), EnemyStaticProfile(defense=0.0, core_uptime=0.0, core_px=0.0, duration=2.1))
         observer = StaticNormalAttackObserver(runtime, duration=2.1)
-        runtime.run(duration=2.1, score_observer=observer)
-        # First shot is at base 1.0s. Only then does +60% activate, replanning the
-        # next charge from its post-shot start; the effect must have one stack.
+        # Stop immediately after the first base-speed shot. ActiveEffectStore is
+        # not a historical snapshot store, so inspecting 1.01 after advancing to
+        # 2.1 would correctly expose later stacks as current state.
+        runtime.run(duration=1.01, score_observer=observer)
         self.assertAlmostEqual(runtime.dispatcher.effects.sum_stat(0, "charge_speed_pct", now=1.01), 60.0, places=9)
 
     def test_charge_speed_overflow_adds_charge_damage_only_above_100(self):
