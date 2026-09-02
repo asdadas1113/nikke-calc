@@ -26,7 +26,7 @@ jobs:
           members = ['라피 : 레드 후드','레드 후드','프리카','민트','퀀시 : 이스케이프 퀸']
           target = '퀀시 : 이스케이프 퀸'
           qi = members.index(target)
-          duration = 10.0
+          duration = 30.0
           cfg = {'duration':duration,'first_burst_time':3.0,'rng_mode':'expected'}
           enemy = dict(DEFAULT_ENEMY)
           squad = spec.build_squad(members)
@@ -63,10 +63,10 @@ jobs:
           moris = simulate(squad, config=spec.build_config(squad, dict(cfg)), enemy=dict(enemy), seed=42, verbose=True)
           skill_hits = [h for h in moris.hits if h.caster == target and h.skill_name == '위대한 도둑 3']
           print('MORIS_HITS', [(h.t,h.damage,h.hit_tag) for h in skill_hits])
-          print('MORIS_BURST_LOG', [(x.t,x.event,x.caster) for x in moris.log.burst_log if x.t < 5])
+          print('MORIS_BURST_LOG', [(x.t,x.event,x.caster) for x in moris.log.burst_log])
           if skill_hits:
               ht = skill_hits[0].t
-              print('MORIS_ACTIVE_AT_HIT')
+              print('MORIS_ACTIVE_AT_HIT', ht)
               active={}
               for e in sorted(moris.log.buff_events, key=lambda x:(x.t, 0 if x.kind=='activate' else 1)):
                   if e.target != target or e.t > ht + 1e-9: continue
@@ -74,7 +74,8 @@ jobs:
                   if e.kind=='activate': active[key]=e
                   else: active.pop(key,None)
               for key,e in active.items():
-                  print(e.caster,e.name,e.stat,e.value,e.stack,e.expires_at)
+                  if e.expires_at >= ht - 1e-9:
+                      print(e.caster,e.name,e.stat,e.value,e.stack,e.expires_at)
           PY
       - name: Upload diagnosis
         uses: actions/upload-artifact@v4
