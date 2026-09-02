@@ -1,0 +1,85 @@
+name: Fast named NOP marker implementation
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+permissions:
+  contents: write
+jobs:
+  impl:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Apply narrow named NOP marker bridge
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p=Path('fast_engine/engine/dispatcher.py')
+          s=p.read_text(encoding='utf-8')
+          needle='''    @staticmethod\n    def is_executable_effect(effect: "CompiledEffect") -> bool:\n'''
+          insert='''    @classmethod\n    def _named_event_marker_nop_shape_supported(cls, effect: "CompiledEffect") -> bool:\n        """Allow a Moris-NOP buff to exist only as a named-event marker.\n\n        The underlying stat remains intentionally ignored. This bridge is limited\n        to simple one-stack buffs on controller/burst events so it cannot turn an\n        arbitrary unsupported mechanic into an executable Fast effect.\n        """\n        if not (\n            effect.capability.disposition is CapabilityDisposition.MIRROR_MORIS_NOP\n            and effect.effect_type == "buff"\n            and bool(effect.name)\n            and effect.max_stack in (None, 1, 1.0)\n            and not effect.parameters\n            and effect.target_spec.runtime_supported\n            and not effect.condition_rules\n            and bool(effect.triggers)\n        ):\n            return False\n        for rule in effect.triggers:\n            if rule.mode is not TriggerMode.EVENT:\n                return False\n            key = rule.event_key or ""\n            if key in cls._SHIELD_SAFE_EVENT_KEYS:\n                continue\n            if key.startswith("burst_enter:") or key.startswith("squad_burst_cast:"):\n                continue\n            return False\n        return True\n\n'''
+          if needle not in s:
+              raise SystemExit('dispatcher insertion anchor missing')
+          s=s.replace(needle,insert+needle,1)
+
+          old='''                if not self.is_executable_effect(provider):\n                    return False\n'''
+          new='''                if not (\n                    self.is_executable_effect(provider)\n                    or self._named_event_marker_nop_shape_supported(provider)\n                ):\n                    return False\n'''
+          if old not in s:
+              raise SystemExit('named source provider anchor missing')
+          s=s.replace(old,new,1)
+
+          old='''    def can_activate_effect(self, effect: "CompiledEffect") -> bool:\n        if self.is_runtime_executable_effect(effect):\n            return True\n        return self._is_state_dependency(effect) and self._named_event_source_runtime_safe(effect)\n'''
+          new='''    def can_activate_effect(self, effect: "CompiledEffect") -> bool:\n        if self.is_runtime_executable_effect(effect):\n            return True\n        if (\n            effect.name\n            and effect.name in self._named_event_names_needed\n            and self._named_event_marker_nop_shape_supported(effect)\n        ):\n            return True\n        return self._is_state_dependency(effect) and self._named_event_source_runtime_safe(effect)\n'''
+          if old not in s:
+              raise SystemExit('can_activate anchor missing')
+          s=s.replace(old,new,1)
+          p.write_text(s,encoding='utf-8')
+
+          p=Path('fast_engine/engine/score.py')
+          s=p.read_text(encoding='utf-8')
+          old='''            if not TriggerDispatcher.is_executable_effect(provider):\n                return False\n'''
+          new='''            if not (\n                TriggerDispatcher.is_executable_effect(provider)\n                or TriggerDispatcher._named_event_marker_nop_shape_supported(provider)\n            ):\n                return False\n'''
+          if old not in s:
+              raise SystemExit('score provider anchor missing')
+          s=s.replace(old,new,1)
+          p.write_text(s,encoding='utf-8')
+
+          p=Path('fast_engine/tests/test_named_buff_event_runtime.py')
+          s=p.read_text(encoding='utf-8')
+          anchor='''    def test_named_event_without_executable_named_buff_provider_stays_blocked(self):\n'''
+          test='''    def test_moris_nop_named_marker_can_drive_supported_consumer(self):\n        squad, runtime = self._runtime()\n        red = NAMES.index("레드 후드")\n        blockers = static_score_blockers(squad)\n        self.assertFalse(any("레드 후드:와일드 투스 4:atk_pct" in item for item in blockers))\n        self.assertTrue(any("레드 후드:글레링 아이즈:charge_speed_pct" in item for item in blockers))\n\n        marker = next(e for e in squad.members[red].effects if e.name == "레드 울프")\n        consumer = next(e for e in squad.members[red].effects if e.name == "와일드 투스 4")\n        self.assertTrue(runtime.dispatcher._named_event_marker_nop_shape_supported(marker))\n        self.assertFalse(runtime.dispatcher.is_executable_effect(marker))\n\n        runtime.dispatcher.dispatch(BurstSignal(1.0, "squad_burst_cast:3", red, red))\n        self.assertEqual(runtime.dispatcher._activation_counts.get(marker.effect_id, 0), 1)\n        self.assertEqual(runtime.dispatcher._activation_counts.get(consumer.effect_id, 0), 1)\n        self.assertAlmostEqual(\n            runtime.dispatcher.effects.sum_stat(red, "atk_pct", now=1.01),\n            float(consumer.value or 0.0),\n            places=9,\n        )\n\n'''
+          if anchor not in s:
+              raise SystemExit('test anchor missing')
+          s=s.replace(anchor,test+anchor,1)
+          p.write_text(s,encoding='utf-8')
+          PY
+      - name: Run focused and Fast tests
+        shell: bash
+        run: |
+          python -m unittest fast_engine.tests.test_named_buff_event_runtime -v
+          python -m unittest discover -s fast_engine/tests -p 'test_*.py'
+      - name: Commit implementation
+        shell: bash
+        run: |
+          git config user.name fast-engine-bot
+          git config user.email fast-engine-bot@users.noreply.github.com
+          git add fast_engine/engine/dispatcher.py fast_engine/engine/score.py fast_engine/tests/test_named_buff_event_runtime.py
+          git commit -m "impl: support named Moris-NOP marker buffs"
+          git push origin HEAD:fast-engine-phase2-20260901
+      - name: Remove helper
+        if: always()
+        shell: bash
+        run: |
+          git pull --rebase origin fast-engine-phase2-20260901 || true
+          rm -f .github/workflows/_fast_named_nop_marker_impl.yml
+          git config user.name fast-engine-bot
+          git config user.email fast-engine-bot@users.noreply.github.com
+          git add -A
+          git commit -m "chore: remove named NOP marker helper" || exit 0
+          git push origin HEAD:fast-engine-phase2-20260901
