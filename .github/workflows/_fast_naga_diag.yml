@@ -11,37 +11,6 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-      - name: Diagnose Naga shield chain
+      - name: Inspect Moris shield semantics
         run: |
-          python - <<'PY'
-          from context.spec import build_squad
-          from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.score import static_score_blockers
-          from fast_engine.engine.dispatcher import TriggerDispatcher
-
-          names = ["리틀 머메이드", "나가", "크라운", "아스카 : WILLE", "루드밀라 : 윈터 오너"]
-          raw = build_squad(names)
-          squad = compile_moris_squad(raw)
-          actor = names.index("나가")
-          print("BLOCKERS", static_score_blockers(squad))
-          print("--- NAGA EFFECTS ---")
-          for e in squad.members[actor].effects:
-              print("EFFECT", e.effect_id, e.name, e.effect_type, e.stat, e.value, e.duration)
-              print(" target", e.target, e.target_spec)
-              print(" triggers", [(r.raw, r.event_key, r.mode.value, r.threshold, r.trigger_count_reducible) for r in e.triggers])
-              print(" conditions", e.conditions, e.condition_rules)
-              print(" params", e.parameters)
-              print(" capability", e.capability.disposition.value, e.capability.blockers, e.capability.category.value)
-              print(" dispatcher_exec", TriggerDispatcher.is_executable_effect(e))
-          print("--- ALL SHIELD-LIKE EFFECTS ---")
-          for e in squad.effects:
-              text = " ".join([str(e.name or ""), str(e.stat or ""), str(e.effect_type or ""), str(e.parameters)])
-              if "shield" in text.lower() or "보호막" in text or "실드" in text:
-                  print(squad.members[e.actor].name, e.effect_id, e.name, e.effect_type, e.stat, e.value, e.duration, e.target, [r.raw for r in e.triggers], e.conditions, e.parameters, e.capability.disposition.value, e.capability.blockers)
-          print("--- RAW NAGA ---")
-          import pprint
-          pprint.pp(raw[actor])
-          PY
+          grep -RIn -C 8 -E 'shield_from_max_hp_pct|shield_applied|during_shield|set_shield|\.shield' calculator context | head -n 500
