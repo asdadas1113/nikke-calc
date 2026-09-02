@@ -1,4 +1,4 @@
-name: Fast public frontier audit
+name: Fast blocker diagnostics
 
 on:
   push:
@@ -13,50 +13,95 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Audit fixed public squads
+      - name: Diagnose top blocker gates
         run: |
           python - <<'PY'
-          from collections import Counter
           from context.snapshot import SQUADS
           from context.spec import build_squad
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+          from fast_engine.engine.score import (
+              _possible_ally_targets,
+              _reload_recipient_score_safe,
+              _charge_actor_score_safe,
+              _rapid_actor_score_safe,
+              _is_dynamic_reload_score_supported,
+              _is_dynamic_charge_score_supported,
+              _actor_has_live_max_ammo_mutation,
+              static_score_blockers,
+          )
 
-          DELIVERY = {"normal_delivery", "skill_state_delivery", "damage_delivery"}
-          def conceptual(blocker: str) -> str:
-              parts = blocker.split(":")
-              if parts and parts[0] in DELIVERY:
-                  return ":".join(parts[1:])
-              return blocker
+          targets = [
+              ("프리바티", "EX 매거진 2"),
+              ("프리바티", "EX 매거진 3"),
+              ("마스트 : 로망틱 메이드", "파이레츠 스피릿 2"),
+              ("에이다", "특수 개조"),
+          ]
 
-          raw_pressure = Counter()
-          conceptual_pressure = Counter()
-          rows = []
-          for name, spec in SQUADS.items():
-              members = tuple(spec.get("members") or ())
+          def rule_view(rule):
+              return {
+                  "event_key": rule.event_key,
+                  "mode": getattr(rule.mode, "value", str(rule.mode)),
+                  "threshold": rule.threshold,
+                  "interval": rule.interval,
+                  "trigger_count_reducible": rule.trigger_count_reducible,
+              }
+
+          seen = set()
+          for squad_name, row in SQUADS.items():
+              if squad_name.startswith("지그_"):
+                  continue
+              members = list(row.get("members") or ())
               if len(members) != 5:
                   continue
-              compiled = compile_moris_squad(build_squad(list(members)))
-              blockers = tuple(static_score_blockers(compiled))
-              concepts = tuple(sorted(set(conceptual(b) for b in blockers)))
-              rows.append((name, members, blockers, concepts))
-              raw_pressure.update(blockers)
-              conceptual_pressure.update(concepts)
-
-          certified = [r for r in rows if not r[2]]
-          print(f"TEAMS={len(rows)} CERTIFIED={len(certified)} GAPS={len(rows)-len(certified)}")
-          print("CERTIFIED_NAMES=" + ", ".join(r[0] for r in certified))
-          print("=== TEAM FRONTIER ===")
-          for name, members, blockers, concepts in sorted(rows, key=lambda r: (len(r[3]), len(r[2]), r[0])):
-              print(f"TEAM {name} RAW={len(blockers)} CONCEPT={len(concepts)}")
-              for c in concepts:
-                  print(f"  C {c}")
-              for b in blockers:
-                  print(f"  R {b}")
-          print("=== CONCEPT PRESSURE ===")
-          for blocker, count in conceptual_pressure.most_common():
-              print(f"P {count:02d} {blocker}")
-          print("=== RAW PRESSURE ===")
-          for blocker, count in raw_pressure.most_common():
-              print(f"P {count:02d} {blocker}")
+              if not any(owner in members for owner, _ in targets):
+                  continue
+              squad = compile_moris_squad(build_squad(members))
+              for owner, effect_name in targets:
+                  if owner not in members:
+                      continue
+                  effects = [e for e in squad.effects if squad.members[e.actor].name == owner and e.name == effect_name]
+                  for effect in effects:
+                      key = (owner, effect_name, effect.stat, str(effect.target), str(effect.triggers), str(effect.condition_rules), str(effect.parameters))
+                      if key in seen:
+                          continue
+                      seen.add(key)
+                      print("=== EFFECT ===")
+                      print("OWNER", owner)
+                      print("NAME", effect.name)
+                      print("STAT", effect.stat)
+                      print("TYPE", effect.effect_type)
+                      print("VALUE", effect.value)
+                      print("DURATION", effect.duration)
+                      print("TARGET", effect.target)
+                      print("TARGET_MODE", effect.target_spec.mode.value)
+                      print("PARAMETERS", effect.parameters)
+                      print("TRIGGERS", [rule_view(r) for r in effect.triggers])
+                      print("CONDITIONS", [getattr(r.mode, "value", str(r.mode)) for r in effect.condition_rules])
+                      print("EXECUTABLE", TriggerDispatcher.is_executable_effect(effect))
+                      recipients = _possible_ally_targets(squad, effect)
+                      print("RECIPIENTS", [(i, squad.members[i].name, squad.members[i].weapon.get("fire_mode"), bool(squad.members[i].weapon.get("control")), bool(squad.members[i].weapon.get("is_clip"))) for i in recipients])
+                      if effect.stat == "reload_speed_pct":
+                          print("RELOAD_SUPPORTED", _is_dynamic_reload_score_supported(squad, effect))
+                          for i in recipients:
+                              print("  RECIPIENT", squad.members[i].name,
+                                    "reload_safe=", _reload_recipient_score_safe(squad, i),
+                                    "rapid_safe=", _rapid_actor_score_safe(squad, i),
+                                    "charge_safe=", _charge_actor_score_safe(squad, i),
+                                    "live_max_ammo=", _actor_has_live_max_ammo_mutation(squad, i))
+                      elif effect.stat == "charge_speed_pct":
+                          print("CHARGE_SUPPORTED", _is_dynamic_charge_score_supported(squad, effect))
+                          for i in range(len(squad.members)):
+                              if squad.members[i].weapon.get("fire_mode") == "charge":
+                                  print("  CHARGE_ACTOR", squad.members[i].name,
+                                        "safe=", _charge_actor_score_safe(squad, i),
+                                        "control=", bool(squad.members[i].weapon.get("control")))
+                      elif effect.stat in {"max_ammo_pct", "max_ammo_flat"}:
+                          for i in recipients:
+                              print("  MAX_RECIPIENT", squad.members[i].name,
+                                    "rapid_safe=", _rapid_actor_score_safe(squad, i),
+                                    "charge_safe=", _charge_actor_score_safe(squad, i),
+                                    "live_max_ammo=", _actor_has_live_max_ammo_mutation(squad, i))
+                      print("SQUAD_EXAMPLE", squad_name)
+                      print("BLOCKERS", static_score_blockers(squad))
           PY
