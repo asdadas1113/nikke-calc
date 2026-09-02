@@ -1,0 +1,67 @@
+name: Fast Glaring Eyes verification
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13'}
+      - name: Fix temporal assertion
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('fast_engine/tests/test_damage_dynamic_charge_scoring.py')
+          s=p.read_text(encoding='utf-8')
+          old='''        runtime = BurstRuntime(squad, BurstPolicy(duration=2.1, first_burst_time=10.0), EnemyStaticProfile(defense=0.0, core_uptime=0.0, core_px=0.0, duration=2.1))\n        observer = StaticNormalAttackObserver(runtime, duration=2.1)\n        runtime.run(duration=2.1, score_observer=observer)\n        # First shot is at base 1.0s. Only then does +60% activate, replanning the\n        # next charge from its post-shot start; the effect must have one stack.\n        self.assertAlmostEqual(runtime.dispatcher.effects.sum_stat(0, "charge_speed_pct", now=1.01), 60.0, places=9)\n'''
+          new='''        runtime = BurstRuntime(squad, BurstPolicy(duration=2.1, first_burst_time=10.0), EnemyStaticProfile(defense=0.0, core_uptime=0.0, core_px=0.0, duration=2.1))\n        observer = StaticNormalAttackObserver(runtime, duration=2.1)\n        # Stop immediately after the first base-speed shot. ActiveEffectStore is\n        # not a historical snapshot store, so inspecting 1.01 after advancing to\n        # 2.1 would correctly expose later stacks as current state.\n        runtime.run(duration=1.01, score_observer=observer)\n        self.assertAlmostEqual(runtime.dispatcher.effects.sum_stat(0, "charge_speed_pct", now=1.01), 60.0, places=9)\n'''
+          if old not in s: raise SystemExit('temporal assertion anchor missing')
+          p.write_text(s.replace(old,new,1),encoding='utf-8')
+          PY
+      - name: Run focused and full Fast tests
+        run: |
+          python -m unittest fast_engine.tests.test_damage_dynamic_charge_scoring -v
+          python -m unittest discover -s fast_engine/tests -p 'test_*.py'
+      - name: Standard public audit
+        run: |
+          python - <<'PY'
+          from context.snapshot import SQUADS
+          from context.spec import build_squad
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+          rows=[]
+          for name,row in SQUADS.items():
+              if name.startswith('지그_'): continue
+              members=list(row.get('members') or ())
+              if len(members)!=5: continue
+              blockers=static_score_blockers(compile_moris_squad(build_squad(members)))
+              rows.append((name,blockers))
+          print('PUBLIC_COUNT',len(rows))
+          cert=[n for n,b in rows if not b]
+          print('CERTIFIED_COUNT',len(cert))
+          print('CERTIFIED',cert)
+          for n,b in rows:
+              if n=='레이드_레드후드퀀시': print('REDHOOD_BLOCKERS',list(b))
+          PY
+      - name: Commit test fix
+        run: |
+          git config user.name fast-engine-bot
+          git config user.email fast-engine-bot@users.noreply.github.com
+          git add fast_engine/tests/test_damage_dynamic_charge_scoring.py
+          git commit -m "test: verify post-shot charge-speed stacking"
+          git push origin HEAD:fast-engine-phase2-20260901
+      - name: Remove helper
+        if: always()
+        run: |
+          git pull --rebase origin fast-engine-phase2-20260901 || true
+          rm -f .github/workflows/_fast_redhood_glare_verify.yml
+          git config user.name fast-engine-bot
+          git config user.email fast-engine-bot@users.noreply.github.com
+          git add -A
+          git commit -m "chore: remove Glaring Eyes verification helper" || exit 0
+          git push origin HEAD:fast-engine-phase2-20260901
