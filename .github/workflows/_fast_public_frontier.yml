@@ -1,0 +1,62 @@
+name: Fast public frontier audit
+
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+    paths: [.github/workflows/_fast_public_frontier.yml]
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Audit fixed public squads
+        run: |
+          python - <<'PY'
+          from collections import Counter
+          from context.snapshot import SQUADS
+          from context.spec import build_squad
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+
+          DELIVERY = {"normal_delivery", "skill_state_delivery", "damage_delivery"}
+          def conceptual(blocker: str) -> str:
+              parts = blocker.split(":")
+              if parts and parts[0] in DELIVERY:
+                  return ":".join(parts[1:])
+              return blocker
+
+          raw_pressure = Counter()
+          conceptual_pressure = Counter()
+          rows = []
+          for name, spec in SQUADS.items():
+              members = tuple(spec.get("members") or ())
+              if len(members) != 5:
+                  continue
+              compiled = compile_moris_squad(build_squad(list(members)))
+              blockers = tuple(static_score_blockers(compiled))
+              concepts = tuple(sorted(set(conceptual(b) for b in blockers)))
+              rows.append((name, members, blockers, concepts))
+              raw_pressure.update(blockers)
+              conceptual_pressure.update(concepts)
+
+          certified = [r for r in rows if not r[2]]
+          print(f"TEAMS={len(rows)} CERTIFIED={len(certified)} GAPS={len(rows)-len(certified)}")
+          print("CERTIFIED_NAMES=" + ", ".join(r[0] for r in certified))
+          print("=== TEAM FRONTIER ===")
+          for name, members, blockers, concepts in sorted(rows, key=lambda r: (len(r[3]), len(r[2]), r[0])):
+              print(f"TEAM {name} RAW={len(blockers)} CONCEPT={len(concepts)}")
+              for c in concepts:
+                  print(f"  C {c}")
+              for b in blockers:
+                  print(f"  R {b}")
+          print("=== CONCEPT PRESSURE ===")
+          for blocker, count in conceptual_pressure.most_common():
+              print(f"P {count:02d} {blocker}")
+          print("=== RAW PRESSURE ===")
+          for blocker, count in raw_pressure.most_common():
+              print(f"P {count:02d} {blocker}")
+          PY
