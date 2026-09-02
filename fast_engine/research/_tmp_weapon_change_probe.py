@@ -1,0 +1,284 @@
+from __future__ import annotations
+
+from itertools import combinations
+from pathlib import Path
+import sys
+
+
+def replace_once(path: str, old: str, new: str) -> None:
+    p = Path(path)
+    text = p.read_text(encoding="utf-8")
+    if old not in text:
+        raise SystemExit(f"anchor not found: {path}: {old[:100]!r}")
+    p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+def patch() -> None:
+    replace_once(
+        "fast_engine/engine/effects.py",
+        '''    def has_named_state(self, target: int, name: str, *, now: float) -> bool:\n        return bool(self._active_keys(self._by_target_name, target, name, now))\n\n''',
+        '''    def has_named_state(self, target: int, name: str, *, now: float) -> bool:\n        return bool(self._active_keys(self._by_target_name, target, name, now))\n\n    def active_effect_of_type(self, target: int, effect_type: str, *, now: float):\n        """Return the newest live effect of ``effect_type`` on one target."""\n        rows = []\n        for active in self._active.values():\n            if active.target != int(target) or not active.active(now):\n                continue\n            effect = self._effects[active.effect_id]\n            if effect.effect_type == effect_type:\n                rows.append((effect, active))\n        if not rows:\n            return None\n        return max(rows, key=lambda row: row[1].generation)\n\n''',
+    )
+
+    replace_once(
+        "fast_engine/engine/dispatcher.py",
+        '''    @staticmethod\n    def is_executable_effect(effect: "CompiledEffect") -> bool:\n''',
+        '''    @classmethod\n    def _temporary_self_charge_weapon_change_shape_supported(cls, effect: "CompiledEffect") -> bool:\n        params = effect.parameters\n        allowed = {\n            "weapon_type", "damage_coeff", "max_ammo", "reload_seconds",\n            "reload_time", "charge_seconds", "charge_time", "full_charge_mult",\n            "post_fire_delay", "cover_during_delay", "reset_ammo",\n        }\n        if not (\n            effect.capability.disposition is CapabilityDisposition.READY\n            and effect.effect_type == "weapon_change"\n            and effect.target_spec.mode.value == "self"\n            and effect.duration is not None\n            and float(effect.duration) > 0.0\n            and effect.max_stack in (None, 1, 1.0)\n            and not effect.condition_rules\n            and bool(effect.triggers)\n            and not (set(params) - allowed)\n            and params.get("weapon_type") in {"SR", "RL"}\n            and params.get("max_ammo") == -1\n            and params.get("reset_ammo") is True\n            and isinstance(params.get("damage_coeff"), (int, float))\n            and isinstance(params.get("full_charge_mult"), (int, float))\n            and isinstance(params.get("post_fire_delay"), (int, float))\n        ):\n            return False\n        charge = params.get("charge_seconds", params.get("charge_time"))\n        if not isinstance(charge, (int, float)) or float(charge) < 0.0:\n            return False\n        for rule in effect.triggers:\n            if rule.mode is not TriggerMode.EVENT:\n                return False\n            key = rule.event_key or ""\n            if key == "burst_cast" or key.startswith("squad_burst_cast:"):\n                continue\n            return False\n        return True\n\n    def _temporary_self_charge_weapon_change_runtime_supported(\n        self, effect: "CompiledEffect"\n    ) -> bool:\n        if not self._temporary_self_charge_weapon_change_shape_supported(effect):\n            return False\n        member = self.squad.members[effect.actor]\n        params = effect.parameters\n        charge = float(params.get("charge_seconds", params.get("charge_time", 0.0)))\n        return (\n            str(member.weapon.get("fire_mode") or "") == "charge"\n            and str(member.weapon.get("weapon_type") or member.weapon_type) == str(params.get("weapon_type"))\n            and abs(float(member.weapon.get("charge_time") or 0.0) - charge) <= 1e-9\n            and not member.weapon.get("control")\n            and not member.weapon.get("is_clip")\n        )\n\n    @staticmethod\n    def is_executable_effect(effect: "CompiledEffect") -> bool:\n''',
+    )
+    replace_once(
+        "fast_engine/engine/dispatcher.py",
+        '''    def is_runtime_executable_effect(self, effect: "CompiledEffect") -> bool:\n        family = self._gauge_family(effect)\n''',
+        '''    def is_runtime_executable_effect(self, effect: "CompiledEffect") -> bool:\n        if self._temporary_self_charge_weapon_change_runtime_supported(effect):\n            return True\n        family = self._gauge_family(effect)\n''',
+    )
+    replace_once(
+        "fast_engine/engine/dispatcher.py",
+        '''        elif effect.effect_type == "damage":\n            if self.damage_sink is None or not self.damage_sink.supports(effect):\n                return False\n''',
+        '''        elif effect.effect_type == "weapon_change":\n            if (\n                not self._temporary_self_charge_weapon_change_runtime_supported(effect)\n                or tuple(targets) != (effect.actor,)\n            ):\n                return False\n            self.effects.activate_group(effect, targets, now, self.scheduler)\n        elif effect.effect_type == "damage":\n            if self.damage_sink is None or not self.damage_sink.supports(effect):\n                return False\n''',
+    )
+
+    replace_once(
+        "fast_engine/engine/score.py",
+        '''def _charge_actor_score_safe(squad: CompiledSquad, actor: int) -> bool:\n''',
+        '''def _temporary_self_charge_weapon_change_score_supported(\n    squad: CompiledSquad, effect\n) -> bool:\n    if not TriggerDispatcher._temporary_self_charge_weapon_change_shape_supported(effect):\n        return False\n    member = squad.members[effect.actor]\n    params = effect.parameters\n    charge = float(params.get("charge_seconds", params.get("charge_time", 0.0)))\n    if not (\n        str(member.weapon.get("fire_mode") or "") == "charge"\n        and str(member.weapon.get("weapon_type") or member.weapon_type) == str(params.get("weapon_type"))\n        and abs(float(member.weapon.get("charge_time") or 0.0) - charge) <= 1e-9\n        and not member.weapon.get("control")\n        and not member.weapon.get("is_clip")\n    ):\n        return False\n    related = tuple(\n        other\n        for other in squad.effects\n        if other.effect_type == "weapon_change"\n        and effect.actor in _possible_ally_targets(squad, other)\n    )\n    return len(related) == 1 and related[0].effect_id == effect.effect_id\n\n\ndef _charge_actor_score_safe(squad: CompiledSquad, actor: int) -> bool:\n''',
+    )
+    replace_once(
+        "fast_engine/engine/score.py",
+        '''    for effect in squad.effects:\n        if effect.effect_type == "weapon_change" and actor in _possible_ally_targets(squad, effect):\n            return False\n\n''',
+        '''    weapon_changes = tuple(\n        effect\n        for effect in squad.effects\n        if effect.effect_type == "weapon_change"\n        and actor in _possible_ally_targets(squad, effect)\n    )\n    if weapon_changes and not (\n        len(weapon_changes) == 1\n        and _temporary_self_charge_weapon_change_score_supported(squad, weapon_changes[0])\n    ):\n        return False\n\n''',
+    )
+    replace_once(
+        "fast_engine/engine/score.py",
+        '''    actors.update(_dynamic_charge_bullet_lifetime_score_actors(squad))\n    return tuple(sorted(actors))\n''',
+        '''    actors.update(_dynamic_charge_bullet_lifetime_score_actors(squad))\n    actors.update(\n        effect.actor\n        for effect in squad.effects\n        if effect.effect_type == "weapon_change"\n        and _temporary_self_charge_weapon_change_score_supported(squad, effect)\n    )\n    return tuple(sorted(actors))\n''',
+    )
+    replace_once(
+        "fast_engine/engine/score.py",
+        '''        if effect.effect_type == "weapon_change":\n            if not TriggerDispatcher.is_executable_effect(effect):\n                blockers.append(f"weapon_change:{owner}:{effect.name or 'unnamed'}")\n            continue\n''',
+        '''        if effect.effect_type == "weapon_change":\n            if not _temporary_self_charge_weapon_change_score_supported(squad, effect):\n                blockers.append(f"weapon_change:{owner}:{effect.name or 'unnamed'}")\n            continue\n''',
+    )
+    replace_once(
+        "fast_engine/engine/score.py",
+        '''from .normal_attack import compile_normal_attack_spec, expected_normal_block_damage\n''',
+        '''from .normal_attack import NormalAttackSpec, compile_normal_attack_spec, expected_normal_block_damage\n''',
+    )
+    replace_once(
+        "fast_engine/engine/score.py",
+        '''    def _score_shots(self, actor: int, count: int, *, eval_time: float) -> None:\n        if count <= 0:\n            return\n        member = self.runtime.squad.members[actor]\n        terms = self.resolver.resolve(actor, now=eval_time)\n        core_prob = self.runtime.enemy.core_rate_for_weapon(\n            member.weapon,\n            accuracy_pct=terms.accuracy_pct,\n        )\n        self.char_total[actor] += expected_normal_block_damage(\n            self.specs[actor],\n''',
+        '''    def _score_shots(self, actor: int, count: int, *, eval_time: float) -> None:\n        if count <= 0:\n            return\n        member = self.runtime.squad.members[actor]\n        weapon = self.runtime.weapons.effective_weapon(actor, eval_time)\n        spec = self.specs[actor]\n        if weapon is not member.weapon:\n            pellets = max(1, int(weapon.get("pellets", 1)))\n            muzzles = max(1, int(weapon.get("muzzles", 1)))\n            total_coeff = float(weapon.get("damage_coeff", 0.0))\n            spec = NormalAttackSpec(\n                coeff_per_hit=total_coeff / pellets if pellets > 1 else total_coeff,\n                hits_per_shot=pellets * muzzles,\n                core_dmg_mult=float(weapon.get("core_dmg_mult", 200.0)),\n                full_charge_mult=float(weapon.get("full_charge_mult", 100.0)),\n                normal_hit_coeff=float(weapon.get("normal_hit_coeff", 1.0)),\n                is_full_charge=str(weapon.get("fire_mode") or "") == "charge",\n            )\n        terms = self.resolver.resolve(actor, now=eval_time)\n        core_prob = self.runtime.enemy.core_rate_for_weapon(\n            weapon,\n            accuracy_pct=terms.accuracy_pct,\n        )\n        self.char_total[actor] += expected_normal_block_damage(\n            spec,\n''',
+    )
+
+    replace_once(
+        "fast_engine/engine/weapon.py",
+        '''class _ChargeActorState:\n    actor: int\n    ammo: int\n    phase: str\n    phase_end: float\n    charge_start: float\n    full_charge_count: int = 0\n''',
+        '''class _ChargeActorState:\n    actor: int\n    ammo: int\n    phase: str\n    phase_end: float\n    charge_start: float\n    weapon_change_id: int | None = None\n    full_charge_count: int = 0\n''',
+    )
+    replace_once(
+        "fast_engine/engine/weapon.py",
+        '''    def _active_sum(self, actor: int, stat: str, now: float) -> float:\n        return self.effects.sum_stat(actor, stat, now=now)\n\n''',
+        '''    def _active_sum(self, actor: int, stat: str, now: float) -> float:\n        return self.effects.sum_stat(actor, stat, now=now)\n\n    def _active_weapon_change(self, actor: int, now: float):\n        return self.effects.active_effect_of_type(actor, "weapon_change", now=now)\n\n    def _weapon_change_id(self, actor: int, now: float) -> int | None:\n        row = self._active_weapon_change(actor, now)\n        return None if row is None else int(row[0].effect_id)\n\n    def effective_weapon(self, actor: int, now: float):\n        base = self.squad.members[actor].weapon\n        row = self._active_weapon_change(actor, now)\n        if row is None:\n            return base\n        effect, _active = row\n        params = effect.parameters\n        weapon = dict(base)\n        for key in (\n            "weapon_type", "damage_coeff", "max_ammo", "full_charge_mult",\n            "post_fire_delay", "cover_during_delay",\n        ):\n            if key in params:\n                weapon[key] = params[key]\n        if "reload_seconds" in params:\n            weapon["reload_time"] = float(params["reload_seconds"])\n        elif "reload_time" in params:\n            weapon["reload_time"] = float(params["reload_time"])\n        if "charge_seconds" in params:\n            weapon["charge_time"] = float(params["charge_seconds"])\n        elif "charge_time" in params:\n            weapon["charge_time"] = float(params["charge_time"])\n        return weapon\n\n''',
+    )
+    replace_once(
+        "fast_engine/engine/weapon.py",
+        '''        target_base = float(self.squad.members[actor].weapon.get("charge_time") or 0.0)\n''',
+        '''        target_base = float(self.effective_weapon(actor, now).get("charge_time") or 0.0)\n''',
+    )
+    replace_once(
+        "fast_engine/engine/weapon.py",
+        '''                self.squad.members[active.source_actor].weapon.get("charge_time") or 0.0\n''',
+        '''                self.effective_weapon(active.source_actor, now).get("charge_time") or 0.0\n''',
+    )
+    replace_once(
+        "fast_engine/engine/weapon.py",
+        '''    def _signature(self, actor: int, now: float) -> tuple[float, ...]:\n        return (\n            self._active_sum(actor, "max_ammo_pct", now),\n''',
+        '''    def _signature(self, actor: int, now: float) -> tuple[float, ...]:\n        wc_id = self._weapon_change_id(actor, now)\n        return (\n            float(-1 if wc_id is None else wc_id),\n            self._active_sum(actor, "max_ammo_pct", now),\n''',
+    )
+    replace_once(
+        "fast_engine/engine/weapon.py",
+        '''    def _full_ammo(self, actor: int, now: float) -> int:\n        member = self.squad.members[actor]\n        base = int(member.weapon["max_ammo"])\n        pct = self._active_sum(actor, "max_ammo_pct", now)\n''',
+        '''    def _full_ammo(self, actor: int, now: float) -> int:\n        weapon = self.effective_weapon(actor, now)\n        base = int(weapon["max_ammo"])\n        if base < 0:\n            return 999999\n        pct = self._active_sum(actor, "max_ammo_pct", now)\n''',
+    )
+    replace_once(
+        "fast_engine/engine/weapon.py",
+        '''    def _reload_duration_from_empty(self, actor: int, now: float) -> float:\n        member = self.squad.members[actor]\n        weapon = member.weapon\n''',
+        '''    def _reload_duration_from_empty(self, actor: int, now: float) -> float:\n        weapon = self.effective_weapon(actor, now)\n''',
+    )
+    replace_once(
+        "fast_engine/engine/weapon.py",
+        '''    def _effective_charge_time(self, actor: int, now: float) -> float:\n        member = self.squad.members[actor]\n        base = float(member.weapon.get("charge_time") or 0.0)\n''',
+        '''    def _effective_charge_time(self, actor: int, now: float) -> float:\n        weapon = self.effective_weapon(actor, now)\n        base = float(weapon.get("charge_time") or 0.0)\n''',
+    )
+    replace_once(
+        "fast_engine/engine/weapon.py",
+        '''        st.phase_end = shot_time + float(\n            self.squad.members[st.actor].weapon.get("post_fire_delay", 0.0)\n        )\n''',
+        '''        st.phase_end = shot_time + float(\n            self.effective_weapon(st.actor, shot_time).get("post_fire_delay", 0.0)\n        )\n''',
+    )
+    replace_once(
+        "fast_engine/engine/weapon.py",
+        '''        actor = st.actor\n        weapon = self.squad.members[actor].weapon\n        if st.phase == "post_fire":\n''',
+        '''        actor = st.actor\n        weapon = self.effective_weapon(actor, now_for_mods)\n        if st.phase == "post_fire":\n''',
+    )
+    replace_once(
+        "fast_engine/engine/weapon.py",
+        '''                charge_start=float(now),\n                signature=self._signature(actor, now),\n''',
+        '''                charge_start=float(now),\n                weapon_change_id=self._weapon_change_id(actor, now),\n                signature=self._signature(actor, now),\n''',
+    )
+    replace_once(
+        "fast_engine/engine/weapon.py",
+        '''            signature = self._signature(actor, now)\n            changed = signature != st.signature\n            if changed:\n                st.signature = signature\n                self._invalidate(st)\n                if st.phase == "charging":\n                    # Moris recomputes the full-charge threshold from the\n                    # original charge start when charge speed changes mid-charge.\n                    st.phase_end = st.charge_start + self._effective_charge_time(actor, now)\n            if st.scheduled_time is None:\n''',
+        '''            current_wc_id = self._weapon_change_id(actor, now)\n            wc_changed = current_wc_id != st.weapon_change_id\n            if wc_changed:\n                entering = current_wc_id is not None\n                st.weapon_change_id = current_wc_id\n                self._invalidate(st)\n                st.ammo = self._full_ammo(actor, now)\n                if entering and st.phase == "charging":\n                    st.charge_start = float(now)\n                    st.phase_end = float(now) + self._effective_charge_time(actor, now)\n                elif st.phase in {"post_fire_reload", "reloading", "post_reload"}:\n                    self._enter_charge(st, float(now), float(now))\n                elif not entering and st.phase == "charging":\n                    st.phase_end = st.charge_start + self._effective_charge_time(actor, now)\n\n            signature = self._signature(actor, now)\n            changed = signature != st.signature\n            if changed:\n                st.signature = signature\n                if not wc_changed:\n                    self._invalidate(st)\n                    if st.phase == "charging":\n                        st.phase_end = st.charge_start + self._effective_charge_time(actor, now)\n            if st.scheduled_time is None:\n''',
+    )
+
+    Path("fast_engine/tests/test_dynamic_weapon_change.py").write_text(
+        r'''from __future__ import annotations
+
+import unittest
+
+from context import snapshot, spec
+from fast_engine.engine.burst import compile_burst_policy
+from fast_engine.engine.compiler import compile_moris_squad
+from fast_engine.engine.model import EnemyStaticProfile
+from fast_engine.engine.score import score_static_squad, static_score_blockers
+
+
+class DynamicWeaponChangeTest(unittest.TestCase):
+    def _team(self, name: str):
+        case = snapshot.SQUADS[name]
+        squad = spec.build_squad(list(case["members"]))
+        return squad, compile_moris_squad(squad)
+
+    def test_red_hood_mint_frika_team_is_score_certified(self):
+        squad, compiled = self._team("레이드_레드후드퀀시")
+        self.assertEqual(static_score_blockers(compiled), ())
+        cfg = spec.build_config(squad, {
+            "duration": 30.0,
+            "first_burst_time": 3.0,
+            "rng_mode": "expected",
+        })
+        policy = compile_burst_policy(squad, compiled, cfg)
+        score = score_static_squad(
+            compiled,
+            policy,
+            EnemyStaticProfile(defense=31784.0, duration=30.0),
+        )
+        self.assertGreater(score.squad_total, 0.0)
+        self.assertEqual(score.unsupported, ())
+
+    def test_red_hood_transform_shape_is_narrow(self):
+        _squad, compiled = self._team("레이드_레드후드퀀시")
+        effects = [
+            effect for effect in compiled.effects
+            if effect.effect_type == "weapon_change"
+            and compiled.members[effect.actor].name == "레드 후드"
+        ]
+        self.assertEqual(len(effects), 1)
+        effect = effects[0]
+        self.assertEqual(effect.parameters.get("weapon_type"), "SR")
+        self.assertEqual(effect.parameters.get("max_ammo"), -1)
+        self.assertTrue(effect.parameters.get("reset_ammo"))
+
+    def test_class_changing_weapon_change_stays_blocked(self):
+        found = False
+        for name, case in snapshot.SQUADS.items():
+            if str(name).startswith("지그_") or "스노우 화이트" not in case["members"]:
+                continue
+            squad = spec.build_squad(list(case["members"]))
+            compiled = compile_moris_squad(squad)
+            if any(
+                blocker.startswith("weapon_change:스노우 화이트:")
+                for blocker in static_score_blockers(compiled)
+            ):
+                found = True
+                break
+        self.assertTrue(found)
+
+
+if __name__ == "__main__":
+    unittest.main()
+''',
+        encoding="utf-8",
+    )
+
+
+def audit() -> None:
+    from calculator.timeline import DEFAULT_ENEMY, simulate
+    from context import snapshot, spec
+    from fast_engine.engine.burst import compile_burst_policy
+    from fast_engine.engine.compiler import compile_moris_squad
+    from fast_engine.engine.model import EnemyStaticProfile
+    from fast_engine.engine.score import score_static_squad, static_score_blockers
+
+    cfg_common = {"duration": 180.0, "first_burst_time": 3.0, "rng_mode": "expected"}
+    rows = []
+    for name, case in snapshot.SQUADS.items():
+        if str(name).startswith("지그_"):
+            continue
+        members = tuple(str(x) for x in case["members"])
+        if len(members) != 5 or any(x.startswith("test_") for x in members):
+            continue
+        squad = spec.build_squad(list(members))
+        compiled = compile_moris_squad(squad)
+        blockers = tuple(dict.fromkeys(static_score_blockers(compiled)))
+        fast = None
+        moris = None
+        unsupported = ()
+        if not blockers:
+            policy = compile_burst_policy(
+                squad, compiled, spec.build_config(squad, dict(cfg_common))
+            )
+            result = score_static_squad(
+                compiled,
+                policy,
+                EnemyStaticProfile(defense=31784.0, duration=180.0),
+            )
+            unsupported = tuple(result.unsupported)
+            if not unsupported:
+                fast = float(result.squad_total)
+                moris = float(
+                    simulate(
+                        squad,
+                        config=spec.build_config(squad, dict(cfg_common)),
+                        enemy=dict(DEFAULT_ENEMY),
+                        seed=42,
+                        verbose=False,
+                    ).squad_total
+                )
+        rows.append((str(name), members, blockers, unsupported, fast, moris))
+
+    print("STANDARD_TEAM_COUNT", len(rows))
+    clean = [r for r in rows if r[4] is not None]
+    print("CERTIFIED_COUNT", len(clean))
+    for name, _members, blockers, unsupported, fast, moris in rows:
+        if fast is not None:
+            print("CERTIFIED", name, "MORIS", moris, "FAST", fast, "REL", fast / moris - 1.0)
+        elif name == "레이드_레드후드퀀시":
+            print("RED_HOOD_BLOCKERS", blockers, "UNSUPPORTED", unsupported)
+    if len(rows) != 24:
+        raise SystemExit(f"standard corpus drift: expected 24, got {len(rows)}")
+    if len(clean) >= 2:
+        pairs = 0
+        correct = 0
+        for a, b in combinations(clean, 2):
+            ma, mb = a[5], b[5]
+            fa, fb = a[4], b[4]
+            if ma == mb or fa == fb:
+                continue
+            pairs += 1
+            correct += int((ma > mb) == (fa > fb))
+        moris_rank = [r[0] for r in sorted(clean, key=lambda r: r[5], reverse=True)]
+        fast_rank = [r[0] for r in sorted(clean, key=lambda r: r[4], reverse=True)]
+        print("RANKING_STARTED", True)
+        print("PAIRWISE", correct, pairs, correct / pairs if pairs else None)
+        print("MORIS_RANK", moris_rank)
+        print("FAST_RANK", fast_rank)
+    else:
+        print("RANKING_STARTED", False)
+
+
+if __name__ == "__main__":
+    mode = sys.argv[1] if len(sys.argv) > 1 else "patch"
+    if mode == "patch":
+        patch()
+    elif mode == "audit":
+        audit()
+    else:
+        raise SystemExit(f"unknown mode: {mode}")
