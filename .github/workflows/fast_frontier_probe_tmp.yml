@@ -10,16 +10,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Inspect compiled Red Hood weapon change
+      - name: Apply temporary prototype
         run: |
-          python - <<'PY'
-          from context import snapshot, spec
-          from fast_engine.engine.compiler import compile_moris_squad
-          case=snapshot.SQUADS['레이드_레드후드퀀시']
-          squad=spec.build_squad(list(case['members']))
-          compiled=compile_moris_squad(squad)
-          for e in compiled.effects:
-              if e.effect_type=='weapon_change' and compiled.members[e.actor].name=='레드 후드':
-                  print('COMPILED',repr(e))
-                  print('PARAMS',repr(e.parameters))
-          PY
+          python fast_engine/research/_tmp_weapon_change_probe.py patch
+          python fast_engine/research/_tmp_weapon_change_fix_v2.py
+      - name: Focused weapon-change tests
+        run: python -m unittest fast_engine.tests.test_dynamic_weapon_change -v
+      - name: Full Fast regression
+        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
+      - name: Standard 24-team audit
+        run: python fast_engine/research/_tmp_weapon_change_probe.py audit
+      - name: Show temporary diff
+        if: always()
+        run: |
+          git status --short
+          git diff --stat
