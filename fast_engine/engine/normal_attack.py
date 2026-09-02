@@ -17,6 +17,7 @@ class NormalAttackSpec:
     full_charge_mult: float
     normal_hit_coeff: float
     is_full_charge: bool
+    is_projectile_explosion: bool
 
 
 def compile_normal_attack_spec(character: CompiledCharacter) -> NormalAttackSpec:
@@ -26,6 +27,9 @@ def compile_normal_attack_spec(character: CompiledCharacter) -> NormalAttackSpec
     multiply hit count but do not divide the coefficient again. Permanent
     battle-start pellet modifiers are folded here; live pellet changes are a
     future state dependency and must not silently use this static descriptor.
+
+    Moris marks ordinary RL shots as projectile-explosion damage for factor-5
+    buff routing, so Fast carries that weapon-type fact explicitly as well.
     """
 
     weapon = character.weapon
@@ -41,6 +45,7 @@ def compile_normal_attack_spec(character: CompiledCharacter) -> NormalAttackSpec
     hits_per_shot = pellets * muzzles
     total_coeff = float(weapon.get("damage_coeff", 0.0))
     coeff_per_hit = total_coeff / pellets if pellets > 1 else total_coeff
+    weapon_type = str(weapon.get("weapon_type") or character.weapon_type or "")
 
     return NormalAttackSpec(
         coeff_per_hit=coeff_per_hit,
@@ -49,6 +54,7 @@ def compile_normal_attack_spec(character: CompiledCharacter) -> NormalAttackSpec
         full_charge_mult=float(weapon.get("full_charge_mult", 100.0)),
         normal_hit_coeff=float(weapon.get("normal_hit_coeff", 1.0)),
         is_full_charge=str(weapon.get("fire_mode") or "") == "charge",
+        is_projectile_explosion=weapon_type == "RL",
     )
 
 
@@ -85,6 +91,7 @@ def expected_normal_shot_damage(
             is_full_charge=spec.is_full_charge,
             is_pierce_damage=terms.pierce_enabled,
             is_armor_break_damage=terms.armor_break_enabled,
+            is_projectile_explosion=spec.is_projectile_explosion,
         ),
     )
     return per_hit * spec.hits_per_shot * spec.normal_hit_coeff
