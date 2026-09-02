@@ -1,0 +1,65 @@
+name: tmp-quency-normal-diagnosis
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Quency normal damage diagnosis
+        run: |
+          python - <<'PY'
+          from collections import defaultdict
+          from calculator.timeline import DEFAULT_ENEMY, simulate
+          from calculator.sim_result import _is_normal
+          from context import spec
+          from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.model import EnemyStaticProfile
+          from fast_engine.engine.score import score_static_squad, static_score_blockers
+
+          members = ['라피 : 레드 후드','레드 후드','프리카','민트','퀀시 : 이스케이프 퀸']
+          target = '퀀시 : 이스케이프 퀸'
+          enemy = dict(DEFAULT_ENEMY)
+
+          for duration in (2.5, 10.0, 30.0, 180.0):
+              cfg = {'duration':duration,'first_burst_time':3.0,'rng_mode':'expected'}
+              squad = spec.build_squad(members)
+              moris_cfg = spec.build_config(squad, dict(cfg))
+              moris = simulate(squad, config=moris_cfg, enemy=dict(enemy), seed=42, verbose=True)
+              compiled = compile_moris_squad(squad)
+              blockers = static_score_blockers(compiled)
+              assert not blockers, blockers
+              policy = compile_burst_policy(squad, compiled, dict(cfg))
+              fast = score_static_squad(compiled, policy, EnemyStaticProfile(
+                  defense=float(enemy.get('def',31784.0)), element=enemy.get('code'),
+                  core_uptime=0.0, core_px=0.0, duration=duration,
+              ))
+              assert not fast.unsupported, fast.unsupported
+
+              idx = members.index(target)
+              mhits = [e for e in moris.hits if e.caster == target]
+              normals = [e for e in mhits if _is_normal(e)]
+              skills = [e for e in mhits if not _is_normal(e)]
+              normal_dmg = sum(e.damage for e in normals)
+              skill_dmg = sum(e.damage for e in skills)
+              print('DURATION', duration)
+              print('TOTAL', moris.char_total[target], fast.char_total[idx], fast.char_total[idx]/moris.char_total[target]-1.0)
+              print('MORIS_NORMAL', normal_dmg, 'HITS', len(normals), 'AVG', normal_dmg/len(normals) if normals else 0)
+              print('MORIS_SKILL', skill_dmg, 'HITS', len(skills))
+              print('FIRST_NORMALS')
+              for e in normals[:20]:
+                  print(e.t, e.damage, e.hit_tag, e.skill_name)
+              by_skill = defaultdict(lambda:[0,0])
+              for e in skills:
+                  by_skill[e.skill_name][0] += e.damage
+                  by_skill[e.skill_name][1] += 1
+              print('SKILLS', dict(by_skill))
+              print('---')
+          PY
