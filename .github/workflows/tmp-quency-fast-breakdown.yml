@@ -1,0 +1,36 @@
+name: tmp-quency-fast-breakdown
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Inspect Fast Quency damage components
+        run: |
+          python - <<'PY'
+          from context import spec
+          from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.model import EnemyStaticProfile
+          from fast_engine.engine.score import score_static_squad, static_score_blockers
+
+          members = ['라피 : 레드 후드','레드 후드','프리카','민트','퀀시 : 이스케이프 퀸']
+          squad = spec.build_squad(members)
+          cfg = {'duration':30.0,'first_burst_time':3.0,'rng_mode':'expected'}
+          compiled = compile_moris_squad(squad)
+          assert not static_score_blockers(compiled)
+          policy = compile_burst_policy(squad, compiled, dict(cfg))
+          fast = score_static_squad(compiled, policy, EnemyStaticProfile(defense=31784.0,duration=30.0,core_px=0.0))
+          print('FAST_TOTALS', dict(zip(members, fast.char_total)))
+          q = compiled.members[members.index('퀀시 : 이스케이프 퀸')]
+          print('QUENCY_WEAPON', dict(q.weapon))
+          for e in q.effects:
+              print('EFFECT', e.name, e.effect_type, e.stat, e.value, e.duration, e.max_stack, e.parameters, [(r.event_key, r.count, r.source_name) for r in e.triggers])
+          PY
