@@ -91,7 +91,7 @@ class NamedBuffEventRuntimeTests(unittest.TestCase):
         red = NAMES.index("레드 후드")
         blockers = static_score_blockers(squad)
         self.assertFalse(any("레드 후드:와일드 투스 4:atk_pct" in item for item in blockers))
-        self.assertTrue(any("레드 후드:글레링 아이즈:charge_speed_pct" in item for item in blockers))
+        self.assertFalse(any("레드 후드:글레링 아이즈:charge_speed_pct" in item for item in blockers))
 
         marker = next(e for e in squad.members[red].effects if e.name == "레드 울프")
         consumer = next(e for e in squad.members[red].effects if e.name == "와일드 투스 4")
