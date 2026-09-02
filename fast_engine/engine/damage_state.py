@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .conditions import ConditionMode
 from .damage import DamageTerms
 from .damage_policy import is_static_element_override_score_supported
 from .effects import ActiveEffectStore
@@ -61,13 +62,36 @@ class DamageTermResolver:
         )
 
     def _token(self, actor: int) -> tuple[int, ...]:
-        return self.state.dependency_token(
+        effect_token = self.state.dependency_token(
             entities=(actor, ENEMY),
             domains=(StateDomain.EFFECT,),
         )
+        # A shield-conditioned buff may be sourced by another ally, so
+        # HEALTH invalidation is squad-global for this sparse state change.
+        return effect_token + (self.state.domain_version(StateDomain.HEALTH),)
+
+    def _runtime_condition_ok(self, effect) -> bool:
+        for rule in effect.condition_rules:
+            if (
+                rule.mode is ConditionMode.DURING_SHIELD
+                and self.state.actors[effect.actor].shield <= 0.0
+            ):
+                return False
+        return True
 
     def _sum(self, actor: int, stat: str, now: float) -> float:
-        return self.effects.sum_stat(actor, stat, now=now)
+        total = 0.0
+        for effect, active in self.effects.iter_stat(stat, now=now):
+            if active.target != actor or not self._runtime_condition_ok(effect):
+                continue
+            total += float(effect.value or 0.0) * active.stacks
+        return total
+
+    def _has(self, actor: int, stat: str, now: float) -> bool:
+        return any(
+            active.target == actor and self._runtime_condition_ok(effect)
+            for effect, active in self.effects.iter_stat(stat, now=now)
+        )
 
     def _sum_aliases(self, actor: int, stats: tuple[str, ...], now: float) -> float:
         return sum(self._sum(actor, stat, now) for stat in stats)
@@ -75,7 +99,7 @@ class DamageTermResolver:
     def _caster_based_atk_flat(self, actor: int, now: float) -> float:
         total = 0.0
         for effect, active in self.effects.iter_stat("atk_caster_based_pct", now=now):
-            if active.target != actor:
+            if active.target != actor or not self._runtime_condition_ok(effect):
                 continue
             caster_base = self.squad.members[active.source_actor].base_atk
             total += caster_base * float(effect.value or 0.0) * active.stacks / 100.0
@@ -135,12 +159,8 @@ class DamageTermResolver:
             burst_dmg_aoe_pct=self._sum(actor, "burst_dmg_aoe_pct", now),
             pierce_dmg_pct=self._sum(actor, "pierce_dmg_pct", now),
             armor_break_dmg_pct=self._sum(actor, "armor_break_dmg_pct", now),
-            pierce_enabled=self.effects.has_stat(
-                actor, "pierce_enabled", now=now
-            ),
-            armor_break_enabled=self.effects.has_stat(
-                actor, "armor_break_enabled", now=now
-            ),
+            pierce_enabled=self._has(actor, "pierce_enabled", now),
+            armor_break_enabled=self._has(actor, "armor_break_enabled", now),
             dot_dmg_pct=self._sum(actor, "dot_dmg_pct", now),
             projectile_explosion_dmg_pct=self._sum_aliases(
                 actor,

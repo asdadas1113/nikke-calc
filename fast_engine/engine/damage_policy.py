@@ -50,6 +50,7 @@ DIRECT_DAMAGE_STATE_STATS = frozenset({
 _SAFE_CONDITIONS = frozenset({
     ConditionMode.DURING_FULL_BURST,
     ConditionMode.NOT_DURING_FULL_BURST,
+    ConditionMode.DURING_SHIELD,
     ConditionMode.BURST_CASTED,
     ConditionMode.BURST_NOT_CASTED,
     ConditionMode.SELF_STATE,
@@ -101,6 +102,7 @@ _SAFE_EVENT_KEYS = frozenset({
     "full_burst_start",
     "full_burst_end",
     "event:ally_burst_cast",
+    "event:shield_applied",
     "last_bullet",
 })
 

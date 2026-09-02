@@ -64,6 +64,15 @@ class TriggerDispatcher:
         "charge_time_flat",
     })
 
+    _SHIELD_STATS = frozenset({"shield_from_max_hp_pct"})
+    _SHIELD_SAFE_EVENT_KEYS = frozenset({
+        "battle_start",
+        "burst_cast",
+        "full_burst_start",
+        "full_burst_end",
+        "event:ally_burst_cast",
+    })
+
     _GAUGE_STATS = frozenset({"gauge_charge", "gauge_consume"})
     _GAUGE_ADVANCED_STATS = frozenset({
         "gauge_max_add",
@@ -273,6 +282,36 @@ class TriggerDispatcher:
             and int(rule.threshold or 0) > 0
         )
 
+    @classmethod
+    def _timed_shield_shape_supported(cls, effect: "CompiledEffect") -> bool:
+        """Certify the presence-only timed shield slice owned by Fast."""
+
+        if not (
+            effect.effect_type == "buff"
+            and (effect.stat or "") in cls._SHIELD_STATS
+            and effect.value is not None
+            and float(effect.value) > 0.0
+            and effect.duration is not None
+            and float(effect.duration) > 0.0
+            and effect.max_stack in (None, 1, 1.0)
+            and not effect.parameters
+            and target_scope_is_static(effect.target_spec)
+            and effect.target_spec.runtime_supported
+            and not effect.condition_rules
+            and bool(effect.triggers)
+        ):
+            return False
+        for rule in effect.triggers:
+            if rule.mode is not TriggerMode.EVENT:
+                return False
+            key = rule.event_key or ""
+            if key in cls._SHIELD_SAFE_EVENT_KEYS:
+                continue
+            if key.startswith("burst_enter:") or key.startswith("squad_burst_cast:"):
+                continue
+            return False
+        return True
+
     @staticmethod
     def is_executable_effect(effect: "CompiledEffect") -> bool:
         stat = effect.stat or ""
@@ -319,6 +358,8 @@ class TriggerDispatcher:
             and self._gauge_shape_supported(effect)
         ):
             return True
+        if self._timed_shield_shape_supported(effect):
+            return True
         if self.is_executable_effect(effect):
             return self._bullet_lifetime_runtime_safe(effect)
         if self.damage_sink is None:
@@ -327,6 +368,13 @@ class TriggerDispatcher:
             self.damage_sink.supports(effect)
             or self.damage_sink.supports_state_operation(effect)
         )
+
+    def _sync_shield_target(self, target: int, *, now: float) -> None:
+        present = any(
+            active.target == target and float(effect.value or 0.0) > 0.0
+            for effect, active in self.effects.iter_stat("shield_from_max_hp_pct", now=now)
+        )
+        self.state.set_shield(target, 1.0 if present else 0.0)
 
     def _is_state_dependency(self, effect: "CompiledEffect") -> bool:
         return (
@@ -505,7 +553,17 @@ class TriggerDispatcher:
             else:
                 return False
         elif effect.effect_type == "buff":
+            if stat in self._SHIELD_STATS and any(target == ENEMY for target in targets):
+                return False
             self.effects.activate_group(effect, targets, now, self.scheduler)
+            if stat in self._SHIELD_STATS:
+                from .burst import BurstSignal
+                actor_targets = tuple(int(target) for target in targets)
+                for target in actor_targets:
+                    self._sync_shield_target(target, now=now)
+                # Moris establishes shield state before notifying each recipient.
+                for target in actor_targets:
+                    self.dispatch(BurstSignal(now, "event:shield_applied", target, target))
             if stat.startswith("burst_stage_override:"):
                 suffix = stat.split(":", 1)[1]
                 if suffix.startswith("reenter"):
@@ -691,6 +749,8 @@ class TriggerDispatcher:
             )
 
         stat = expired.stat or ""
+        if stat in self._SHIELD_STATS and event.actor != ENEMY:
+            self._sync_shield_target(int(event.actor), now=event.time)
         if stat.startswith("burst_stage_override:"):
             stage = None
             reenter = None

@@ -3,6 +3,7 @@ from __future__ import annotations
 from math import inf, nextafter
 from typing import TYPE_CHECKING
 
+from .conditions import ConditionMode
 from .core_events import is_static_expected_core_count_rule
 from .damage_policy import (
     DIRECT_DAMAGE_STATE_STATS,
@@ -595,8 +596,42 @@ def _direct_skill_state_needs_score_support(effect) -> bool:
     return True
 
 
+_SHIELD_SOURCE_STATS = frozenset({"shield_from_max_hp_pct", "shared_shield_from_max_hp_pct"})
+
+
+def _uses_shield_runtime_semantics(effect) -> bool:
+    return (
+        any(rule.mode is ConditionMode.DURING_SHIELD for rule in effect.condition_rules)
+        or any((rule.event_key or "") == "event:shield_applied" for rule in effect.triggers)
+    )
+
+
+def _shield_runtime_dependency_score_safe(squad: CompiledSquad, effect) -> bool:
+    owner = effect.actor
+    sources = tuple(
+        source
+        for source in squad.effects
+        if (source.stat or "") in _SHIELD_SOURCE_STATS
+        and owner in _possible_ally_targets(squad, source)
+    )
+    if not sources:
+        return False
+    if not all(TriggerDispatcher._timed_shield_shape_supported(source) for source in sources):
+        return False
+    source_names = {source.name for source in sources if source.name}
+    if any(
+        other.parameters.get("target_effect") in source_names
+        for other in squad.effects
+        if other is not effect
+    ):
+        return False
+    return True
+
+
 def _direct_damage_buff_score_supported(squad: CompiledSquad, effect) -> bool:
     if not is_direct_damage_buff_runtime_supported(effect):
+        return False
+    if _uses_shield_runtime_semantics(effect) and not _shield_runtime_dependency_score_safe(squad, effect):
         return False
     if effect.parameters.get("duration_bullets") is None:
         return True
