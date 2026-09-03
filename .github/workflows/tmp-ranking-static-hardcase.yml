@@ -13,50 +13,57 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Trace support-state burst gating
+      - name: Compare Moris and Fast burst timelines
         shell: bash
         run: |
           python - <<'PY'
           from calculator.timeline import DEFAULT_ENEMY, simulate
           from calculator.buff_manager import BuffManager
           from context import spec
+          from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.model import EnemyStaticProfile
 
           names=["라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸"]
+          D=180.0
+          cfg_raw={'duration':D,'first_burst_time':3.0,'rng_mode':'expected'}
           squad=spec.build_squad(names)
-          cp=compile_moris_squad(squad)
-          actor=cp.names.index('라피 : 레드 후드')
-          print('RAPI_RELEVANT_EFFECTS')
-          for e in cp.members[actor].effects:
-              conds=[(r.mode.value,r.key,r.value) for r in e.condition_rules]
-              if e.name=='전투 보조' or e.name=='계승되는 힘 3' or any(r.key=='전투 보조' for r in e.condition_rules):
-                  print({'id':e.effect_id,'name':e.name,'type':e.effect_type,'stat':e.stat,'value':e.value,
-                         'duration':e.duration,'triggers':[(r.event_key,r.mode.value,r.threshold) for r in e.triggers],
-                         'conditions':conds,'target':e.target,'params':e.parameters})
-
-          cfg=spec.build_config(squad,{'duration':130.0,'first_burst_time':3.0,'rng_mode':'expected'})
+          cfg=spec.build_config(squad,dict(cfg_raw))
           enemy=dict(DEFAULT_ENEMY); enemy['def']=55000.0; enemy['code']='작열'; enemy['core_px']=10.0
-          oa=BuffManager._activate; on=BuffManager.notify
-          def active_state(self,t):
-              return [(ab.effect.get('name'),ab.caster,ab.target_chars,ab.activated_at,ab.expires_at)
-                      for ab in self._active if ab.effect.get('name')=='전투 보조'
-                      and (ab.expires_at==float('inf') or ab.expires_at>t)]
-          def wa(self,eff,caster,t,suppress_event=False):
-              if 124.0<=float(t)<=130.0 and eff.get('name') in {'전투 보조','계승되는 힘 3'}:
-                  print('M_ACTIVATE_BEFORE',round(float(t),9),eff.get('name'),'caster',caster,'state',active_state(self,t),
-                        'cond',eff.get('trigger',{}).get('condition'))
-              out=oa(self,eff,caster,t,suppress_event=suppress_event)
-              if 124.0<=float(t)<=130.0 and eff.get('name') in {'전투 보조','계승되는 힘 3'}:
-                  print('M_ACTIVATE_AFTER',round(float(t),9),eff.get('name'),'state',active_state(self,t))
-              return out
-          def wn(self,event,t,caster,**ctx):
-              if 124.0<=float(t)<=130.0 and caster=='라피 : 레드 후드' and event in {'burst_cast','full_burst_start','full_burst_end'}:
-                  print('M_NOTIFY_BEFORE',round(float(t),9),event,'state',active_state(self,t))
-              out=on(self,event,t,caster,**ctx)
-              if 124.0<=float(t)<=130.0 and caster=='라피 : 레드 후드' and event in {'burst_cast','full_burst_start','full_burst_end'}:
-                  print('M_NOTIFY_AFTER',round(float(t),9),event,'state',active_state(self,t))
-              return out
-          BuffManager._activate=wa; BuffManager.notify=wn
+
+          moris=[]
+          orig=BuffManager.notify
+          def wrapped(self,event,t,caster,**ctx):
+              if event in {'burst_cast','full_burst_start','full_burst_end'}:
+                  moris.append((round(float(t),9),event,caster))
+              return orig(self,event,t,caster,**ctx)
+          BuffManager.notify=wrapped
           simulate(squad,config=cfg,enemy=enemy,seed=42,verbose=False)
-          BuffManager._activate=oa; BuffManager.notify=on
+          BuffManager.notify=orig
+
+          cp=compile_moris_squad(squad)
+          policy=compile_burst_policy(squad,cp,dict(cfg_raw))
+          profile=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=D)
+          rr=BurstRuntime(cp,policy,profile).run(duration=D)
+
+          mcasts=[x for x in moris if x[1]=='burst_cast']
+          mstarts=sorted(set(t for t,e,c in moris if e=='full_burst_start'))
+          mends=sorted(set(t for t,e,c in moris if e=='full_burst_end'))
+          print('MORIS_CASTS')
+          for x in mcasts: print(x)
+          print('FAST_CASTS')
+          for t,a,stage in rr.casts: print((round(t,9),stage,cp.names[a]))
+          print('MORIS_FB_STARTS',mstarts)
+          print('FAST_FB_STARTS',[round(x,9) for x in rr.full_burst_starts])
+          print('MORIS_FB_ENDS',mends)
+          print('FAST_FB_ENDS',[round(x,9) for x in rr.full_burst_ends])
+
+          print('CYCLE_DRIFT')
+          for i,(ms,fs) in enumerate(zip(mstarts,rr.full_burst_starts),1):
+              me=mends[i-1] if i-1<len(mends) else None
+              fe=rr.full_burst_ends[i-1] if i-1<len(rr.full_burst_ends) else None
+              print(i,'start',ms,round(fs,9),round(fs-ms,9),'end',me,round(fe,9) if fe is not None else None,
+                    round(fe-me,9) if me is not None and fe is not None else None)
+          print('COMPILED_REGEN',[(m.name,m.burst_regen_time) for m in cp.members])
           PY
