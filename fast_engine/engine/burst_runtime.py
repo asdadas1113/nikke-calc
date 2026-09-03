@@ -3,11 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .burst import BurstMachine, BurstPolicy
-from .conditions import SignalContext
+from .conditions import ConditionMode, SignalContext
 from .core_events import (
     is_static_expected_core_count_rule,
     simulate_static_expected_core_boundaries,
 )
+from .damage_policy import is_direct_damage_buff_runtime_supported
 from .damage_state import DamageTermResolver
 from .dispatcher import TriggerDispatcher
 from .frame_lattice import moris_observed_tick
@@ -78,6 +79,18 @@ class BurstRuntime:
     ) -> None:
         self.squad = squad
         self.enemy = enemy or EnemyStaticProfile(duration=policy.duration)
+        # `core_hit` as a condition on raw full_charge_hit is a target-core
+        # presence predicate in Moris. The historical aggregate Fast enemy
+        # profile (core_uptime/rate without core_px) cannot reconstruct that
+        # per-shot boolean, so do not silently guess.
+        if self.enemy.core_px is None and any(
+            is_direct_damage_buff_runtime_supported(effect)
+            and any(rule.mode is ConditionMode.CORE_HIT for rule in effect.condition_rules)
+            for effect in squad.effects
+        ):
+            raise NotImplementedError(
+                "Fast full_charge_hit core-presence condition requires explicit enemy.core_px"
+            )
         self.policy = policy
         self.scheduler = EventScheduler()
         self.state = StateStore.from_compiled_squad(squad)
@@ -461,6 +474,18 @@ class BurstRuntime:
                 if boundary is not None:
                     from .burst import BurstSignal
                     for count_signal in boundary.signals:
+                        # Moris evaluates the `core_hit` condition attached to a
+                        # raw full_charge_hit from target core presence, while
+                        # ordinary normal-hit core damage still uses the expected
+                        # weapon spread probability. Only this post-shot signal
+                        # carries the presence bit.
+                        context = SignalContext(
+                            core_hit=(
+                                count_signal.event_key == "full_charge_hit"
+                                and self.enemy.core_px is not None
+                                and float(self.enemy.core_px) >= 1.0
+                            )
+                        )
                         self.dispatcher.dispatch(
                             BurstSignal(
                                 event.time,
@@ -469,7 +494,7 @@ class BurstRuntime:
                                 boundary.actor,
                                 count_increment=count_signal.count_increment,
                             ),
-                            context=SignalContext(),
+                            context=context,
                         )
                     if self.weapons.emits_squad_body_hit(boundary.actor):
                         self.dispatcher.dispatch_team_hit(

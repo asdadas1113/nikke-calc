@@ -227,8 +227,25 @@ def is_direct_damage_buff_runtime_supported(effect) -> bool:
         return False
     if not _target_supported(effect.target_spec):
         return False
-    if any(rule.mode not in _SAFE_CONDITIONS for rule in effect.condition_rules):
-        return False
+    unsupported_conditions = tuple(
+        rule for rule in effect.condition_rules if rule.mode not in _SAFE_CONDITIONS
+    )
+    if unsupported_conditions:
+        # First fail-closed core-presence slice: Moris' `core_hit` condition on
+        # a raw post-shot full_charge_hit checks whether the target has an active
+        # core (enemy.core_px >= 1), not whether this projectile sampled a core
+        # hit. Keep every other CORE_HIT shape closed.
+        if not (
+            len(unsupported_conditions) == 1
+            and unsupported_conditions[0].mode is ConditionMode.CORE_HIT
+            and len(effect.condition_rules) == 1
+            and effect.target_spec.mode is TargetMode.SELF
+            and not effect.parameters
+            and len(effect.triggers) == 1
+            and effect.triggers[0].mode is TriggerMode.EVENT
+            and effect.triggers[0].event_key == "full_charge_hit"
+        ):
+            return False
     if not effect.triggers or not all(_timing_supported(rule) for rule in effect.triggers):
         return False
     return True

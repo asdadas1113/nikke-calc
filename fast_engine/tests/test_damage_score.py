@@ -239,7 +239,7 @@ class LiberelioPendingB3ParityTests(unittest.TestCase):
             ],
         }
         policy = compile_burst_policy(squad, compiled, config)
-        enemy = EnemyStaticProfile(duration=self.DURATION)
+        enemy = EnemyStaticProfile(duration=self.DURATION, core_px=0.0)
         sink = SimpleDamageScoreSink(compiled, enemy)
 
         actor = self.NAMES.index("리버렐리오")
@@ -278,7 +278,7 @@ class LiberelioPendingB3ParityTests(unittest.TestCase):
         runtime = BurstRuntime(
             compiled,
             policy,
-            EnemyStaticProfile(duration=1.6),
+            EnemyStaticProfile(duration=1.6, core_px=0.0),
         )
         effect = next(e for e in compiled.members[0].effects if e.name == "격류")
         self.assertTrue(runtime.dispatcher.is_runtime_executable_effect(effect))
