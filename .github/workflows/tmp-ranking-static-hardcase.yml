@@ -13,89 +13,82 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Locate Quency cadence divergence
+      - name: Trace Quency incoming buff activation
         shell: bash
         run: |
           python - <<'PY'
-          from collections import defaultdict
-          from calculator.timeline import DEFAULT_ENEMY, simulate
-          from calculator.sim_result import _is_normal
+          from calculator.timeline import DEFAULT_ENEMY, CharState, simulate
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
+          from fast_engine.engine.effects import ActiveEffectStore
           from fast_engine.engine.model import EnemyStaticProfile
           from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
+          from fast_engine.engine.target_scope import possible_ally_targets
 
           MEMBERS = ("라피 : 레드 후드", "레드 후드", "프리카", "민트", "퀀시 : 이스케이프 퀸")
           TARGET = "퀀시 : 이스케이프 퀸"
-          CONFIG = {"duration": 40.0, "first_burst_time": 3.0, "rng_mode": "expected"}
-          DEFENSE = 55000.0
-          CODE = "작열"
-          CORE_PX = 10.0
-
+          CONFIG = {"duration": 1.2, "first_burst_time": 3.0, "rng_mode": "expected"}
           squad = spec.build_squad(list(MEMBERS))
           config = spec.build_config(squad, dict(CONFIG))
           compiled = compile_moris_squad(squad)
+          idx = MEMBERS.index(TARGET)
           if static_score_blockers(compiled):
               raise RuntimeError(static_score_blockers(compiled))
-          policy = compile_burst_policy(squad, compiled, dict(CONFIG))
-          idx = MEMBERS.index(TARGET)
+
+          WATCH = {"atk_flat", "pierce_dmg_pct", "projectile_explosion_dmg_pct", "atk_pct", "accuracy_pct"}
+          print("CANDIDATES")
+          for eff in compiled.effects:
+              if (eff.stat or "") not in WATCH:
+                  continue
+              if idx not in possible_ally_targets(compiled, eff):
+                  continue
+              print(f"EFFECT|id={eff.effect_id}|owner={compiled.names[eff.actor]}|name={eff.name}|stat={eff.stat}|value={eff.value}|target={eff.target}|triggers={[r.raw for r in eff.triggers]}|conditions={eff.conditions}|duration={eff.duration}")
+
+          # Moris: inspect the actual active rows visible to Quency immediately
+          # before each physical shot around the first 1s boundary.
+          orig_tick_auto = CharState._tick_auto
+          def traced_tick_auto(self, t, bm, enemy, cfg):
+              if self.name == TARGET and 0.94 <= t <= 1.08:
+                  rows=[]
+                  for ab in bm._active:
+                      if TARGET not in ab.target_chars:
+                          continue
+                      stat=ab.effect.get("stat", "")
+                      if stat in WATCH:
+                          rows.append((ab.effect.get("name"), ab.caster, stat, bm._get_value(ab.effect, ab, ab.caster), ab.stack, ab.expires_at))
+                  print(f"M_PRE|t={t:.6f}|rows={rows}")
+              out = orig_tick_auto(self, t, bm, enemy, cfg)
+              if self.name == TARGET and 0.94 <= t <= 1.08 and out:
+                  print(f"M_SHOT|t={t:.6f}|hits={len(out)}|damage={sum(float(x.damage) for x in out):.3f}")
+              return out
+          CharState._tick_auto = traced_tick_auto
+
           enemy = dict(DEFAULT_ENEMY)
-          enemy["def"] = DEFENSE; enemy["code"] = CODE; enemy["core_px"] = CORE_PX
-          moris = simulate(squad, config=config, enemy=enemy, seed=42, verbose=False)
+          enemy["def"] = 55000.0; enemy["code"] = "작열"; enemy["core_px"] = 10.0
+          simulate(squad, config=config, enemy=enemy, seed=42, verbose=False)
 
-          grouped = defaultdict(float)
-          for h in moris.hits:
-              if h.caster == TARGET and _is_normal(h):
-                  grouped[round(float(h.t), 6)] += float(h.damage)
-          mrows = list(grouped.items())
+          # Fast: print activation timestamps into Quency, then the score-state
+          # visible at weapon boundaries in the same window.
+          orig_activate = ActiveEffectStore._activate_one
+          def traced_activate(self, effect, target, cohort, now, scheduler, **kwargs):
+              row = orig_activate(self, effect, target, cohort, now, scheduler, **kwargs)
+              if target == idx and (effect.stat or "") in WATCH and 0.8 <= now <= 1.1:
+                  print(f"F_ACT|t={now:.6f}|owner={compiled.names[effect.actor]}|name={effect.name}|stat={effect.stat}|value={effect.value}|stacks={row.stacks}|expires={row.expires_at:.6f}")
+              return row
+          ActiveEffectStore._activate_one = traced_activate
 
-          profile = EnemyStaticProfile(defense=DEFENSE, element=CODE, core_uptime=1.0, core_px=CORE_PX, duration=40.0)
+          policy = compile_burst_policy(squad, compiled, dict(CONFIG))
+          profile = EnemyStaticProfile(defense=55000.0, element="작열", core_uptime=1.0, core_px=10.0, duration=1.2)
           class TraceObserver(StaticNormalAttackObserver):
-              def __init__(self, runtime, *, duration):
-                  self.rows = []
-                  super().__init__(runtime, duration=duration)
               def _score_shots(self, actor, count, *, eval_time):
-                  before = self.char_total[actor]
-                  terms = self.resolver.resolve(actor, now=eval_time) if actor == idx else None
-                  super()._score_shots(actor, count, eval_time=eval_time)
-                  if actor == idx:
-                      self.rows.append((float(eval_time), int(count), self.char_total[actor]-before, terms))
-
-          sink = SimpleDamageScoreSink(compiled, profile)
-          runtime = BurstRuntime(compiled, policy, profile, damage_sink=sink)
-          observer = TraceObserver(runtime, duration=40.0)
-          result = runtime.run(duration=40.0, score_observer=observer)
+                  if actor == idx and 0.94 <= eval_time <= 1.08:
+                      terms = self.resolver.resolve(actor, now=eval_time)
+                      print(f"F_PRE|t={eval_time:.6f}|count={count}|atk_pct={terms.atk_pct:.3f}|atk_flat={terms.atk_flat:.3f}|pierce={terms.pierce_dmg_pct:.3f}|proj={terms.projectile_explosion_dmg_pct:.3f}|acc={terms.accuracy_pct:.3f}")
+                  return super()._score_shots(actor, count, eval_time=eval_time)
+          runtime = BurstRuntime(compiled, policy, profile)
+          observer = TraceObserver(runtime, duration=1.2)
+          result = runtime.run(duration=1.2, score_observer=observer)
           observer.finish(events_processed=result.events_processed)
-          frows = [(t,d,terms) for t,c,d,terms in observer.rows for _ in range(c)]
-
-          print(f"COUNTS|m={len(mrows)}|f={len(frows)}")
-          first = None
-          for i in range(min(len(mrows), len(frows))):
-              mt, md = mrows[i]
-              ft, fd, terms = frows[i]
-              if abs(mt-ft) > 0.009 or abs(fd-md) / max(md,1.0) > 0.002:
-                  first = i
-                  break
-          print(f"FIRST_DIVERGENCE|{first}")
-          if first is not None:
-              lo = max(0, first-12); hi = min(len(mrows), len(frows), first+40)
-              for i in range(lo, hi):
-                  mt, md = mrows[i]
-                  ft, fd, terms = frows[i]
-                  print(f"ROW|i={i}|mt={mt:.6f}|ft={ft:.6f}|dt={ft-mt:.6f}|md={md:.3f}|fd={fd:.3f}|ratio={fd/md:.8f}|atk={terms.atk_pct:.3f}|acc={terms.accuracy_pct:.3f}|crit={terms.crit_rate:.3f}|core={terms.core_dmg_pct:.3f}|atk_dmg={terms.atk_dmg_pct:.3f}")
-
-          for lo in range(0,40):
-              hi = lo+1
-              mc = sum(1 for t,d in mrows if lo <= t < hi)
-              fc = sum(1 for t,d,terms in frows if lo <= t < hi)
-              md = sum(d for t,d in mrows if lo <= t < hi)
-              fd = sum(d for t,d,terms in frows if lo <= t < hi)
-              if mc != fc or (md and abs(fd/md-1.0) > 0.003):
-                  print(f"BIN|{lo}-{hi}|mc={mc}|fc={fc}|m={md:.3f}|f={fd:.3f}|ratio={(fd/md if md else 0):.8f}")
-
-          print("M_LAST|" + ",".join(f"{t:.6f}:{d:.1f}" for t,d in mrows[-20:]))
-          print("F_LAST|" + ",".join(f"{t:.6f}:{d:.1f}" for t,d,terms in frows[-20:]))
           PY
