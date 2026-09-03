@@ -23,10 +23,8 @@ jobs:
           from context import snapshot, spec
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.score import static_score_blockers
-          from fast_engine.engine.damage_events import parse_damage_event_shape
-          from fast_engine.engine.dispatcher import TriggerDispatcher
 
-          seen=set(); rows=[]; grouped=defaultdict(list)
+          seen=set(); grouped=defaultdict(list)
           for source_name, case in snapshot.SQUADS.items():
               if str(source_name).startswith('지그_'): continue
               members=tuple(str(x) for x in case.get('members',()))
@@ -52,8 +50,7 @@ jobs:
                           tuple((r.mode.value,r.key,r.value,r.raw) for r in e.condition_rules),
                           e.capability.disposition.value,tuple(e.capability.blockers),
                       )
-                      key=(owner,name,e.stat,shape)
-                      grouped[key].append((str(source_name),members))
+                      grouped[(owner,name,e.stat,shape)].append((str(source_name),members))
 
           print('GROUP_COUNT',len(grouped))
           ordered=sorted(grouped.items(),key=lambda kv:(-len(kv[1]),kv[0][0],kv[0][1]))
@@ -62,14 +59,13 @@ jobs:
               print('SHAPE',shape)
               for source,members in teams: print(' TEAM',source,members)
 
-          print('\n=== DAMAGE EFFECTS WITH CURRENTLY SAFE-LOOKING TRIGGERS ===')
+          print('\n=== SAFE-LOOKING TRIGGER SHAPES ===')
           safe_event_keys={
               'battle_start','burst_cast','full_burst_start','full_burst_end',
               'last_bullet','on_attack','full_charge_hit','hit_count','pellet_hit',
           }
           for (owner,name,stat,shape),teams in ordered:
-              triggers=shape[9]
-              conds=shape[10]
+              triggers=shape[9]; conds=shape[10]
               trigger_keys={x[1] for x in triggers}
               timing_simple=bool(triggers) and all(
                   (k in safe_event_keys) or (isinstance(k,str) and (k.startswith('burst_enter:') or k.startswith('squad_burst_cast:')))
