@@ -1,0 +1,51 @@
+=== CORE 0.0 ===
+M_TOTAL 279744009
+M_NORMAL 279744009 HITS 122
+M_SKILLS {}
+BLOCKERS ()
+FRIKA_WEAPON {'weapon_type': 'SR', 'fire_mode': 'charge', 'max_ammo': 6, 'reload_time': 2.0, 'fire_rate': 1.0, 'fire_rate_max': None, 'warmup_bullets': 1.0, 'warmup_cooldown_time': 1.0, 'post_fire_delay': 0.38, 'post_reload_delay': 0.0, 'reload_start_delay': 0.0, 'cover_during_delay': False, 'charge_time': 1.0, 'pellets': 1, 'muzzles': 1, 'is_clip': False, 'damage_coeff': 69.04, 'core_dmg_mult': 200.0, 'full_charge_mult': 250.0, 'normal_hit_coeff': 1.0, 'control': {}, 'core_base_diameter': 10.0, 'core_acc_slope': 0.0, 'core_model_n': 2.55}
+FRIKA_EFFECTS
+0 65 buff 무대, 시작할게. projectile_explosion_dmg_pct 20.0 3.0 1.0 {} [('full_charge_hit', 'full_charge_hit', 'event', None)] []
+1 66 buff 무대, 시작할게. 2 pierce_dmg_pct 13.09 3.0 1.0 {} [('full_charge_hit', 'full_charge_hit', 'event', None)] []
+2 67 buff 무대, 시작할게. 3 atk_caster_based_pct 20.0 3.0 1.0 {} [('full_charge_hit', 'full_charge_hit', 'event', None)] []
+3 68 buff 무대, 시작할게. 4 outgoing_heal_pct 49.92 -1.0 1.0 {} [('passive', 'battle_start', 'event', None)] ["ConditionRule(raw='self_state:퍼포먼스', mode=<ConditionMode.SELF_STATE: 'self_state'>, key='퍼포먼스', value=None, value2=None)"]
+4 69 buff 무대, 시작할게. 5 pierce_enabled None -1.0 1.0 {} [('passive', 'battle_start', 'event', None)] ["ConditionRule(raw='self_state:퍼포먼스', mode=<ConditionMode.SELF_STATE: 'self_state'>, key='퍼포먼스', value=None, value2=None)"]
+5 70 buff 한 곡 더! max_hp_pct 19.98 10.0 1.0 {} [('full_burst_start', 'full_burst_start', 'event', None)] []
+6 71 buff 무대 파트 : 보컬 None None -1.0 1.0 {} [('event:떼창', 'event:떼창', 'event', None)] ["ConditionRule(raw='self_state:퍼포먼스', mode=<ConditionMode.SELF_STATE: 'self_state'>, key='퍼포먼스', value=None, value2=None)"]
+7 72 instant 앵콜 named_buff_duration_extend 21.0 None None {'target_effect': '퍼포먼스'} [('event:떼창', 'event:떼창', 'event', None)] ["ConditionRule(raw='self_state:퍼포먼스', mode=<ConditionMode.SELF_STATE: 'self_state'>, key='퍼포먼스', value=None, value2=None)"]
+8 73 buff 앵콜 2 atk_dmg_pct 25.01 10.0 1.0 {} [('event:떼창', 'event:떼창', 'event', None)] ["ConditionRule(raw='self_state:퍼포먼스', mode=<ConditionMode.SELF_STATE: 'self_state'>, key='퍼포먼스', value=None, value2=None)"]
+9 74 instant 앵콜 3 burst_cooldown_reduce -21.0 None None {} [('event:떼창', 'event:떼창', 'event', None)] ["ConditionRule(raw='self_state:퍼포먼스', mode=<ConditionMode.SELF_STATE: 'self_state'>, key='퍼포먼스', value=None, value2=None)"]
+10 75 buff 퍼포먼스 None None 25.0 1.0 {} [('burst_cast', 'burst_cast', 'event', None)] []
+11 76 instant 퍼포먼스 2 heal_hp_pct 3.04 25.0 None {'scaling': 'max_hp'} [('burst_cast', 'burst_cast', 'event', None)] []
+12 77 buff 퍼포먼스 3 charge_dmg_pct 25.0 25.0 1.0 {} [('burst_cast', 'burst_cast', 'event', None)] []
+13 78 buff 장비 옵션 atk_pct 22.22 None None {} [('passive', 'battle_start', 'event', None)] []
+14 79 buff 장비 옵션 element_bonus 88.6 None None {} [('passive', 'battle_start', 'event', None)] []
+15 80 buff 장비 옵션 max_ammo_pct 129.64 None None {} [('passive', 'battle_start', 'event', None)] []
+16 81 buff 장비 옵션 crit_rate 0.0 None None {} [('passive', 'battle_start', 'event', None)] []
+17 82 buff 장비 옵션 crit_dmg 0.0 None None {} [('passive', 'battle_start', 'event', None)] []
+18 83 buff 장비 옵션 charge_speed_pct 0.0 None None {} [('passive', 'battle_start', 'event', None)] []
+19 84 buff 장비 옵션 charge_dmg_pct 0.0 None None {} [('passive', 'battle_start', 'event', None)] []
+20 85 buff 장비 옵션 accuracy_pct 0.0 None None {} [('passive', 'battle_start', 'event', None)] []
+21 86 buff 장비 옵션 def_pct 0.0 None None {} [('passive', 'battle_start', 'event', None)] []
+22 87 buff 큐브:공통 element_bonus 19.09 None None {} [('battle_start', 'battle_start', 'event', None)] []
+23 88 buff 큐브:렐릭 베어 큐브 reload_speed_pct 29.69 None None {} [('battle_start', 'battle_start', 'event', None)] []
+24 89 buff 소장품:공통 def_pct 37.0 None None {} [('passive', 'battle_start', 'event', None)] []
+25 90 buff 소장품:공통 received_dmg_pct -17.0 None None {} [('passive', 'battle_start', 'event', None)] []
+26 91 buff 소장품:공통 cover_hp_pct 30.0 None None {} [('passive', 'battle_start', 'event', None)] []
+27 92 buff 소장품:SR charge_dmg_mag_pct 9.47 None None {} [('passive', 'battle_start', 'event', None)] []
+F_NORMAL 227297150.9252031
+F_SKILL 0.0
+F_TOTAL 227297150.9252031
+F_SKILLS
+CASTS [(3.1999999999999997, 2, '2')]
+=== CORE 10.0 ===
+M_TOTAL 441100134
+M_NORMAL 441100134 HITS 122
+M_SKILLS {}
+BLOCKERS ()
+FRIKA_WEAPON {'weapon_type': 'SR', 'fire_mode': 'charge', 'max_ammo': 6, 'reload_time': 2.0, 'fire_rate': 1.0, 'fire_rate_max': None, 'warmup_bullets': 1.0, 'warmup_cooldown_time': 1.0, 'post_fire_delay': 0.38, 'post_reload_delay': 0.0, 'reload_start_delay': 0.0, 'cover_during_delay': False, 'charge_time': 1.0, 'pellets': 1, 'muzzles': 1, 'is_clip': False, 'damage_coeff': 69.04, 'core_dmg_mult': 200.0, 'full_charge_mult': 250.0, 'normal_hit_coeff': 1.0, 'control': {}, 'core_base_diameter': 10.0, 'core_acc_slope': 0.0, 'core_model_n': 2.55}
+F_NORMAL 358594341.30746824
+F_SKILL 0.0
+F_TOTAL 358594341.30746824
+F_SKILLS
+CASTS [(3.1999999999999997, 2, '2')]
