@@ -13,46 +13,45 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Fast-only post-clamp ranking grid
+      - name: Decompose post-clamp DEF55 residual
         shell: bash
         run: |
           python - <<'PY'
+          from collections import defaultdict
+          from calculator.timeline import DEFAULT_ENEMY, simulate
+          from calculator.sim_result import _is_normal
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import score_static_squad, static_score_blockers
+          from fast_engine.engine.score import score_static_squad, score_static_normal_squad, static_score_blockers
 
-          MM=("미란다","브리드 : 사일런트 트랙","헬름","루주","미하라 : 본딩 체인")
-          RHQ=("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸")
+          TEAMS={
+            'MM':("미란다","브리드 : 사일런트 트랙","헬름","루주","미하라 : 본딩 체인"),
+            'RHQ':("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸"),
+          }
           DURATION=180.0
           CONFIG={"duration":DURATION,"first_burst_time":3.0,"rng_mode":"expected"}
+          enemy=dict(DEFAULT_ENEMY); enemy['def']=55000.0; enemy['code']='작열'; enemy['core_px']=10.0
+          profile=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=DURATION)
 
-          def prepare(members):
-              squad=spec.build_squad(list(members)); compiled=compile_moris_squad(squad)
-              blockers=static_score_blockers(compiled)
-              if blockers: raise RuntimeError((members,blockers))
-              return compiled,compile_burst_policy(squad,compiled,dict(CONFIG))
-          prepared={"MM":prepare(MM),"RHQ":prepare(RHQ)}
-
-          def total(team,defense,core):
-              compiled,policy=prepared[team]
-              profile=EnemyStaticProfile(defense=float(defense),element="작열",core_uptime=1.0 if core>0 else 0.0,core_px=float(core),duration=DURATION)
-              result=score_static_squad(compiled,policy,profile)
-              return sum(float(v) for v in result.char_total)
-
-          mismatches=[]
-          def row(axis,value,defense,core,expected):
-              mm=total("MM",defense,core); rhq=total("RHQ",defense,core)
-              margin=(mm-rhq)/max(mm,rhq)
-              order="MM" if margin>0 else "RHQ" if margin<0 else "TIE"
-              agree=order==expected
-              if not agree: mismatches.append((axis,value,expected,order,margin))
-              print(f"FASTGRID|axis={axis}|value={value}|def={defense}|core={core}|mm={mm:.3f}|rhq={rhq:.3f}|margin={margin:.8f}|expected_moris={expected}|fast_order={order}|agree={agree}")
-
-          for defense,expected in ((0,"MM"),(20000,"MM"),(31784,"MM"),(40000,"MM"),(50000,"MM"),(55000,"MM"),(60000,"RHQ"),(65000,"RHQ"),(70000,"RHQ"),(80000,"RHQ"),(90000,"RHQ")):
-              row("def",defense,defense,10,expected)
-          for core,expected in ((0,"MM"),(10,"RHQ"),(20,"RHQ"),(30,"RHQ"),(40,"RHQ"),(52,"RHQ")):
-              row("core",core,60000,core,expected)
-          print(f"SUMMARY|points=17|mismatches={len(mismatches)}|rows={mismatches}")
+          for label,members in TEAMS.items():
+              squad=spec.build_squad(list(members)); config=spec.build_config(squad,dict(CONFIG))
+              compiled=compile_moris_squad(squad); blockers=static_score_blockers(compiled)
+              if blockers: raise RuntimeError((label,blockers))
+              policy=compile_burst_policy(squad,compiled,dict(CONFIG))
+              moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=False)
+              fast=score_static_squad(compiled,policy,profile)
+              normal=score_static_normal_squad(compiled,policy,profile,duration=DURATION)
+              mt=sum(float(moris.char_total[n]) for n in members); ft=sum(float(v) for v in fast.char_total)
+              print(f'TEAM|{label}|m={mt:.3f}|f={ft:.3f}|err={ft/mt-1:.8f}')
+              for i,name in enumerate(members):
+                  m_total=float(moris.char_total[name]); f_total=float(fast.char_total[i]); f_normal=float(normal.char_total[i])
+                  m_normal=sum(float(h.damage) for h in moris.hits if h.caster==name and _is_normal(h))
+                  m_skill=m_total-m_normal; f_skill=f_total-f_normal
+                  m_times={round(float(h.t),9) for h in moris.hits if h.caster==name and _is_normal(h)}
+                  normal_err=(f_normal/m_normal-1.0) if m_normal else 0.0
+                  skill_err=(f_skill/m_skill-1.0) if abs(m_skill)>1e-9 else 0.0
+                  contribution=f_total-m_total
+                  print(f'ACTOR|team={label}|name={name}|m={m_total:.3f}|f={f_total:.3f}|err={f_total/m_total-1:.8f}|delta={contribution:.3f}|m_normal={m_normal:.3f}|f_normal={f_normal:.3f}|normal_err={normal_err:.8f}|m_skill={m_skill:.3f}|f_skill={f_skill:.3f}|skill_err={skill_err:.8f}|m_shot_times={len(m_times)}')
           PY
