@@ -1,0 +1,28 @@
+name: tmp-river-core-ab
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  river-core-ab:
+    if: ${{ !contains(github.event.head_commit.message || '', '[skip-river-core-ab]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Prove baseline blocker
+        run: python -m fast_engine.research.tmp_river_core_ab baseline
+      - name: Apply temporary generic patch
+        run: python -m fast_engine.research.tmp_apply_river_core
+      - name: Probe patched semantics
+        run: python -m fast_engine.research.tmp_river_core_ab patched
+      - name: Run Fast regression suite under patch
+        run: python -m unittest discover -s fast_engine/tests -v
