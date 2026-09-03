@@ -13,12 +13,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Decompose frame-lattice residual
+      - name: Trace Rouge normal residual
         shell: bash
         run: |
           python - <<'PY'
           from bisect import bisect_left
-          from collections import Counter, defaultdict
           from calculator.timeline import DEFAULT_ENEMY, DT, simulate
           from calculator.sim_result import _is_normal
           from context import spec
@@ -30,10 +29,8 @@ jobs:
           from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
           from fast_engine.engine.weapon import DynamicChargeCadenceRuntime
 
-          TEAMS = {
-              "MM": ("미란다", "브리드 : 사일런트 트랙", "헬름", "루주", "미하라 : 본딩 체인"),
-              "RHQ": ("라피 : 레드 후드", "레드 후드", "프리카", "민트", "퀀시 : 이스케이프 퀸"),
-          }
+          MEMBERS = ("미란다", "브리드 : 사일런트 트랙", "헬름", "루주", "미하라 : 본딩 체인")
+          TARGET = "루주"
           CONFIG = {"duration": 180.0, "first_burst_time": 3.0, "rng_mode": "expected"}
           DEFENSE = 55000.0
           CODE = "작열"
@@ -44,8 +41,7 @@ jobs:
           while t <= 181.0:
               ticks.append(t)
               t += DT
-
-          def snap(x: float) -> float:
+          def snap(x):
               i = bisect_left(ticks, float(x))
               return ticks[i] if i < len(ticks) else float(x)
 
@@ -54,112 +50,84 @@ jobs:
           orig_finish = DynamicChargeCadenceRuntime._finish_nonshot_phase
           orig_start = DynamicChargeCadenceRuntime.start
           orig_sync = DynamicChargeCadenceRuntime.sync
-
           def snapped_enter(self, st, at, now_for_mods):
-              orig_enter(self, st, at, now_for_mods)
-              st.phase_end = snap(st.phase_end)
+              orig_enter(self, st, at, now_for_mods); st.phase_end = snap(st.phase_end)
           def snapped_after(self, st, shot_time):
-              orig_after(self, st, shot_time)
-              st.phase_end = snap(st.phase_end)
+              orig_after(self, st, shot_time); st.phase_end = snap(st.phase_end)
           def snapped_finish(self, st, transition_time, now_for_mods):
-              orig_finish(self, st, transition_time, now_for_mods)
-              st.phase_end = snap(st.phase_end)
+              orig_finish(self, st, transition_time, now_for_mods); st.phase_end = snap(st.phase_end)
           def snapped_start(self, now=0.0):
               orig_start(self, now)
               for actor, st in self._states.items():
                   q = snap(st.phase_end)
                   if q != st.phase_end:
-                      self._invalidate(st)
-                      st.phase_end = q
-                      self._plan(actor, float(now))
+                      self._invalidate(st); st.phase_end = q; self._plan(actor, float(now))
           def snapped_sync(self, now):
               orig_sync(self, now)
               for actor, st in self._states.items():
                   q = snap(st.phase_end)
                   if q != st.phase_end:
-                      self._invalidate(st)
-                      st.phase_end = q
-                      self._plan(actor, float(now))
-
+                      self._invalidate(st); st.phase_end = q; self._plan(actor, float(now))
           DynamicChargeCadenceRuntime._enter_charge = snapped_enter
           DynamicChargeCadenceRuntime._after_shot = snapped_after
           DynamicChargeCadenceRuntime._finish_nonshot_phase = snapped_finish
           DynamicChargeCadenceRuntime.start = snapped_start
           DynamicChargeCadenceRuntime.sync = snapped_sync
 
-          profile = EnemyStaticProfile(
-              defense=DEFENSE, element=CODE, core_uptime=1.0,
-              core_px=CORE_PX, duration=180.0,
-          )
+          squad = spec.build_squad(list(MEMBERS))
+          config = spec.build_config(squad, dict(CONFIG))
+          compiled = compile_moris_squad(squad)
+          blockers = static_score_blockers(compiled)
+          if blockers: raise RuntimeError(blockers)
+          policy = compile_burst_policy(squad, compiled, dict(CONFIG))
+          idx = MEMBERS.index(TARGET)
 
+          print("WEAPON|" + repr(compiled.members[idx].weapon))
+          for eff in compiled.effects:
+              if eff.actor == idx:
+                  print("OWN_EFFECT|" + repr(eff))
+              elif idx in __import__('fast_engine.engine.target_scope', fromlist=['possible_ally_targets']).possible_ally_targets(compiled, eff):
+                  if eff.effect_type == 'buff':
+                      print("INCOMING_BUFF|" + repr(eff))
+
+          enemy = dict(DEFAULT_ENEMY)
+          enemy["def"] = DEFENSE; enemy["code"] = CODE; enemy["core_px"] = CORE_PX
+          moris = simulate(squad, config=config, enemy=enemy, seed=42, verbose=False)
+          mhits = [h for h in moris.hits if h.caster == TARGET and _is_normal(h)]
+
+          profile = EnemyStaticProfile(defense=DEFENSE, element=CODE, core_uptime=1.0, core_px=CORE_PX, duration=180.0)
           class TraceObserver(StaticNormalAttackObserver):
               def __init__(self, runtime, *, duration):
-                  self.shot_counts = [0] * len(runtime.squad.members)
-                  self.trace = defaultdict(list)
+                  self.rows = []
                   super().__init__(runtime, duration=duration)
               def _score_shots(self, actor, count, *, eval_time):
-                  self.shot_counts[actor] += int(count)
-                  if actor in self.dynamic_charge_actors:
-                      self.trace[actor].extend([float(eval_time)] * int(count))
-                  return super()._score_shots(actor, count, eval_time=eval_time)
+                  before = self.char_total[actor]
+                  terms = self.resolver.resolve(actor, now=eval_time) if actor == idx else None
+                  super()._score_shots(actor, count, eval_time=eval_time)
+                  if actor == idx:
+                      self.rows.append((float(eval_time), int(count), self.char_total[actor]-before, repr(terms)))
 
-          for key, members in TEAMS.items():
-              squad = spec.build_squad(list(members))
-              config = spec.build_config(squad, dict(CONFIG))
-              compiled = compile_moris_squad(squad)
-              blockers = static_score_blockers(compiled)
-              if blockers:
-                  raise RuntimeError(f"{key} blockers={blockers}")
-              policy = compile_burst_policy(squad, compiled, dict(CONFIG))
-              enemy = dict(DEFAULT_ENEMY)
-              enemy["def"] = DEFENSE
-              enemy["code"] = CODE
-              enemy["core_px"] = CORE_PX
-              moris = simulate(squad, config=config, enemy=enemy, seed=42, verbose=False)
+          sink = SimpleDamageScoreSink(compiled, profile)
+          runtime = BurstRuntime(compiled, policy, profile, damage_sink=sink)
+          observer = TraceObserver(runtime, duration=policy.duration)
+          result = runtime.run(duration=policy.duration, score_observer=observer)
+          observer.finish(events_processed=result.events_processed)
 
-              m_normal = defaultdict(float)
-              m_skill = defaultdict(float)
-              m_count = Counter()
-              m_times = defaultdict(list)
-              for hit in moris.hits:
-                  if _is_normal(hit):
-                      m_normal[hit.caster] += float(hit.damage)
-                      m_count[hit.caster] += 1
-                      m_times[hit.caster].append(float(hit.t))
-                  else:
-                      m_skill[hit.caster] += float(hit.damage)
-
-              sink = SimpleDamageScoreSink(compiled, profile)
-              runtime = BurstRuntime(compiled, policy, profile, damage_sink=sink)
-              observer = TraceObserver(runtime, duration=policy.duration)
-              result = runtime.run(duration=policy.duration, score_observer=observer)
-              normal = observer.finish(events_processed=result.events_processed)
-
-              print(f"TEAM|{key}|moris={moris.squad_total:.3f}|fast={sum(normal.char_total)+sum(sink.char_total):.3f}")
-              for idx, name in enumerate(members):
-                  mt = float(moris.char_total.get(name, 0.0))
-                  ft = float(normal.char_total[idx] + sink.char_total[idx])
-                  err = (ft / mt - 1.0) if mt else 0.0
-                  print(
-                      f"ACTOR|team={key}|name={name}|m_total={mt:.3f}|f_total={ft:.3f}|err={err:.8f}|"
-                      f"m_normal={m_normal[name]:.3f}|f_normal={normal.char_total[idx]:.3f}|"
-                      f"m_skill={m_skill[name]:.3f}|f_skill={sink.char_total[idx]:.3f}|"
-                      f"m_count={m_count[name]}|f_count={observer.shot_counts[idx]}|dynamic={idx in observer.dynamic_charge_actors}"
-                  )
-
-              if key == "RHQ":
-                  name = "레드 후드"
-                  idx = members.index(name)
-                  ftimes = observer.trace[idx]
-                  mtimes = m_times[name]
-                  mc = Counter(round(x, 6) for x in mtimes)
-                  fc = Counter(round(x, 6) for x in ftimes)
-                  extra = list((fc - mc).elements())
-                  missing = list((mc - fc).elements())
-                  print("RH_TIMES|m_first=" + ",".join(f"{x:.6f}" for x in mtimes[:15]))
-                  print("RH_TIMES|f_first=" + ",".join(f"{x:.6f}" for x in ftimes[:15]))
-                  print("RH_TIMES|m_last=" + ",".join(f"{x:.6f}" for x in mtimes[-15:]))
-                  print("RH_TIMES|f_last=" + ",".join(f"{x:.6f}" for x in ftimes[-15:]))
-                  print("RH_DIFF|extra=" + ",".join(f"{x:.6f}" for x in extra[:40]))
-                  print("RH_DIFF|missing=" + ",".join(f"{x:.6f}" for x in missing[:40]))
+          print(f"TOTAL|m={sum(float(h.damage) for h in mhits):.3f}|f={observer.char_total[idx]:.3f}|m_count={len(mhits)}|f_rows={len(observer.rows)}")
+          n = min(len(mhits), len(observer.rows))
+          diffs = []
+          for i in range(n):
+              mh = mhits[i]
+              ft, count, fd, terms = observer.rows[i]
+              rel = fd / float(mh.damage) - 1.0 if mh.damage else 0.0
+              if abs(rel) > 0.0001 or abs(ft - float(mh.t)) > 0.0001:
+                  diffs.append((i, float(mh.t), float(mh.damage), ft, count, fd, rel, terms))
+          print(f"DIFF_COUNT|{len(diffs)}")
+          for row in diffs[:35]:
+              i, mt, md, ft, count, fd, rel, terms = row
+              print(f"DIFF|i={i}|mt={mt:.6f}|ft={ft:.6f}|md={md:.3f}|fd={fd:.3f}|count={count}|rel={rel:.8f}|terms={terms}")
+          print("M_FIRST|" + ",".join(f"{h.t:.6f}:{float(h.damage):.1f}" for h in mhits[:12]))
+          print("F_FIRST|" + ",".join(f"{t:.6f}:{d:.1f}" for t,c,d,_ in observer.rows[:12]))
+          print("M_LAST|" + ",".join(f"{h.t:.6f}:{float(h.damage):.1f}" for h in mhits[-12:]))
+          print("F_LAST|" + ",".join(f"{t:.6f}:{d:.1f}" for t,c,d,_ in observer.rows[-12:]))
           PY
