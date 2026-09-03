@@ -13,15 +13,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Inspect Quency rapid compression blocks
+      - name: Measure 180s burst-frame impact
         shell: bash
         run: |
           python - <<'PY'
-          from collections import Counter, defaultdict
-          from calculator.timeline import DEFAULT_ENEMY, simulate
+          from math import ceil
+          from calculator.timeline import DEFAULT_ENEMY, DT, simulate
           from calculator.sim_result import _is_normal
           from context import spec
-          from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.burst import BurstMachine, compile_burst_policy
           from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
@@ -29,7 +29,7 @@ jobs:
           from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
 
           MEMBERS=("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸")
-          TARGET="퀀시 : 이스케이프 퀸"; DURATION=80.0
+          TARGET="퀀시 : 이스케이프 퀸"; DURATION=180.0
           CONFIG={"duration":DURATION,"first_burst_time":3.0,"rng_mode":"expected"}
           squad=spec.build_squad(list(MEMBERS)); config=spec.build_config(squad,dict(CONFIG))
           compiled=compile_moris_squad(squad); blockers=static_score_blockers(compiled)
@@ -39,42 +39,27 @@ jobs:
           profile=EnemyStaticProfile(defense=55000.0,element="작열",core_uptime=1.0,core_px=10.0,duration=DURATION)
 
           moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=False)
-          msec=defaultdict(lambda:[0,0.0])
-          for h in moris.hits:
-              t=float(h.t)
-              if h.caster==TARGET and _is_normal(h) and 60.0 <= t < 75.0:
-                  bucket=int((t-60.0)*2)/2+60.0
-                  msec[bucket][0]+=1
-                  msec[bucket][1]+=float(h.damage)
+          m_normal=sum(float(h.damage) for h in moris.hits if h.caster==TARGET and _is_normal(h))
+          print(f"M_NORMAL|{m_normal:.3f}")
 
-          sink=SimpleDamageScoreSink(compiled,profile)
-          runtime=BurstRuntime(compiled,policy,profile,damage_sink=sink)
-          class O(StaticNormalAttackObserver):
-              def __init__(self,*a,**k):
-                  self.rows=[]; super().__init__(*a,**k)
-              def _score_shots(self,actor,count,*,eval_time):
-                  before=float(self.char_total[actor])
-                  terms=self.resolver.resolve(actor,now=float(eval_time)) if actor==idx else None
-                  out=super()._score_shots(actor,count,eval_time=eval_time)
-                  if actor==idx and 60.0 <= float(eval_time) < 75.0:
-                      after=float(self.char_total[actor])
-                      self.rows.append((float(eval_time),int(count),after-before,terms))
-                  return out
-          obs=O(runtime,duration=DURATION); rr=runtime.run(duration=DURATION,score_observer=obs); obs.finish(events_processed=rr.events_processed)
+          def run_fast(label):
+              sink=SimpleDamageScoreSink(compiled,profile)
+              runtime=BurstRuntime(compiled,policy,profile,damage_sink=sink)
+              obs=StaticNormalAttackObserver(runtime,duration=DURATION)
+              rr=runtime.run(duration=DURATION,score_observer=obs)
+              res=obs.finish(events_processed=rr.events_processed)
+              val=float(res.char_total[idx])
+              print(f"RESULT|set={label}|normal={val:.3f}|err={val/m_normal-1:.8f}|shots={res.shot_blocks[idx].shots if hasattr(res,'shot_blocks') else 'na'}")
+              print(f"STARTS|set={label}|"+",".join(f"{x:.6f}" for x in rr.full_burst_starts))
+              return val
 
-          counts=Counter(c for _,c,_,_ in obs.rows)
-          print("BLOCK_COUNTS|"+str(sorted(counts.items())))
-          print(f"BLOCK_MAX|{max(counts) if counts else 0}")
-          for t,c,d,terms in obs.rows:
-              if c>1:
-                  print(f"MULTI|t={t:.6f}|count={c}|dmg={d:.3f}|atk={terms.atk_pct:.3f}|flat={terms.atk_flat:.3f}|atk_dmg={terms.atk_dmg_pct:.3f}|crit={terms.crit_rate_pct:.3f}|critd={terms.crit_dmg_pct:.3f}|pierce={terms.pierce_dmg_pct:.3f}|proj={terms.projectile_explosion_dmg_pct:.3f}")
-
-          fsec=defaultdict(lambda:[0,0.0])
-          for t,c,d,_ in obs.rows:
-              bucket=int((t-60.0)*2)/2+60.0
-              fsec[bucket][0]+=c; fsec[bucket][1]+=d
-          for b in sorted(set(msec)|set(fsec)):
-              mc,md=msec[b]; fc,fd=fsec[b]
-              if md:
-                  print(f"BUCKET|t={b:.1f}|m_hits={mc}|f_shots={fc}|m_dmg={md:.3f}|f_dmg={fd:.3f}|err={fd/md-1:.6f}")
+          base=run_fast("base")
+          orig=BurstMachine._schedule
+          def framed_schedule(self,scheduler,time,kind,*,stage=None):
+              t=float(time)
+              framed=ceil((t-1e-9)/DT)*DT
+              return orig(self,scheduler,framed,kind,stage=stage)
+          BurstMachine._schedule=framed_schedule
+          framed=run_fast("burst_frame")
+          print(f"DELTA|base_err={base/m_normal-1:.8f}|frame_err={framed/m_normal-1:.8f}")
           PY
