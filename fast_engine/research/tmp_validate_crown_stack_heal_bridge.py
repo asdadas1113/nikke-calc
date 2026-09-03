@@ -11,6 +11,7 @@ from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.dispatcher import TriggerDispatcher
 from fast_engine.engine.model import EnemyStaticProfile
 from fast_engine.engine.score import static_score_blockers
+from fast_engine.engine.target_scope import possible_ally_targets
 
 from .public_ranking_probe import COMMON_CONFIG, COMMON_ENEMY, _source_corpus
 
@@ -95,6 +96,51 @@ def _fast_events(members: tuple[str, ...]):
     return trace, relevant, runtime.dispatcher.effects.named_stack(crown, "릴렉스", now=policy.duration)
 
 
+def _debug_delta_score(compiled) -> None:
+    crown = compiled.names.index(CROWN)
+    effects = tuple(compiled.members[crown].effects)
+    royal = next(effect for effect in effects if effect.name == ROYAL)
+    print("=== DELTA SCORE DEBUG ===")
+    print("heal_dependency=", TriggerDispatcher.heal_received_dependency_score_safe(compiled, royal))
+    for effect in effects:
+        if effect.name not in {"릴렉스", "로얄 에타이어", "로얄 에타이어 3", "로얄 에타이어 4"}:
+            continue
+        print({
+            "name": effect.name,
+            "stat": effect.stat,
+            "type": effect.effect_type,
+            "target_mode": effect.target_spec.mode.value,
+            "duration": effect.duration,
+            "max_stack": effect.max_stack,
+            "parameters": dict(effect.parameters),
+            "conditions": [(r.raw, r.mode.value) for r in effect.condition_rules],
+            "triggers": [(r.raw, r.event_key, r.mode.value, r.threshold) for r in effect.triggers],
+            "capability": effect.capability.disposition.value,
+            "marker_shape": TriggerDispatcher._self_stack_reach_marker_shape_supported(effect),
+            "source_shape": TriggerDispatcher._stack_reach_source_shape_supported(compiled, effect),
+            "remove_shape": TriggerDispatcher._self_stack_remove_shape_supported(effect),
+            "heal_shape": TriggerDispatcher._self_stack_heal_shape_supported(effect),
+            "heal_chain": TriggerDispatcher._self_stack_heal_chain_shape_supported(compiled, effect),
+            "targets": possible_ally_targets(compiled, effect),
+        })
+    providers = tuple(
+        provider
+        for provider in compiled.effects
+        if (provider.stat or "") in {"heal_hp_pct", "lifesteal_pct"}
+        and crown in possible_ally_targets(compiled, provider)
+    )
+    print("providers", [
+        {
+            "actor": compiled.names[p.actor],
+            "name": p.name,
+            "stat": p.stat,
+            "target_mode": p.target_spec.mode.value,
+            "heal_chain": TriggerDispatcher._self_stack_heal_chain_shape_supported(compiled, p),
+        }
+        for p in providers
+    ])
+
+
 def main() -> None:
     rows = {
         source_name: tuple(members)
@@ -104,17 +150,22 @@ def main() -> None:
     if set(rows) != SAFE_SELF_ONLY | EXTERNAL_PROVIDER:
         raise AssertionError(f"unexpected Crown corpus: {sorted(rows)}")
 
+    failures: list[str] = []
     print("=== SCORE SAFETY SPLIT ===")
     for source_name, members in rows.items():
         compiled = compile_moris_squad(spec.build_squad(list(members)))
         blockers = _royal_blockers(compiled)
         print(source_name, "royal_blockers=", blockers)
+        if source_name == "레이드_델타":
+            _debug_delta_score(compiled)
         if source_name in SAFE_SELF_ONLY and blockers:
-            raise AssertionError(f"self-only Crown team stayed blocked: {source_name}: {blockers}")
+            failures.append(f"self-only Crown team stayed blocked: {source_name}: {blockers}")
         if source_name in EXTERNAL_PROVIDER and not blockers:
-            raise AssertionError(f"external-heal Crown team widened unsafely: {source_name}")
+            failures.append(f"external-heal Crown team widened unsafely: {source_name}")
 
-    # Delta is the cleanest real source case: Crown is the only possible heal provider.
+    if failures:
+        raise AssertionError("; ".join(failures))
+
     delta = rows["레이드_델타"]
     moris = _moris_heals(delta)
     fast, activations, residual = _fast_events(delta)
