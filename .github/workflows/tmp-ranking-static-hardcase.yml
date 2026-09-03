@@ -5,21 +5,15 @@ on:
     branches:
       - fast-engine-phase2-20260901
 
-permissions:
-  contents: write
-
 jobs:
-  apply:
+  probe:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Apply validated timing patch
-        if: ${{ !contains(github.event.head_commit.message, '[timing-apply]') }}
+      - name: Inspect decoded patch
         shell: bash
         run: |
           python - <<'PY'
@@ -29,20 +23,13 @@ jobs:
           text = urllib.request.urlopen(url).read().decode()
           marker = "cat > /tmp/payload.b64 <<'EOF'\n"
           payload = text.split(marker, 1)[1].split('\nEOF', 1)[0].strip()
-          open('/tmp/apply_timing.py', 'wb').write(base64.b64decode(payload))
+          decoded = base64.b64decode(payload).decode()
+          for i, line in enumerate(decoded.splitlines(), 1):
+              if 88 <= i <= 130:
+                  print(f'{i:04d}: {line!r}')
+          try:
+              compile(decoded, '/tmp/apply_timing.py', 'exec')
+          except SyntaxError as exc:
+              print('SYNTAX', exc.lineno, exc.offset, exc.msg)
+              raise
           PY
-          python /tmp/apply_timing.py
-          python -m unittest fast_engine.tests.test_damage_moris_frame_timing
-          python -m unittest fast_engine.tests.test_dynamic_weapon_change
-          python -m unittest fast_engine.tests.test_damage_dynamic_charge_scoring
-          python -m unittest fast_engine.tests.test_burst_machine
-          git diff --check
-          git status --short
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add fast_engine/engine/frame_lattice.py fast_engine/engine/burst.py fast_engine/engine/effects.py fast_engine/engine/weapon.py fast_engine/tests/test_damage_moris_frame_timing.py
-          git commit -m "fix: align Fast timing with Moris outer ticks [timing-apply]"
-          git push origin HEAD:fast-engine-phase2-20260901
-      - name: Applied commit is a no-op
-        if: ${{ contains(github.event.head_commit.message, '[timing-apply]') }}
-        run: echo "timing patch already applied"
