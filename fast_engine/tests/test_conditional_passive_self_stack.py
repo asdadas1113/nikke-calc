@@ -43,6 +43,35 @@ class ConditionalPassiveSelfStackTest(unittest.TestCase):
         self.assertTrue(effects.has_named_state(qi, "루트 확정 3", now=now))
         self.assertGreaterEqual(effects.sum_stat(qi, "crit_rate", now=now), 16.73)
 
+    def test_frika_performance_materializes_self_state_pierce_passive(self) -> None:
+        members = [
+            "라피 : 레드 후드",
+            "레드 후드",
+            "프리카",
+            "민트",
+            "퀀시 : 이스케이프 퀸",
+        ]
+        squad = spec.build_squad(members)
+        compiled = compile_moris_squad(squad)
+        fi = members.index("프리카")
+        config = {"duration": 5.0, "first_burst_time": 3.0, "rng_mode": "expected"}
+        enemy = EnemyStaticProfile(
+            defense=float(DEFAULT_ENEMY.get("def", 31784.0)),
+            element=DEFAULT_ENEMY.get("code"),
+            core_uptime=0.0,
+            core_px=0.0,
+            duration=5.0,
+        )
+        policy = compile_burst_policy(squad, compiled, config)
+        sink = SimpleDamageScoreSink(compiled, enemy)
+        runtime = BurstRuntime(compiled, policy, enemy, damage_sink=sink)
+        runtime.run(duration=5.0)
+
+        effects = runtime.dispatcher.effects
+        now = 4.0
+        self.assertTrue(effects.has_named_state(fi, "퍼포먼스", now=now))
+        self.assertTrue(effects.has_stat(fi, "pierce_enabled", now=now))
+
 
 if __name__ == "__main__":
     unittest.main()
