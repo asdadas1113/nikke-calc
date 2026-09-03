@@ -18,7 +18,7 @@ CROWN = "크라운"
 ROYAL = "로얄 에타이어 4"
 STACK_EVENT = "stack_reach:릴렉스:20"
 HEAL_EVENT = "event:heal_received"
-SAFE_SELF_ONLY = {"레이드_델타", "레이드_루드밀라루주", "레이드_라피앨리스"}
+SAFE_SELF_ONLY = {"레이드_델타", "레이드_루주", "레이드_라피앨리스"}
 EXTERNAL_PROVIDER = {"스쿼드1", "스쿼드5", "레이드_일레그", "레이드_아스카루드밀라"}
 
 
