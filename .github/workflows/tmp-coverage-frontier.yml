@@ -13,64 +13,34 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Split named-event dependency roots
+      - name: Inspect statless named-state marker shapes
         run: |
           PYTHONPATH=. python - <<'PY'
           from collections import defaultdict
           from context import spec
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.damage_policy import DIRECT_DAMAGE_STATE_STATS, is_direct_damage_buff_runtime_supported
-          from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.engine.score import (
-              _direct_damage_buff_score_supported,
-              _direct_normal_effect_needs_score_support,
-              _direct_skill_state_needs_score_support,
-              _is_patternless_unreachable,
-              _named_buff_event_dependency_score_safe,
-          )
+          from fast_engine.engine.capabilities import CapabilityDisposition
           from fast_engine.research.public_ranking_probe import _source_corpus
 
-          seen=set(); groups=defaultdict(lambda:{'teams':set(),'effects':set(),'rows':[]})
+          seen=set(); markers={}; marker_teams=defaultdict(set)
+          grave_printed=False
           for members, source_name in _source_corpus():
               if members in seen: continue
               seen.add(members)
               squad=compile_moris_squad(spec.build_squad(list(members)))
               for e in squad.effects:
-                  if e.effect_type!='buff' or (e.stat or '') not in DIRECT_DAMAGE_STATE_STATS or _is_patternless_unreachable(e): continue
-                  if not (_direct_normal_effect_needs_score_support(e) or _direct_skill_state_needs_score_support(e)): continue
-                  if not is_direct_damage_buff_runtime_supported(e): continue
-                  if _direct_damage_buff_score_supported(squad,e): continue
-                  if _named_buff_event_dependency_score_safe(squad,e): continue
-                  keys=TriggerDispatcher._named_event_keys(e)
-                  if not keys: continue
-                  statuses=[]
-                  provider_rows=[]
-                  for key in keys:
-                      name=key[len('event:'):]
-                      providers=[p for p in squad.effects if p.effect_id!=e.effect_id and p.effect_type=='buff' and p.name==name]
-                      if not providers:
-                          statuses.append((key,'no_provider'))
-                          continue
-                      for p in providers:
-                          if TriggerDispatcher._named_event_keys(p): reason='provider_has_named_event'
-                          elif p.parameters.get('event_scope') not in (None,'','squad','recipients'): reason='bad_event_scope'
-                          elif not p.target_spec.runtime_supported: reason='provider_target_unsupported'
-                          elif TriggerDispatcher.is_executable_effect(p): reason='provider_executable'
-                          elif TriggerDispatcher._named_event_marker_nop_shape_supported(p): reason='provider_moris_nop_marker'
-                          else: reason='provider_not_executable'
-                          statuses.append((key,reason))
-                          provider_rows.append((key,reason,p))
-                  sig=tuple(sorted(statuses))
-                  g=groups[sig]; g['teams'].add(source_name)
-                  label=f"{squad.members[e.actor].name}|{e.name}|{e.stat}"
-                  g['effects'].add(label); g['rows'].append((source_name,label,e,provider_rows))
+                  if e.effect_type=='buff' and not (e.stat or '') and e.capability.disposition is CapabilityDisposition.PLANNED:
+                      key=(squad.members[e.actor].name,e.name,repr(e.target_spec),e.duration,e.max_stack,tuple(sorted(e.parameters)),tuple((r.event_key,r.mode.value) for r in e.triggers),tuple(r.mode.value for r in e.condition_rules))
+                      markers.setdefault(key,e); marker_teams[key].add(source_name)
+              if '그레이브' in members and not grave_printed:
+                  grave_printed=True
+                  print('GRAVE_TEAM', source_name, members)
+                  for e in squad.effects:
+                      if squad.members[e.actor].name=='그레이브':
+                          print('GRAVE_EFFECT',repr(e))
 
-          for sig,g in sorted(groups.items(), key=lambda kv:(-len(kv[1]['teams']),kv[0])):
-              print(f'GROUP|teams={len(g["teams"])}|effects={len(g["effects"])}|sig={sig}')
-              print(' teams=',sorted(g['teams']))
-              for label in sorted(g['effects']): print(' effect=',label)
-              for source,label,e,providers in g['rows'][:8]:
-                  print(' ROW',source,label,'consumer=',repr(e))
-                  for key,reason,p in providers:
-                      print('   PROVIDER',key,reason,repr(p))
+          print('MARKER_COUNT',len(markers))
+          for key,e in sorted(markers.items(),key=lambda kv:(-len(marker_teams[kv[0]]),kv[0][0],str(kv[0][1]))):
+              print('MARKER|teams=',len(marker_teams[key]),'sources=',sorted(marker_teams[key]))
+              print(' ',repr(e))
           PY
