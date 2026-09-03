@@ -13,13 +13,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Trace RHQ burst stage drift
+      - name: Trial burst action frame quantization
         shell: bash
         run: |
           python - <<'PY'
-          from calculator.timeline import DEFAULT_ENEMY, simulate
+          from math import ceil
+          from calculator.timeline import DEFAULT_ENEMY, DT, simulate
+          from calculator.sim_result import _is_normal
           from context import spec
-          from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.burst import BurstMachine, compile_burst_policy
           from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
@@ -27,27 +29,38 @@ jobs:
           from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
 
           MEMBERS=("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸")
-          DURATION=35.0
+          TARGET="퀀시 : 이스케이프 퀸"; DURATION=60.0
           CONFIG={"duration":DURATION,"first_burst_time":3.0,"rng_mode":"expected"}
           squad=spec.build_squad(list(MEMBERS)); config=spec.build_config(squad,dict(CONFIG))
           compiled=compile_moris_squad(squad); blockers=static_score_blockers(compiled)
           if blockers: raise RuntimeError(blockers)
-          policy=compile_burst_policy(squad,compiled,dict(CONFIG))
+          policy=compile_burst_policy(squad,compiled,dict(CONFIG)); idx=MEMBERS.index(TARGET)
           enemy=dict(DEFAULT_ENEMY); enemy["def"]=55000.0; enemy["code"]="작열"; enemy["core_px"]=10.0
           profile=EnemyStaticProfile(defense=55000.0,element="작열",core_uptime=1.0,core_px=10.0,duration=DURATION)
 
           moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=True)
-          for r in moris.log.burst_log:
-              if float(r.t) <= DURATION:
-                  print(f"M_LOG|t={float(r.t):.6f}|event={r.event}|caster={getattr(r,'caster',None)}|stage={getattr(r,'stage',None)}")
+          m_starts=[float(r.t) for r in moris.log.burst_log if r.event=="full_burst 시작"]
+          m_normal=sum(float(h.damage) for h in moris.hits if h.caster==TARGET and _is_normal(h))
 
-          sink=SimpleDamageScoreSink(compiled,profile)
-          runtime=BurstRuntime(compiled,policy,profile,damage_sink=sink)
-          obs=StaticNormalAttackObserver(runtime,duration=DURATION)
-          rr=runtime.run(duration=DURATION,score_observer=obs)
-          obs.finish(events_processed=rr.events_processed)
-          for t,actor,stage in rr.casts:
-              print(f"F_CAST|t={t:.6f}|caster={compiled.names[actor]}|stage={stage}")
-          print("F_STARTS|"+",".join(f"{x:.6f}" for x in rr.full_burst_starts))
-          print("F_ENDS|"+",".join(f"{x:.6f}" for x in rr.full_burst_ends))
+          def fast(label):
+              sink=SimpleDamageScoreSink(compiled,profile)
+              runtime=BurstRuntime(compiled,policy,profile,damage_sink=sink)
+              obs=StaticNormalAttackObserver(runtime,duration=DURATION)
+              rr=runtime.run(duration=DURATION,score_observer=obs)
+              normal=obs.finish(events_processed=rr.events_processed)
+              value=float(normal.char_total[idx])
+              print(f"RESULT|set={label}|normal={value:.3f}|err={value/m_normal-1:.8f}")
+              print(f"STARTS|set={label}|"+",".join(f"{x:.6f}" for x in rr.full_burst_starts))
+              return value
+
+          base=fast("base")
+          orig_schedule=BurstMachine._schedule
+          def frame_schedule(self,scheduler,time,kind,*,stage=None):
+              t=float(time)
+              framed=ceil((t-1e-9)/DT)*DT
+              return orig_schedule(self,scheduler,framed,kind,stage=stage)
+          BurstMachine._schedule=frame_schedule
+          framed=fast("burst_frame")
+          print("M_STARTS|"+",".join(f"{x:.6f}" for x in m_starts))
+          print(f"DELTA|base_err={base/m_normal-1:.8f}|framed_err={framed/m_normal-1:.8f}")
           PY
