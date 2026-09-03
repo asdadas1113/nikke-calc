@@ -13,31 +13,50 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Trace Moris stage buff activation path
+      - name: Trace support-state burst gating
         shell: bash
         run: |
           python - <<'PY'
           from calculator.timeline import DEFAULT_ENEMY, simulate
           from calculator.buff_manager import BuffManager
           from context import spec
+          from fast_engine.engine.compiler import compile_moris_squad
 
           names=["라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸"]
           squad=spec.build_squad(names)
+          cp=compile_moris_squad(squad)
+          actor=cp.names.index('라피 : 레드 후드')
+          print('RAPI_RELEVANT_EFFECTS')
+          for e in cp.members[actor].effects:
+              conds=[(r.mode.value,r.key,r.value) for r in e.condition_rules]
+              if e.name=='전투 보조' or e.name=='계승되는 힘 3' or any(r.key=='전투 보조' for r in e.condition_rules):
+                  print({'id':e.effect_id,'name':e.name,'type':e.effect_type,'stat':e.stat,'value':e.value,
+                         'duration':e.duration,'triggers':[(r.event_key,r.mode.value,r.threshold) for r in e.triggers],
+                         'conditions':conds,'target':e.target,'params':e.parameters})
+
           cfg=spec.build_config(squad,{'duration':130.0,'first_burst_time':3.0,'rng_mode':'expected'})
           enemy=dict(DEFAULT_ENEMY); enemy['def']=55000.0; enemy['code']='작열'; enemy['core_px']=10.0
-
-          orig=BuffManager._activate
-          def wrapped(self,eff,caster,t,suppress_event=False):
-              watch=eff.get('name')=='무대, 시작할게. 3' and 120.0<=float(t)<=130.0
-              if watch:
-                  before=[(ab.caster,ab.target_chars,ab.activated_at,ab.expires_at,ab.stack) for ab in self._active if ab.effect is eff]
-                  print('ACTIVATE_BEFORE',round(float(t),9),'caster',caster,'before',before)
-              out=orig(self,eff,caster,t,suppress_event=suppress_event)
-              if watch:
-                  after=[(ab.caster,ab.target_chars,ab.activated_at,ab.expires_at,ab.stack) for ab in self._active if ab.effect is eff]
-                  print('ACTIVATE_AFTER',round(float(t),9),'after',after)
+          oa=BuffManager._activate; on=BuffManager.notify
+          def active_state(self,t):
+              return [(ab.effect.get('name'),ab.caster,ab.target_chars,ab.activated_at,ab.expires_at)
+                      for ab in self._active if ab.effect.get('name')=='전투 보조'
+                      and (ab.expires_at==float('inf') or ab.expires_at>t)]
+          def wa(self,eff,caster,t,suppress_event=False):
+              if 124.0<=float(t)<=130.0 and eff.get('name') in {'전투 보조','계승되는 힘 3'}:
+                  print('M_ACTIVATE_BEFORE',round(float(t),9),eff.get('name'),'caster',caster,'state',active_state(self,t),
+                        'cond',eff.get('trigger',{}).get('condition'))
+              out=oa(self,eff,caster,t,suppress_event=suppress_event)
+              if 124.0<=float(t)<=130.0 and eff.get('name') in {'전투 보조','계승되는 힘 3'}:
+                  print('M_ACTIVATE_AFTER',round(float(t),9),eff.get('name'),'state',active_state(self,t))
               return out
-          BuffManager._activate=wrapped
+          def wn(self,event,t,caster,**ctx):
+              if 124.0<=float(t)<=130.0 and caster=='라피 : 레드 후드' and event in {'burst_cast','full_burst_start','full_burst_end'}:
+                  print('M_NOTIFY_BEFORE',round(float(t),9),event,'state',active_state(self,t))
+              out=on(self,event,t,caster,**ctx)
+              if 124.0<=float(t)<=130.0 and caster=='라피 : 레드 후드' and event in {'burst_cast','full_burst_start','full_burst_end'}:
+                  print('M_NOTIFY_AFTER',round(float(t),9),event,'state',active_state(self,t))
+              return out
+          BuffManager._activate=wa; BuffManager.notify=wn
           simulate(squad,config=cfg,enemy=enemy,seed=42,verbose=False)
-          BuffManager._activate=orig
+          BuffManager._activate=oa; BuffManager.notify=on
           PY
