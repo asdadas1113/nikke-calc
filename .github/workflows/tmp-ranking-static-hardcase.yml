@@ -43,14 +43,8 @@ jobs:
           fast_total=score_static_squad(compiled,policy,profile)
           fast_normal=score_static_normal_squad(compiled,policy,profile,duration=DURATION)
           f_total=float(fast_total.char_total[idx]); f_normal=float(fast_normal.char_total[idx]); f_skill=f_total-f_normal
+
           print(f"TOTAL|m={m_total:.3f}|f={f_total:.3f}|err={f_total/m_total-1:.8f}")
           print(f"NORMAL|m={m_normal:.3f}|f={f_normal:.3f}|err={f_normal/m_normal-1:.8f}|m_shots={m_shots}")
           print(f"SKILL|m={m_skill:.3f}|f={f_skill:.3f}|err={f_skill/m_skill-1:.8f}")
-
-          for cp in (30.0,60.0,90.0,120.0,150.0,180.0):
-              mn=sum(float(h.damage) for h in moris.hits if h.caster==TARGET and _is_normal(h) and float(h.t)<cp-1e-9)
-              mc=len({round(float(h.t),9) for h in moris.hits if h.caster==TARGET and _is_normal(h) and float(h.t)<cp-1e-9})
-              fn=score_static_normal_squad(compiled,policy,profile,duration=cp)
-              fv=float(fn.char_total[idx])
-              print(f"CUM_NORMAL|t={cp:.0f}|m={mn:.3f}|f={fv:.3f}|err={fv/mn-1:.8f}|m_shots={mc}")
           PY
