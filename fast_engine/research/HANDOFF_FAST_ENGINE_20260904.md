@@ -8,253 +8,257 @@
 
 **`master`는 수정하거나 병합하지 않는다.**
 
-현재 핵심 runtime commit:
+가장 먼저 읽을 문서:
 
+1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260904.md`
+2. `fast_engine/research/CROWN_SELF_STACK_HEAL_CHECKPOINT_20260904.md`
+3. `fast_engine/research/COVERAGE_FRONTIER_CHECKPOINT_20260904.md`
+4. `fast_engine/research/TIMING_SEMANTICS_RANKING_CHECKPOINT_20260904.md`
+5. `fast_engine/research/HANDOFF_FAST_ENGINE_20260903.md`
+
+현재 permanent 핵심 commits:
+
+- `6a4c8346062eb3284ae34558d93675184b4ab154` — `fix: support self-stack heal-received bridge`
 - `46af96866b9462ec22455b9c9f5121cfa3b35bdd` — `fix: support last-bullet damage delivery`
 - `0f522925b2cac86ab74329a9ce4d02347f739abe` — `fix: align Fast timing with Moris outer ticks [timing-apply]`
-
-그 전 generic ranking fixes:
-
 - `10e3954ae864e2139ae6a32879393504a071b6e0` — adjacent-target regression correction
 - `8a12ee8c8ef8c0f7d05525f0f1c71176306c167e` — static adjacent-target scope correction
 - `a5b247b08c30dbf89348a0b263d502d0f06cf5f9` — runtime adjacent-target correction
 - `28428dd601ae3ce64a219188afd894b1242a5eb4` — self-state conditional passive sync
 - `7695efcff56bd59a5e352a1462f4bda9e61cefed` — self-stack conditional passive sync
 
-재개 시 우선 읽을 문서:
+public ranking harness fixes:
 
-1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260904.md`
-2. `fast_engine/research/COVERAGE_FRONTIER_CHECKPOINT_20260904.md`
-3. `fast_engine/research/TIMING_SEMANTICS_RANKING_CHECKPOINT_20260904.md`
-4. `fast_engine/research/HANDOFF_FAST_ENGINE_20260903.md`
-5. `fast_engine/research/SELF_STATE_PASSIVE_RANKING_CHECKPOINT_20260903.md`
-6. `fast_engine/research/RANKING_CORE_CROSSOVER_CHECKPOINT_20260903.md`
+- `27b389ceec3f5a5ecf2b6c28b0091aa36092ebb3` — exact membership dedupe before ranking validation
+- `5818329270962ef9ec46c8e259f9d79dd787d726` — dedupe contract regression
 
 ---
 
 ## 1. 현재 phase
 
-certified pair의 static ranking hard case는 닫았고, 2026-09-04 후반부터 coverage expansion을 다시 시작했다.
+certified pair의 static ranking hard case는 닫혔고, 현재는 **coverage expansion** 단계다.
 
 Fast-certified real public memberships:
 
 - `컨트롤_미란다미하라`
 - `레이드_레드후드퀀시`
 
-표준 public source accounting:
+표준 public accounting:
 
-- source cases: 24 non-`지그_*` five-person cases
-- exact ordered-membership dedupe 후 ranking candidates: 23
-- certified memberships: 2
-- coverage gaps: 21
+- source cases: `24`
+- exact ordered-membership unique candidates: `23`
+- certified memberships: `2`
+- coverage gaps: `21`
 
 24→23은 coverage 변화가 아니라 duplicate ordered membership 제거다.
 
+최종 production public audit:
+
+- clean relative error median: `+0.0626832%`
+- min: `+0.0349533%`
+- max: `+0.0904131%`
+- pairwise accuracy: `1.0`
+- top-N recall: `1.0`
+
 ---
 
-## 2. timing checkpoint 핵심 결론
+## 2. timing 상태
 
-이전 DEF/core near-tie ranking inversion의 주요 원인은 result-fitting이 아니라 Moris/Fast 사이의 generic timing semantics 차이였다.
+DEF/core near-tie inversion은 generic Moris/Fast timing semantics 수정으로 닫혔다.
 
-정식 Fast runtime에 다음을 반영했다.
+정식 runtime에 반영된 핵심:
 
 1. Moris repeated-add outer-frame timestamp observer
-2. burst ready check의 `-1e-9` epsilon contract
-3. finite effect의 true-expiry semantics
-4. dynamic charge weapon-change 진입 시 existing magazine inheritance
-5. inherited magazine 소진 후 next outer tick refill edge
+2. burst ready check `-1e-9` epsilon contract
+3. finite effect true-expiry semantics
+4. dynamic charge weapon-change existing magazine inheritance
+5. inherited magazine 소진 후 next outer-tick refill edge
 6. max-ammo/reload-only 변화가 in-flight charge를 restart하지 않는 semantics
+
+정식 ranking stress:
+
+- core grid `6/6`
+- DEF grid `11/11`
+- enemy-code grid `5/5`
+
+known DEF55 near-tie regression은 현재도 통과한다.
 
 중요:
 
 - global 1/60 combat loop 없음
-- rapid/MG frame projection 없음
 - character-name hack 없음
 - fitted coefficient 없음
 - Moris `calculator/` semantics 변경 없음
 
-세부 근거는 `TIMING_SEMANTICS_RANKING_CHECKPOINT_20260904.md` 참조.
+MG v2 / phase guard / frame-expiry 실험은 별도 temporary diagnostics이며 permanent runtime에 들어가지 않았다.
 
 ---
 
-## 3. 정식 ranking stress 결과
+## 3. 첫 coverage 확장 — `last_bullet`
 
-공통:
+Privaty `LD 어설트 2/3`에서 post-shot `last_bullet` damage delivery를 generic하게 열었다.
 
-- duration 180s
-- first burst 3.0s
-- expected RNG
-- parts / immunity chronology / element-window chronology 없음
-- pair: Miranda/Mihara vs Red Hood/Quency
+- runtime `46af968...`
+- regression `4a3d6f1...`
+- Moris/Fast LD2 activation `6 vs 6`
+- damage relative error 약 `-0.00006991%`
+- named enemy state `타겟 지정` gating도 expiry 포함 정상
 
-최종 permanent timing runtime에서 monkey patch 없이 실행한 결과:
-
-- core grid: `6/6` order agreement
-- DEF grid: `11/11` order agreement
-- enemy-code grid: `5/5` order agreement
-
-가장 중요한 near-tie:
-
-`DEF=55,000 / code=작열 / core_px=10`
-
-- Moris margin: `+0.10477149%`
-- Fast margin: `+0.07771104%`
-- order: agree
-
-`DEF=60,000 / code=작열 / core_px=10`
-
-- Moris margin: `-0.45248086%`
-- Fast margin: `-0.48107045%`
-- order: agree
-
-즉 crossover 위치와 slope도 매우 가깝게 맞는다.
-
-stress workflow run:
-
-- `33770526797` — success
+public blocker는 네 팀에서 제거됐지만 다른 blockers가 남아 certified count는 그대로 2다.
 
 ---
 
-## 4. absolute error 상태
+## 4. Crown `heal_received` 재검토 — 좁은 self-chain 채택
 
-대표 `DEF=60k / 작열 / core_px=10`에서:
+이전 `COVERAGE_FRONTIER_CHECKPOINT_20260904.md`의 Crown 보류는 **arbitrary heal chronology에 대해서는 여전히 맞다.**
 
-- Miranda/Mihara Fast team error: `+0.01781335%`
-- Red Hood/Quency Fast team error: `+0.04654626%`
+후속 provider audit에서 self-only Crown 팀은 다음 generic chain만 소유하면 된다는 것을 확인했다.
 
-이전 RHQ +1~2% 수준의 bias가 사실상 대부분 제거됐다.
+`hit_count:43`
+→ `릴렉스` self stack
+→ 20 stack reach
+→ self reset
+→ self `heal_hp_pct`
+→ recipient `event:heal_received`
+→ `로얄 에타이어 4`
 
-core 0처럼 damage composition이 크게 달라지는 지점에서는 RHQ absolute error가 약 +1.26%까지 남지만 ranking direction은 유지된다.
+production commit:
 
-따라서 현재 issue는 더 이상 certified pair의 near-tie ranking inversion이 아니다.
+- `6a4c8346062eb3284ae34558d93675184b4ab154`
 
----
+표준 `레이드_델타` 180초 score-runtime parity:
 
-## 5. adjacent-target correction도 유지
+- Moris 43-hit thresholds: `234`
+- Fast: `234`
+- Moris self-heals: `11`
+- Fast stack-reach/heal-received: `11/11`
+- `로얄 에타이어 3/4`: `11/11`
+- max heal timestamp absolute diff: 약 `0.1790818s`
+- residual `릴렉스` stack: `14`
 
-이번 timing 조사 중 별개 generic bug였던 `allies_adjacent:N` semantics도 이미 정식 수정되어 있다.
+self-only Crown teams에서 blocker 제거:
 
-Moris semantics:
-
-- caster 포함
-- immediate left
-- immediate right
-- `N`은 adjacent neighbors에만 적용
-
-예: actor index 3, N=2 → `(3,2,4)`.
-
-Rouge `소드 코인` self buff 누락을 설명했던 문제다.
-
-이 수정은 timing patch와 별개이며 되돌리지 않는다.
-
----
-
-## 6. 채택하지 않은 timing 실험
-
-다음은 정식 구현하지 않았다.
-
-- mathematical `ceil(frame)` snap
-- rapid full-frame projection
-- observed-frame rapid timestamp projection
-- `WEAPON_BOUNDARY` phase 강제 변경
-- same-frame actor ordering을 위한 broad scheduler reshuffle
-
-이들은 either ranking 개선이 없거나 오히려 악화됐다.
-
-rapid path는 현재 그대로 둔다.
-
----
-
-## 7. coverage frontier 재개 결과
-
-21 coverage gaps를 mechanic 기준으로 다시 분류했다.
-
-첫 조사에서 다음 broad 후보는 보류했다.
-
-### Crown `heal_received`
-
-`로얄 에타이어 4`는 heal chronology가 comparison-critical이므로 HP/heal event chronology를 열기 전에는 fail closed 유지.
-
-### Little Mermaid `squad_ammo_consume`
-
-real `스쿼드1` 180초에서:
-
-- Moris squad ammo consume 34,587
-- Fast physical shots 34,476
-- 일부 500-shot crossing이 약 +0.6~0.7초 어긋남
-
-team-global threshold가 current cadence approximation을 증폭하므로 아직 인증하지 않는다.
-
-### broad `bonus_damage`
-
-하나의 mechanic이 아니었다. Privaty last-bullet, Isabel pending B3, Cinderella stack-count, Asuka state-end/enemy-stack으로 분리된다.
-
-### reload/max-ammo broad enable
-
-Fast live runtime은 이미 있으나 public blockers의 상당수가 unsafe recipient의 weapon-change/control에서 파생된다. safety를 우회하지 않는다.
-
-세부 자료는 `COVERAGE_FRONTIER_CHECKPOINT_20260904.md` 참조.
-
----
-
-## 8. 첫 coverage 확장 — `last_bullet` damage delivery
-
-Privaty `LD 어설트 2/3`에서 작은 generic gap을 확인했다.
-
-Fast에는 이미 static/dynamic post-shot last-bullet boundary가 있었고 damage sink safe event key만 빠져 있었다.
-
-정식 변경:
-
-- `46af96866b9462ec22455b9c9f5121cfa3b35bdd` — `_SAFE_EVENT_KEYS`에 `last_bullet` 1줄 추가
-- `4a3d6f1378f482d41d6bcc8676150509a91d2474` — real Privaty named-state gating regression
-
-Moris parity probe, burst 없음 35초:
-
-- LD2 activation 6 vs 6
-- LD3 0 vs 0
-- LD2 damage relative error 약 `-0.00006991%`
-
-named-state probe:
-
-- `타겟 지정` active at t=3.1 → LD3 fires
-- duration expiry after t=13.0 → t=13.1 last-bullet에서 LD3 추가 발동 없음
-
-focused last-bullet regression 8/8 success.
-
-public blocker scan 후:
-
-- source24 / unique23 / certified2 / gaps21 유지
-- Privaty LD2/LD3 blockers: 0
-
-영향 팀 4개:
-
-- `스쿼드2`
+- `레이드_델타`
+- `레이드_루주`
 - `레이드_라피앨리스`
-- `레이드_아니스서머메이든`
-- `레이드_트리나홍련`
 
-다른 cadence/weapon/control blockers가 남아 아직 새 membership이 certified되지는 않았다.
+외부 heal/lifesteal provider 가능 팀은 계속 fail closed:
+
+- `스쿼드1`
+- `스쿼드5`
+- `레이드_일레그`
+- `레이드_아스카루드밀라`
+
+따라서 **Crown self-only chain은 더 이상 skip 대상이 아니지만, arbitrary/external heal chronology는 계속 미지원**이다.
+
+세부 근거는 `CROWN_SELF_STACK_HEAL_CHECKPOINT_20260904.md` 참조.
+
+---
+
+## 5. Crown 이후 public blocker 상태
+
+최종 unique-23 blocker-family counts:
+
+- `skill_state_delivery`: `71`
+- `cadence`: `68`
+- `normal_delivery`: `68`
+- `skill_damage`: `29`
+- `weapon_change`: `12`
+- `control`: `8`
+- `normal_state`: `7`
+
+unsupported families: `0`
+
+Crown bridge로 certified membership 수는 바로 늘지 않았다.
+
+self-only Crown 세 팀의 다음 blockers:
+
+### `레이드_델타`
+
+- Little Mermaid `거품 난사` — `sequential_damage:10`
+- Asuka `섬멸` — `bonus_damage`
+
+### `레이드_루주`
+
+- Cinderella HP-derived / charge state
+- Maiden delivery / HP-derived / sequential damage
+
+### `레이드_라피앨리스`
+
+- Alice control / pierce
+- cadence
+- Little Mermaid sequential damage
+
+---
+
+## 6. public ranking harness 계약
+
+`public_ranking_probe.py`는 source accounting과 ranking candidate identity를 분리한다.
+
+- source rows는 24개 모두 계산/보존
+- ranking validator에는 exact ordered membership 23개만 전달
+- duplicate source memberships가 standardized scenario에서 서로 다른 deterministic score/safety evidence를 내면 assertion으로 fail closed
+
+이 수정은 coverage 숫자를 인위적으로 바꾸는 것이 아니라 기존 문서 계약을 코드에 맞춘 것이다.
+
+---
+
+## 7. 검증 상태
+
+Crown production 승격 전:
+
+- Fast full suite `221 tests` pass
+- structural 180s score median 약 `88.18ms`
+
+최종 production public audit:
+
+- source24 / unique23 / certified2 / gaps21
+- pairwise `1.0`
+- top-N recall `1.0`
+- Crown intended self-only/external split 확인
+- dedicated Crown + near-tie + dedupe regression `7/7` pass
+
+최종 canonical CI도 success:
+
+- Fast sub-suites
+- engine unit tests
+- optimizer unit tests
+- bridge smoke
+- browser site tests
+- golden snapshot 29개
+
+모두 통과했다.
+
+---
+
+## 8. 계속 보류하는 축
+
+다음은 broad-enable하지 않는다.
+
+- arbitrary/external `heal_received` chronology
+- Little Mermaid `squad_ammo_consume`
+- broad weapon-change
+- unsafe recipient를 무시한 reload/max-ammo broad enable
+- broad `bonus_damage`
+- HP-derived state를 근거 없이 상수화
+
+Little Mermaid `squad_ammo_consume`는 real 180초에서 Moris 34,587 vs Fast physical shots 34,476이었고 일부 500-shot crossing이 약 +0.6~0.7초 늦어지는 구간이 있어 보류했다.
 
 ---
 
 ## 9. 다음 단일 checkpoint
 
-다음 mechanic을 단순 stat 빈도로 고르지 않는다.
+**post-Crown blocker frontier를 다시 정적 재분류한다.**
 
-이미 보류 근거가 있는 축은 건너뛴다.
+순서:
 
-- Crown heal chronology
-- Little Mermaid squad-ammo chronology
-- broad weapon-change
-- unsafe recipient를 무시한 reload/max-ammo broad enable
-
-다음 작업:
-
-1. 남은 repeated damage-delivery blockers를 trigger/target/condition shape로 묶는다.
-2. 같은 root cause를 공유하고 HP chronology/weapon replacement를 새로 요구하지 않는 작은 generic slice를 찾는다.
-3. real effect shape probe → Moris parity → 최소 구현 → focused regression 순서를 유지한다.
-4. 한 번에 하나의 mechanic만 확장한다.
+1. unique 21 gap teams의 remaining blockers를 trigger/target/condition/provider root로 묶는다.
+2. raw family count가 아니라 여러 팀에서 반복되면서 chronology가 이미 Fast에 존재하는 root를 우선한다.
+3. HP chronology / weapon replacement / team-global ammo chronology를 새로 요구하는 축은 건너뛴다.
+4. real effect shape probe → Moris semantic/parity → 최소 generic implementation → focused regression.
 5. certified membership이 실제 증가하면 standardized public audit + ranking validation을 즉시 다시 실행한다.
+
+현재 우선 탐색 방향은 repeated `normal_delivery` / `skill_state_delivery` / 작은 `skill_damage` slice다.
 
 **optimizer production integration은 아직 하지 않는다.**
 
@@ -275,15 +279,10 @@ public blocker scan 후:
 
 ---
 
-## 11. cleanup 목표 상태
+## 11. cleanup 상태
 
-조사용 temporary workflow는 checkpoint 종료 전에 제거한다.
+Crown 조사에만 사용한 temporary probe/helper/workflow는 이번 checkpoint에서 제거한다.
 
-최종 `.github/workflows`에는 반드시:
+별도 timing/river 연구에 쓰이는 temporary diagnostics는 그 연구 checkpoint가 닫힐 때까지 유지한다.
 
-- `ci.yml`
-- `pages.yml`
-
-만 남겨야 한다.
-
-최종 normal CI 성공 여부를 확인한 뒤 checkpoint를 닫는다.
+`master`는 그대로 둔다.
