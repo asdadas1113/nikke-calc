@@ -13,5 +13,69 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Scan public Fast blockers
-        run: PYTHONPATH=. python -m fast_engine.research.public_blocker_frontier
+      - name: Classify unique public coverage gaps
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          from collections import Counter, defaultdict
+          from fast_engine.research.public_blocker_frontier import scan_public_blockers, _conceptual_key
+
+          def family(item: str) -> str:
+              if item.startswith(('normal_delivery:', 'skill_state_delivery:', 'damage_delivery:')):
+                  return 'damage_delivery'
+              if item.startswith('skill_damage:'):
+                  return 'skill_damage'
+              if item.startswith('cadence:'):
+                  return 'cadence'
+              if item.startswith('weapon_change:'):
+                  return 'weapon_change'
+              if item.startswith('control:'):
+                  return 'control'
+              if item.startswith('normal_state:'):
+                  return 'normal_state'
+              if item.startswith('runtime:'):
+                  return 'runtime'
+              if item.startswith('unsupported:'):
+                  return 'unsupported'
+              if item.startswith('probe_error:'):
+                  return 'probe_error'
+              return item.split(':', 1)[0]
+
+          report = scan_public_blockers()
+          unique = {}
+          aliases = defaultdict(list)
+          for row in report['rows']:
+              key = tuple(row['members'])
+              aliases[key].append(row['source_name'])
+              unique.setdefault(key, row)
+
+          gaps = []
+          family_teams = Counter()
+          conceptual_teams = Counter()
+          family_to_teams = defaultdict(list)
+          for members, row in unique.items():
+              raw = tuple(row['blockers']) + tuple('unsupported:' + x for x in row['unsupported'])
+              concepts = tuple(dict.fromkeys(_conceptual_key(x) for x in raw))
+              if not concepts:
+                  continue
+              fams = tuple(sorted({family(x) for x in concepts}))
+              for f in fams:
+                  family_teams[f] += 1
+                  family_to_teams[f].append(row['source_name'])
+              for x in concepts:
+                  conceptual_teams[x] += 1
+              gaps.append((len(concepts), row['source_name'], members, fams, concepts, aliases[members]))
+
+          gaps.sort(key=lambda x: (x[0], x[1]))
+          print(f'UNIQUE_SUMMARY|source={len(report["rows"])}|unique={len(unique)}|certified={len(unique)-len(gaps)}|gaps={len(gaps)}')
+          print('FAMILY_PRESSURE')
+          for f, n in family_teams.most_common():
+              print(f'FAMILY|{f}|teams={n}|names={family_to_teams[f]}')
+          print('TOP_CONCEPTUAL_UNIQUE_TEAMS')
+          for item, n in conceptual_teams.most_common(30):
+              print(f'CONCEPT|teams={n}|{item}')
+          print('ALL_GAPS')
+          for count, name, members, fams, concepts, alias in gaps:
+              print(f'GAP|concepts={count}|{name}|aliases={alias}|families={fams}|members={members}')
+              for item in concepts:
+                  print('  BLOCK|' + item)
+          PY
