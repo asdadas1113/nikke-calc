@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Trial rapid reload completion frame reanchor
+      - name: Trial paired rapid reload frame latching
         shell: bash
         run: |
           python - <<'PY'
@@ -40,6 +40,7 @@ jobs:
           enemy=dict(DEFAULT_ENEMY); enemy["def"]=55000.0; enemy["code"]="작열"; enemy["core_px"]=10.0
           profile=EnemyStaticProfile(defense=55000.0,element="작열",core_uptime=1.0,core_px=10.0,duration=DURATION)
 
+          print("WEAPON|"+repr(compiled.members[idx].weapon))
           ticks=[]; t=0.0
           while t <= DURATION + 1.0:
               ticks.append(t); t += DT
@@ -48,6 +49,9 @@ jobs:
               return ticks[i] if i < len(ticks) else float(deadline)
 
           moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=True)
+          for row in moris.log.reload_log[:20]:
+              if getattr(row,'caster','')==TARGET:
+                  print(f"M_RELOAD|t={float(row.t):.9f}|event={row.event}")
           mstarts=[float(r.t) for r in moris.log.burst_log if r.event=="full_burst 시작"]
           mends=[float(r.t) for r in moris.log.burst_log if r.event=="full_burst 종료"]
           mcaster=[getattr(r,'caster','') for r in moris.log.burst_log if r.event=="stage:3 사용"]
@@ -66,49 +70,42 @@ jobs:
           class O(StaticNormalAttackObserver):
               def __init__(self,*a,**k): self.rows=[]; super().__init__(*a,**k)
               def _score_shots(self,actor,count,*,eval_time):
-                  before=float(self.char_total[actor])
-                  out=super()._score_shots(actor,count,eval_time=eval_time)
-                  if actor==idx:
-                      self.rows.append((float(eval_time),int(count),float(self.char_total[actor])-before))
+                  before=float(self.char_total[actor]); out=super()._score_shots(actor,count,eval_time=eval_time)
+                  if actor==idx: self.rows.append((float(eval_time),int(count),float(self.char_total[actor])-before))
                   return out
-
           def run_fast(label):
-              sink=SimpleDamageScoreSink(compiled,profile)
-              runtime=BurstRuntime(compiled,policy,profile,damage_sink=sink)
-              obs=O(runtime,duration=DURATION)
-              rr=runtime.run(duration=DURATION,score_observer=obs); res=obs.finish(events_processed=rr.events_processed)
-              fcaster=[compiled.names[a] for t,a,s in rr.casts if s=='3']
-              frows=defaultdict(lambda:[0,0.0])
+              sink=SimpleDamageScoreSink(compiled,profile); runtime=BurstRuntime(compiled,policy,profile,damage_sink=sink)
+              obs=O(runtime,duration=DURATION); rr=runtime.run(duration=DURATION,score_observer=obs); res=obs.finish(events_processed=rr.events_processed)
+              fcaster=[compiled.names[a] for t,a,s in rr.casts if s=='3']; frows=defaultdict(lambda:[0,0.0])
               for shot_t,c,d in obs.rows:
-                  k=classify(shot_t,rr.full_burst_starts,rr.full_burst_ends,fcaster)
-                  frows[k][0]+=c; frows[k][1]+=d
-              total=float(res.char_total[idx])
-              print(f"TOTAL|set={label}|m={m_normal:.3f}|f={total:.3f}|err={total/m_normal-1:.8f}")
+                  k=classify(shot_t,rr.full_burst_starts,rr.full_burst_ends,fcaster); frows[k][0]+=c; frows[k][1]+=d
+              total=float(res.char_total[idx]); print(f"TOTAL|set={label}|f={total:.3f}|err={total/m_normal-1:.8f}")
               for k in ('OUT','FB_OTHER','FB_Q'):
                   mc,md=mrows[k]; fc,fd=frows[k]
-                  print(f"PART|set={label}|{k}|m_shots={mc}|f_shots={fc}|delta={fc-mc}|m_dmg={md:.3f}|f_dmg={fd:.3f}|dmg_err={fd/md-1:.8f}")
-              print("STARTS|set="+label+"|"+",".join(f"{x:.6f}" for x in rr.full_burst_starts))
+                  print(f"PART|set={label}|{k}|m_shots={mc}|f_shots={fc}|delta={fc-mc}|dmg_err={fd/md-1:.8f}")
               return total
 
           base=run_fast('base')
+          orig_after=DynamicRapidCadenceRuntime._after_shot
           orig_finish=DynamicRapidCadenceRuntime._finish_nonshot_phase
-          snap_count=0
-          snap_examples=[]
+          actual_logs=[]
+          def patched_after(self,st,shot_time):
+              orig_after(self,st,shot_time)
+              if st.phase=='reload_wait':
+                  before=st.phase_end; st.phase_end=frame_at_or_after(before)
+                  if self._states.get(st.actor) is st and st.actor==idx and len(actual_logs)<20:
+                      actual_logs.append(('wait',shot_time,before,st.phase_end))
           def patched_finish(self,st,transition_time):
-              global snap_count
               was=st.phase
               orig_finish(self,st,transition_time)
               if was=='reload_wait' and st.phase=='reloading':
-                  before=st.phase_end
-                  after=frame_at_or_after(before)
-                  if after > before + 1e-12:
-                      snap_count += 1
-                      if len(snap_examples)<12:
-                          snap_examples.append((st.actor,before,after))
-                      st.phase_end=after
+                  before=st.phase_end; st.phase_end=frame_at_or_after(before)
+                  if self._states.get(st.actor) is st and st.actor==idx and len(actual_logs)<20:
+                      actual_logs.append(('reload',transition_time,before,st.phase_end))
+          DynamicRapidCadenceRuntime._after_shot=patched_after
           DynamicRapidCadenceRuntime._finish_nonshot_phase=patched_finish
-          patched=run_fast('reload_complete_frame')
-          print(f"DELTA|base_err={base/m_normal-1:.8f}|patched_err={patched/m_normal-1:.8f}|snap_count={snap_count}")
-          for actor,b,a in snap_examples:
-              print(f"SNAP|actor={compiled.names[actor]}|deadline={b:.9f}|frame={a:.9f}|delay={a-b:.9f}")
+          paired=run_fast('reload_start_complete_frame')
+          print(f"DELTA|base_err={base/m_normal-1:.8f}|paired_err={paired/m_normal-1:.8f}")
+          for kind,anchor,before,after in actual_logs:
+              print(f"F_PHASE|kind={kind}|anchor={anchor:.9f}|deadline={before:.9f}|frame={after:.9f}|delay={after-before:.9f}")
           PY
