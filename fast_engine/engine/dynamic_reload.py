@@ -410,7 +410,11 @@ class DynamicRapidReloadRuntime:
         for actor in self.actors:
             st = self._states[actor]
             signature = self._signature(actor, now)
-            if signature != st.signature:
+            full = int(signature[2])
+            clamped = st.phase != "reloading" and st.ammo > full
+            if clamped:
+                st.ammo = full
+            if clamped or signature != st.signature:
                 st.signature = signature
                 self._invalidate(st)
             if st.scheduled_time is None:
