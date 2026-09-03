@@ -19,6 +19,7 @@ jobs:
           python - <<'PY'
           from bisect import bisect_left, bisect_right
           from calculator.timeline import DEFAULT_ENEMY, DT, simulate
+          from calculator.sim_result import _is_normal
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.burst_runtime import BurstRuntime
@@ -44,7 +45,7 @@ jobs:
           if bl: raise RuntimeError(bl)
           po=compile_burst_policy(squad,cp,dict(CFG)); actor=cp.names.index('레드 후드')
           moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=False)
-          mts=sorted({float(h.t) for h in moris.hits if h.caster=='레드 후드' and h.skill_name is None})
+          mts=sorted({float(h.t) for h in moris.hits if h.caster=='레드 후드' and _is_normal(h)})
 
           oe=DynamicChargeCadenceRuntime._enter_charge; oa=DynamicChargeCadenceRuntime._after_shot
           of=DynamicChargeCadenceRuntime._finish_nonshot_phase; os=DynamicChargeCadenceRuntime.sync
@@ -107,7 +108,6 @@ jobs:
               if mc!=fc: print(f'BIN|lo={lo}|hi={hi}|m={mc}|f={fc}|delta={fc-mc}')
           print('M_0_20|'+','.join(f'{x:.6f}' for x in mts if x<20))
           print('F_0_20|'+','.join(f'{x:.6f}' for x in fts if x<20))
-          # nearest same-index divergence after allowing tiny floating noise
           for i,(m,f) in enumerate(zip(mts,fts)):
               if abs(m-f)>0.02:
                   print(f'FIRST_INDEX_DIVERGENCE|i={i}|m={m:.9f}|f={f:.9f}|delta={f-m:+.9f}')
