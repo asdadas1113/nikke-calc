@@ -4,141 +4,20 @@ on:
   push:
     branches:
       - fast-engine-phase2-20260901
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  mg-frame-v2:
+  frontier:
+    if: ${{ !contains(github.event.head_commit.message || '', '[skip-coverage-frontier]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Apply MG-only frame-observation v2 and compare Asuka
+      - name: Scan public blocker frontier
         run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          p=Path('fast_engine/engine/dynamic_reload.py')
-          text=p.read_text()
-          text=text.replace(
-              'from .scheduler import EventKind, EventScheduler, ScheduledEvent\n',
-              'from .frame_lattice import moris_next_tick, moris_observed_tick\nfrom .scheduler import EventKind, EventScheduler, ScheduledEvent\n',1)
-          text=text.replace(
-              '    phase_end: float\n    hit_count: int = 0\n',
-              '    phase_end: float\n    nominal_end: float | None = None\n    hit_count: int = 0\n',1)
-          old='''    def _after_shot(self, st: _RapidActorState, shot_time: float) -> None:\n        hits = self._hits_per_shot(st.actor)\n        inter = self._shot_interval(st)\n        st.ammo -= 1\n        st.hit_count += 1\n        st.pellet_count += hits\n        st.last_shot = shot_time\n        st.last_inter = inter\n        st.phase = "reload_wait" if st.ammo <= 0 else "firing"\n        st.phase_end = shot_time + inter\n'''
-          new='''    def _after_shot(self, st: _RapidActorState, shot_time: float) -> None:\n        hits = self._hits_per_shot(st.actor)\n        inter = self._shot_interval(st)\n        st.ammo -= 1\n        st.hit_count += 1\n        st.pellet_count += hits\n        st.last_shot = shot_time\n        st.last_inter = inter\n        st.phase = "reload_wait" if st.ammo <= 0 else "firing"\n        mode = str(self.squad.members[st.actor].weapon.get("fire_mode") or "auto")\n        if mode == "auto_warmup":\n            base = shot_time if st.nominal_end is None else st.nominal_end\n            nominal = base + inter\n            if nominal <= shot_time:\n                st.nominal_end = shot_time\n                st.phase_end = moris_next_tick(shot_time, horizon=self.duration)\n            else:\n                st.nominal_end = nominal\n                st.phase_end = moris_observed_tick(nominal, horizon=self.duration)\n        else:\n            st.phase_end = shot_time + inter\n'''
-          assert old in text; text=text.replace(old,new,1)
-
-          # Base runtime: needed for inherited force-reload and non-control users.
-          old='''        if st.phase == "reload_wait":\n            factor = self._reload_factor(actor, transition_time)\n            st.phase = "reloading"\n            st.phase_end = transition_time + (\n                float(weapon.get("reload_start_delay", 0.0))\n                + float(weapon.get("reload_time", 0.0))\n            ) * factor\n            return\n        if st.phase == "reloading":\n            st.ammo = self._full_ammo(actor, transition_time)\n            factor = self._reload_factor(actor, transition_time)\n            next_shot = transition_time + float(\n                weapon.get("post_reload_delay", 0.0)\n            ) * factor\n            if str(weapon.get("fire_mode") or "auto") == "auto_warmup":\n                machine = self._machine(actor)\n                cap = float(weapon.get("warmup_bullets") or 1.0)\n                cooldown_time = max(float(weapon.get("warmup_cooldown_time") or 1.0), 1e-9)\n                cool_rate = cap / cooldown_time\n                idle = next_shot - st.last_shot\n                if idle > st.last_inter * 1.5:\n                    st.warmup = max(0.0, st.warmup - cool_rate * idle)\n            st.phase = "firing"\n            st.phase_end = next_shot\n            return\n'''
-          new='''        mode = str(weapon.get("fire_mode") or "auto")\n        if st.phase == "reload_wait":\n            factor = self._reload_factor(actor, transition_time)\n            st.phase = "reloading"\n            deadline = transition_time + (\n                float(weapon.get("reload_start_delay", 0.0))\n                + float(weapon.get("reload_time", 0.0))\n            ) * factor\n            if mode == "auto_warmup":\n                st.nominal_end = deadline\n                st.phase_end = moris_observed_tick(deadline, horizon=self.duration)\n            else:\n                st.phase_end = deadline\n            return\n        if st.phase == "reloading":\n            st.ammo = self._full_ammo(actor, transition_time)\n            factor = self._reload_factor(actor, transition_time)\n            next_shot = transition_time + float(\n                weapon.get("post_reload_delay", 0.0)\n            ) * factor\n            if mode == "auto_warmup":\n                if next_shot > transition_time:\n                    next_shot = moris_observed_tick(next_shot, horizon=self.duration)\n                cap = float(weapon.get("warmup_bullets") or 1.0)\n                cooldown_time = max(float(weapon.get("warmup_cooldown_time") or 1.0), 1e-9)\n                cool_rate = cap / cooldown_time\n                idle = next_shot - st.last_shot\n                if idle > st.last_inter * 1.5:\n                    st.warmup = max(0.0, st.warmup - cool_rate * idle)\n                st.nominal_end = next_shot\n            st.phase = "firing"\n            st.phase_end = next_shot\n            return\n'''
-          assert old in text; text=text.replace(old,new,1)
-
-          old='''            st.phase = "reloading"\n            st.phase_end = float(now) + (\n                float(weapon.get("reload_start_delay", 0.0))\n                + float(weapon.get("reload_time", 0.0))\n            ) * factor\n            self._invalidate(st)\n'''
-          new='''            st.phase = "reloading"\n            deadline = float(now) + (\n                float(weapon.get("reload_start_delay", 0.0))\n                + float(weapon.get("reload_time", 0.0))\n            ) * factor\n            if str(weapon.get("fire_mode") or "auto") == "auto_warmup":\n                st.nominal_end = deadline\n                st.phase_end = moris_observed_tick(deadline, horizon=self.duration)\n            else:\n                st.phase_end = deadline\n            self._invalidate(st)\n'''
-          assert old in text; text=text.replace(old,new,1)
-
-          old='''            st = _RapidActorState(\n                actor=actor,\n                ammo=full,\n                phase="firing",\n                phase_end=float(now),\n                signature=self._signature(actor, now),\n            )\n'''
-          new='''            st = _RapidActorState(\n                actor=actor, ammo=full, phase="firing", phase_end=float(now),\n                nominal_end=float(now), signature=self._signature(actor, now),\n            )\n'''
-          assert old in text; text=text.replace(old,new,1)
-          p.write_text(text)
-
-          p=Path('fast_engine/engine/dynamic_rapid.py')
-          text=p.read_text()
-          text=text.replace(
-              'from .dynamic_reload import DynamicRapidReloadRuntime, _RapidActorState\n',
-              'from .dynamic_reload import DynamicRapidReloadRuntime, _RapidActorState\nfrom .frame_lattice import moris_observed_tick\n',1)
-          old='''    def _finish_nonshot_phase(\n        self,\n        st: _RapidActorState,\n        transition_time: float,\n    ) -> None:\n        actor = st.actor\n        weapon = self.squad.members[actor].weapon\n        if st.phase == "reload_wait":\n            factor = self._reload_factor(actor, transition_time)\n            st.phase = "reloading"\n            st.phase_end = transition_time + (\n                float(weapon.get("reload_start_delay", 0.0))\n                + float(weapon.get("reload_time", 0.0))\n            ) * factor\n            return\n        if st.phase == "reloading":\n            st.ammo = self._full_ammo(actor, transition_time)\n            factor = self._reload_factor(actor, transition_time)\n            st.phase = "firing"\n            st.phase_end = transition_time + float(\n                weapon.get("post_reload_delay", 0.0)\n            ) * factor\n            return\n        raise RuntimeError(f"unexpected rapid cadence phase: {st.phase!r}")\n'''
-          new='''    def _finish_nonshot_phase(\n        self,\n        st: _RapidActorState,\n        transition_time: float,\n    ) -> None:\n        actor = st.actor\n        weapon = self.squad.members[actor].weapon\n        mode = str(weapon.get("fire_mode") or "auto")\n        if st.phase == "reload_wait":\n            factor = self._reload_factor(actor, transition_time)\n            st.phase = "reloading"\n            deadline = transition_time + (\n                float(weapon.get("reload_start_delay", 0.0))\n                + float(weapon.get("reload_time", 0.0))\n            ) * factor\n            if mode == "auto_warmup":\n                st.nominal_end = deadline\n                st.phase_end = moris_observed_tick(deadline, horizon=self.duration)\n            else:\n                st.phase_end = deadline\n            return\n        if st.phase == "reloading":\n            st.ammo = self._full_ammo(actor, transition_time)\n            factor = self._reload_factor(actor, transition_time)\n            next_shot = transition_time + float(\n                weapon.get("post_reload_delay", 0.0)\n            ) * factor\n            if mode == "auto_warmup":\n                if next_shot > transition_time:\n                    next_shot = moris_observed_tick(next_shot, horizon=self.duration)\n                # Moris resets next_fire_time to the actual reload-completion\n                # frame before the first post-reload shot. Do not carry the old\n                # magazine's nominal debt across a reload boundary.\n                st.nominal_end = next_shot\n            st.phase = "firing"\n            st.phase_end = next_shot\n            return\n        raise RuntimeError(f"unexpected rapid cadence phase: {st.phase!r}")\n'''
-          assert old in text; text=text.replace(old,new,1)
-          p.write_text(text)
-          PY
-
-          PYTHONPATH=. python - <<'PY'
-          from unittest.mock import patch
-          from calculator.buff_manager import BuffManager
-          from calculator.timeline import DEFAULT_ENEMY, simulate
-          from context import spec
-          from fast_engine.engine.burst import compile_burst_policy
-          from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
-          from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import score_static_squad, static_score_blockers
-          from fast_engine.engine.state import ENEMY
-          from fast_engine.engine.targets import TargetMode
-          from fast_engine.engine.triggers import TriggerMode
-
-          names=['미란다','아스카 : WILLE','브리드 : 사일런트 트랙','헬름','루주']
-          asuka=1; duration=100.0
-          cfg={'duration':duration,'first_burst_time':3.0,'rng_mode':'expected'}
-          enemy=dict(DEFAULT_ENEMY); enemy.update({'def':55000.0,'code':'작열','core_px':10.0})
-          profile=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=duration)
-
-          def build():
-              raw=spec.build_squad(names); return raw,compile_moris_squad(raw)
-          def state_end_safe(squad_obj,effect):
-              keys=[r.event_key or '' for r in effect.triggers]
-              if not keys or any(r.mode is not TriggerMode.EVENT or not k.startswith('event:state_end:') for r,k in zip(effect.triggers,keys)): return False
-              for key in keys:
-                  n=key[len('event:state_end:'):]
-                  ps=[p for p in squad_obj.effects if p.actor==effect.actor and p.effect_id!=effect.effect_id and p.name==n]
-                  if len(ps)!=1: return False
-                  p=ps[0]
-                  if not (p.effect_type=='buff' and p.target_spec.mode is TargetMode.SELF and p.duration is not None and float(p.duration)>=0.0 and p.parameters.get('duration_bullets') is None and TriggerDispatcher.is_executable_effect(p)): return False
-              return True
-          def finite_provider(sink,effect,ref,runtime=False):
-              ps=[p for p in sink.squad.effects if p.actor==effect.actor and p.name==ref]
-              if len(ps)!=1: return None
-              p=ps[0]
-              ok=(p.effect_type=='buff' and p.target_spec.mode is TargetMode.ENEMY and p.duration is not None and float(p.duration)>0.0 and p.max_stack is not None and float(p.max_stack)>1.0 and not p.parameters and TriggerDispatcher.is_executable_effect(p))
-              if not ok: return None
-              if runtime and sink.runtime is not None and not sink.runtime.dispatcher.can_activate_effect(p): return None
-              return p
-          od=SimpleDamageScoreSink._delivery_supported
-          def td(s,e): return od(s,e) or (e.target_spec.mode is TargetMode.ENEMY and state_end_safe(s.squad,e))
-          os=SimpleDamageScoreSink._stack_count_shape_supported
-          def ts(s,e,sp): return os(s,e,sp) or finite_provider(s,e,sp.ref) is not None
-          ors=SimpleDamageScoreSink._stack_count_runtime_supported
-          def trs(s,e):
-              if ors(s,e): return True
-              sp=s.stack_specs.get(e.effect_id)
-              return sp is not None and finite_provider(s,e,sp.ref,True) is not None
-          orr=TriggerDispatcher._enemy_remove_named_state_runtime_supported
-          def trr(d,e):
-              if orr(d,e): return True
-              if not (e.effect_type=='instant' and (e.stat or '')=='remove_named_buff' and e.target_spec.mode is TargetMode.ENEMY and set(e.parameters)=={'target_effect'} and not e.condition_rules and state_end_safe(d.squad,e)): return False
-              ref=str(e.parameters['target_effect']); ps=[p for p in d.squad.effects if p.actor==e.actor and p.name==ref]
-              return len(ps)==1 and ps[0].target_spec.mode is TargetMode.ENEMY and TriggerDispatcher.is_executable_effect(ps[0]) and d.can_activate_effect(ps[0])
-
-          raw_m,_=build(); moris_state=[]
-          on=BuffManager.notify
-          def mn(bm,event,t,caster,**ctx):
-              if caster=='아스카 : WILLE' and event=='event:state_end:섬멸 태세':
-                  st=max((ab.stack for ab in bm._active if ab.caster==caster and ab.effect.get('name')=='안티 AT 필드'),default=0)
-                  moris_state.append((float(t),st))
-              return on(bm,event,t,caster,**ctx)
-          with patch.object(BuffManager,'notify',new=mn):
-              moris=simulate(raw_m,config=spec.build_config(raw_m,cfg),enemy=enemy,seed=42,verbose=False)
-
-          raw,squad=build(); annihilate=next(e for e in squad.effects if e.actor==asuka and e.name=='섬멸' and e.effect_type=='damage')
-          rows=[]; oscore=SimpleDamageScoreSink._score_spec
-          def traced(s,effect_id,*,now,full_burst):
-              ref=s.runtime.dispatcher.effects.named_stack(ENEMY,'안티 AT 필드',now=now) if effect_id==annihilate.effect_id and s.runtime else None
-              before=s.char_total[asuka]
-              out=oscore(s,effect_id,now=now,full_burst=full_burst)
-              if effect_id==annihilate.effect_id: rows.append((float(now),ref,s.char_total[asuka]-before))
-              return out
-          with (patch.object(SimpleDamageScoreSink,'_delivery_supported',new=td), patch.object(SimpleDamageScoreSink,'_stack_count_shape_supported',new=ts), patch.object(SimpleDamageScoreSink,'_stack_count_runtime_supported',new=trs), patch.object(TriggerDispatcher,'_enemy_remove_named_state_runtime_supported',new=trr), patch.object(SimpleDamageScoreSink,'_score_spec',new=traced)):
-              print('BLOCKERS',static_score_blockers(squad))
-              fast=score_static_squad(squad,compile_burst_policy(raw,squad,cfg),profile,duration=duration)
-          print('MORIS_STATE',moris_state)
-          print('FAST_ANNIHILATE',rows)
-          print('MORIS_TOTAL',moris.squad_total)
-          print('FAST_TOTAL',fast.squad_total)
-          print('REL',fast.squad_total/moris.squad_total-1.0)
-          PY
+          python fast_engine/research/public_blocker_frontier.py
