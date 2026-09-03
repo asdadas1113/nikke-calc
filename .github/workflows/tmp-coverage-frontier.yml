@@ -18,6 +18,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Scan public blocker frontier
+      - name: Probe repeated delivery blocker shapes
         run: |
-          python -m fast_engine.research.public_blocker_frontier
+          python -m fast_engine.research.tmp_delivery_blocker_shapes
