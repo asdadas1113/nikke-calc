@@ -13,57 +13,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Compare Moris and Fast burst timelines
+      - name: Inspect Moris burst readiness semantics
         shell: bash
         run: |
           python - <<'PY'
-          from calculator.timeline import DEFAULT_ENEMY, simulate
-          from calculator.buff_manager import BuffManager
-          from context import spec
-          from fast_engine.engine.burst import compile_burst_policy
-          from fast_engine.engine.burst_runtime import BurstRuntime
-          from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.model import EnemyStaticProfile
-
-          names=["라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸"]
-          D=180.0
-          cfg_raw={'duration':D,'first_burst_time':3.0,'rng_mode':'expected'}
-          squad=spec.build_squad(names)
-          cfg=spec.build_config(squad,dict(cfg_raw))
-          enemy=dict(DEFAULT_ENEMY); enemy['def']=55000.0; enemy['code']='작열'; enemy['core_px']=10.0
-
-          moris=[]
-          orig=BuffManager.notify
-          def wrapped(self,event,t,caster,**ctx):
-              if event in {'burst_cast','full_burst_start','full_burst_end'}:
-                  moris.append((round(float(t),9),event,caster))
-              return orig(self,event,t,caster,**ctx)
-          BuffManager.notify=wrapped
-          simulate(squad,config=cfg,enemy=enemy,seed=42,verbose=False)
-          BuffManager.notify=orig
-
-          cp=compile_moris_squad(squad)
-          policy=compile_burst_policy(squad,cp,dict(cfg_raw))
-          profile=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=D)
-          rr=BurstRuntime(cp,policy,profile).run(duration=D)
-
-          mcasts=[x for x in moris if x[1]=='burst_cast']
-          mstarts=sorted(set(t for t,e,c in moris if e=='full_burst_start'))
-          mends=sorted(set(t for t,e,c in moris if e=='full_burst_end'))
-          print('MORIS_CASTS')
-          for x in mcasts: print(x)
-          print('FAST_CASTS')
-          for t,a,stage in rr.casts: print((round(t,9),stage,cp.names[a]))
-          print('MORIS_FB_STARTS',mstarts)
-          print('FAST_FB_STARTS',[round(x,9) for x in rr.full_burst_starts])
-          print('MORIS_FB_ENDS',mends)
-          print('FAST_FB_ENDS',[round(x,9) for x in rr.full_burst_ends])
-
-          print('CYCLE_DRIFT')
-          for i,(ms,fs) in enumerate(zip(mstarts,rr.full_burst_starts),1):
-              me=mends[i-1] if i-1<len(mends) else None
-              fe=rr.full_burst_ends[i-1] if i-1<len(rr.full_burst_ends) else None
-              print(i,'start',ms,round(fs,9),round(fs-ms,9),'end',me,round(fe,9) if fe is not None else None,
-                    round(fe-me,9) if me is not None and fe is not None else None)
-          print('COMPILED_REGEN',[(m.name,m.burst_regen_time) for m in cp.members])
+          import inspect
+          import calculator.timeline as tl
+          names=[n for n in dir(tl) if 'Burst' in n or 'burst' in n.lower()]
+          print('NAMES',names)
+          for n in names:
+              obj=getattr(tl,n)
+              if inspect.isclass(obj) or inspect.isfunction(obj):
+                  try:
+                      src=inspect.getsource(obj)
+                  except Exception:
+                      continue
+                  if 'cooldown' in src.lower() or 'burst' in n.lower():
+                      print('SOURCE_BEGIN',n)
+                      print(src)
+                      print('SOURCE_END',n)
           PY
