@@ -13,72 +13,36 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Validate last-bullet damage semantics
+      - name: Run last-bullet focused tests
+        run: |
+          PYTHONPATH=. python -m unittest \
+            fast_engine.tests.test_damage_last_bullet \
+            fast_engine.tests.test_dynamic_last_bullet_boundary -v
+      - name: Scan public blockers after last-bullet support
         run: |
           PYTHONPATH=. python - <<'PY'
-          from calculator.timeline import simulate, DEFAULT_ENEMY
-          from context import spec
-          from fast_engine.engine.burst import BurstPolicy, BurstSignal
-          from fast_engine.engine.burst_runtime import BurstRuntime
-          from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.last_bullet import simulate_static_last_bullet_boundaries
-          from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.state import ENEMY
-          import fast_engine.engine.damage_runtime as dr
+          from collections import Counter
+          from fast_engine.research.public_blocker_frontier import scan_public_blockers, _conceptual_key
 
-          class TrackingSink(dr.SimpleDamageScoreSink):
-              __slots__ = ('events',)
-              def __init__(self, squad, enemy):
-                  super().__init__(squad, enemy); self.events=[]
-              def _score_spec(self, effect_id, *, now, full_burst):
-                  actor=self._effect_actor.get(effect_id); before=None if actor is None else self.char_total[actor]
-                  fired=super()._score_spec(effect_id, now=now, full_burst=full_burst)
-                  if fired and actor is not None and before is not None:
-                      self.events.append((effect_id,float(now),self.char_total[actor]-before))
-                  return fired
-
-          def enemy(duration):
-              core_px=float(DEFAULT_ENEMY.get('core_px',0.0) or 0.0)
-              return EnemyStaticProfile(defense=float(DEFAULT_ENEMY.get('def',31784.0)), element=DEFAULT_ENEMY.get('code'), core_uptime=1.0 if core_px>0 else 0.0, core_px=core_px, duration=duration)
-
-          old=dr._SAFE_EVENT_KEYS
-          dr._SAFE_EVENT_KEYS=frozenset(set(old)|{'last_bullet'})
-          try:
-              # A. Real Privaty, no burst: use the same static magazine boundaries explicitly.
-              duration=35.0
-              ms=spec.build_squad(['프리바티'])
-              moris=simulate(ms, config={'duration':duration,'rng_mode':'expected','first_burst_time':duration,'max_burst_count':0}, enemy=dict(DEFAULT_ENEMY), seed=42, verbose=True)
-              comp=compile_moris_squad(ms, require_five=False)
-              ld2=next(e for e in comp.effects if e.name=='LD 어설트 2')
-              ld3=next(e for e in comp.effects if e.name=='LD 어설트 3')
-              sink=TrackingSink(comp,enemy(duration)); rt=BurstRuntime(comp,BurstPolicy(duration=duration,first_burst_time=duration,max_burst_count=0,no_burst_actors=frozenset({0})),enemy(duration),damage_sink=sink)
-              rt._broadcast(0.0,'battle_start')
-              rows=simulate_static_last_bullet_boundaries(comp,duration=duration,effect_filter=lambda e:e.effect_id in {ld2.effect_id,ld3.effect_id})
-              for row in rows:
-                  rt.dispatcher.dispatch(BurstSignal(row.time,'last_bullet',0,0))
-              fast2=[(t,d) for eid,t,d in sink.events if eid==ld2.effect_id]
-              fast3=[(t,d) for eid,t,d in sink.events if eid==ld3.effect_id]
-              moris2=[(float(h.t),float(h.damage)) for h in moris.hits if h.caster=='프리바티' and h.skill_name=='LD 어설트 2']
-              moris3=[(float(h.t),float(h.damage)) for h in moris.hits if h.caster=='프리바티' and h.skill_name=='LD 어설트 3']
-              print('STATIC_COUNTS',len(rows),len(moris2),len(fast2),len(moris3),len(fast3))
-              for i,(m,f) in enumerate(zip(moris2,fast2)):
-                  print(f'STATIC_LD2|{i}|m_t={m[0]:.12f}|f_t={f[0]:.12f}|dt={f[0]-m[0]:+.12f}|m_d={m[1]:.6f}|f_d={f[1]:.6f}|rel={f[1]/m[1]-1:+.8%}')
-
-              # B. Real named-state semantics: burst_cast creates Target Designation;
-              # last_bullet inside duration fires LD3, after expiry it does not.
-              duration=20.0
-              sink=TrackingSink(comp,enemy(duration)); rt=BurstRuntime(comp,BurstPolicy(duration=duration,first_burst_time=duration,max_burst_count=0,no_burst_actors=frozenset({0})),enemy(duration),damage_sink=sink)
-              rt._broadcast(0.0,'battle_start')
-              rt.dispatcher.dispatch(BurstSignal(3.0,'burst_cast',0,0))
-              print('TARGET_STATE_3_1',rt.dispatcher.effects.has_named_state(ENEMY,'타겟 지정',now=3.1))
-              rt.dispatcher.dispatch(BurstSignal(3.1,'last_bullet',0,0))
-              before=len([x for x in sink.events if x[0]==ld3.effect_id])
-              print('LD3_INSIDE_COUNT',before)
-              print('TARGET_STATE_13_1',rt.dispatcher.effects.has_named_state(ENEMY,'타겟 지정',now=13.1))
-              rt.dispatcher.dispatch(BurstSignal(13.1,'last_bullet',0,0))
-              after=len([x for x in sink.events if x[0]==ld3.effect_id])
-              print('LD3_AFTER_COUNT',after)
-              print('LD3_EVENTS',[(t,d) for eid,t,d in sink.events if eid==ld3.effect_id])
-          finally:
-              dr._SAFE_EVENT_KEYS=old
+          report = scan_public_blockers()
+          unique = {}
+          for row in report['rows']:
+              unique.setdefault(tuple(row['members']), row)
+          gaps = []
+          privaty = Counter()
+          for members, row in unique.items():
+              raw = tuple(row['blockers']) + tuple('unsupported:' + x for x in row['unsupported'])
+              concepts = tuple(dict.fromkeys(_conceptual_key(x) for x in raw))
+              if concepts:
+                  gaps.append(row['source_name'])
+              for item in concepts:
+                  if '프리바티:LD 어설트' in item:
+                      privaty[item] += 1
+          print('SUMMARY', len(report['rows']), len(unique), len(unique)-len(gaps), len(gaps))
+          print('PRIVATY_LD_BLOCKERS', dict(privaty))
+          for row in report['rows']:
+              if row['source_name'] in {'스쿼드2','레이드_라피앨리스','레이드_아니스서머메이든','레이드_트리나홍련'}:
+                  print('TEAM', row['source_name'])
+                  print(' blockers=', row['blockers'])
+                  print(' unsupported=', row['unsupported'])
           PY
