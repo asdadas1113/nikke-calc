@@ -13,20 +13,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Compare charge actor cadence semantics
+      - name: Isolate reload completion frame semantics
         shell: bash
         run: |
           python - <<'PY'
           from bisect import bisect_left
-          from calculator.timeline import DEFAULT_ENEMY, DT, simulate
-          from calculator.sim_result import _is_normal
+          from calculator.timeline import DT
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
+          from fast_engine.engine.score import StaticNormalAttackObserver, score_static_squad, static_score_blockers
           from fast_engine.engine.weapon import DynamicChargeCadenceRuntime
 
           TEAMS={
@@ -34,53 +33,68 @@ jobs:
             'RHQ':("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸"),
           }
           TARGETS={'헬름','루주','레드 후드','프리카','민트'}
+          MORIS_COUNTS={'헬름':111,'루주':119,'레드 후드':333,'프리카':122,'민트':122}
+          MORIS={'MM':3532610672.0,'RHQ':3528909503.0}
           D=180.0; CFG={'duration':D,'first_burst_time':3.0,'rng_mode':'expected'}
-          enemy=dict(DEFAULT_ENEMY); enemy['def']=55000.0; enemy['code']='작열'; enemy['core_px']=10.0
           profile=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=D)
           ticks=[]; t=0.0
           while t<=181.0: ticks.append(t); t+=DT
           def snap(x):
               i=bisect_left(ticks,float(x)); return ticks[i] if i<len(ticks) else float(x)
 
-          built={}; moris_rows={}
+          built={}
           for label,names in TEAMS.items():
-              squad=spec.build_squad(list(names)); config=spec.build_config(squad,dict(CFG)); cp=compile_moris_squad(squad)
-              bl=static_score_blockers(cp)
+              sq=spec.build_squad(list(names)); cp=compile_moris_squad(sq); bl=static_score_blockers(cp)
               if bl: raise RuntimeError((label,bl))
-              po=compile_burst_policy(squad,cp,dict(CFG)); built[label]=(names,cp,po)
-              m=simulate(squad,config=config,enemy=enemy,seed=42,verbose=False)
-              for name in names:
-                  if name not in TARGETS: continue
-                  ts=sorted({round(float(h.t),9) for h in m.hits if h.caster==name and _is_normal(h)})
-                  moris_rows[name]=ts
-                  print(f'MORIS|name={name}|count={len(ts)}|first='+','.join(f'{x:.6f}' for x in ts[:16]))
+              built[label]=(names,cp,compile_burst_policy(sq,cp,dict(CFG)))
 
-          oe=DynamicChargeCadenceRuntime._enter_charge; oa=DynamicChargeCadenceRuntime._after_shot
-          def reset(): DynamicChargeCadenceRuntime._enter_charge=oe; DynamicChargeCadenceRuntime._after_shot=oa
+          oe=DynamicChargeCadenceRuntime._enter_charge
+          oa=DynamicChargeCadenceRuntime._after_shot
+          of=DynamicChargeCadenceRuntime._finish_nonshot_phase
+          def reset():
+              DynamicChargeCadenceRuntime._enter_charge=oe
+              DynamicChargeCadenceRuntime._after_shot=oa
+              DynamicChargeCadenceRuntime._finish_nonshot_phase=of
           def install_ea():
-              def pe(self,st,at,now_for_mods): oe(self,st,at,now_for_mods); st.phase_end=snap(st.phase_end)
-              def pa(self,st,shot_time): oa(self,st,shot_time); st.phase_end=snap(st.phase_end)
-              DynamicChargeCadenceRuntime._enter_charge=pe; DynamicChargeCadenceRuntime._after_shot=pa
+              def pe(self,st,at,now_for_mods):
+                  oe(self,st,at,now_for_mods); st.phase_end=snap(st.phase_end)
+              def pa(self,st,shot_time):
+                  oa(self,st,shot_time); st.phase_end=snap(st.phase_end)
+              DynamicChargeCadenceRuntime._enter_charge=pe
+              DynamicChargeCadenceRuntime._after_shot=pa
+          def install_reload_end():
+              def pf(self,st,transition_time,now_for_mods):
+                  before=st.phase
+                  of(self,st,transition_time,now_for_mods)
+                  if before=='post_fire_reload' and st.phase=='reloading':
+                      st.phase_end=snap(st.phase_end)
+              DynamicChargeCadenceRuntime._finish_nonshot_phase=pf
 
-          def run_variant(tag,patched):
+          def run_variant(tag,ea=False,reload_end=False):
               reset()
-              if patched: install_ea()
+              if ea: install_ea()
+              if reload_end: install_reload_end()
+              totals={}
               for label,(names,cp,po) in built.items():
+                  scored=score_static_squad(cp,po,profile); totals[label]=sum(float(v) for v in scored.char_total)
                   sink=SimpleDamageScoreSink(cp,profile); runtime=BurstRuntime(cp,po,profile,damage_sink=sink)
                   class O(StaticNormalAttackObserver):
                       def __init__(self,*a,**k): self.ts=[[] for _ in cp.members]; super().__init__(*a,**k)
                       def _score_shots(self,actor,count,*,eval_time):
-                          if cp.names[actor] in TARGETS:
-                              self.ts[actor].extend([float(eval_time)]*int(count))
+                          if cp.names[actor] in TARGETS: self.ts[actor].extend([float(eval_time)]*int(count))
                           return super()._score_shots(actor,count,eval_time=eval_time)
                   obs=O(runtime,duration=D); rr=runtime.run(duration=D,score_observer=obs); obs.finish(events_processed=rr.events_processed)
                   for i,name in enumerate(names):
                       if name not in TARGETS: continue
                       ts=obs.ts[i]
-                      print(f'FAST|set={tag}|name={name}|count={len(ts)}|first='+','.join(f'{x:.6f}' for x in ts[:16]))
-                      mts=moris_rows[name]
-                      print(f'COUNT_DELTA|set={tag}|name={name}|delta={len(ts)-len(mts)}')
-          run_variant('base',False)
-          run_variant('enter_after',True)
+                      print(f'ACTOR|set={tag}|name={name}|count={len(ts)}|delta={len(ts)-MORIS_COUNTS[name]}|first='+','.join(f'{x:.6f}' for x in ts[:16]))
+              margin=(totals['MM']-totals['RHQ'])/max(totals.values())
+              mm=(MORIS['MM']-MORIS['RHQ'])/max(MORIS.values())
+              print(f'SCORE|set={tag}|MM={totals["MM"]:.3f}|RHQ={totals["RHQ"]:.3f}|margin={margin:.8f}|delta_to_moris={margin-mm:+.8f}')
+
+          run_variant('base')
+          run_variant('ea',ea=True)
+          run_variant('ea_reload_end',ea=True,reload_end=True)
           reset()
+          print(f'MORIS|margin={(MORIS["MM"]-MORIS["RHQ"])/max(MORIS.values()):.8f}')
           PY
