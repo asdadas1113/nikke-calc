@@ -13,13 +13,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Localize Quency 180s drift in one pass
+      - name: Compare RHQ midfight burst casters
         shell: bash
         run: |
           python - <<'PY'
-          from collections import defaultdict
           from calculator.timeline import DEFAULT_ENEMY, simulate
-          from calculator.sim_result import _is_normal
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.burst_runtime import BurstRuntime
@@ -29,43 +27,26 @@ jobs:
           from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
 
           MEMBERS=("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸")
-          TARGET="퀀시 : 이스케이프 퀸"; DURATION=180.0
+          DURATION=90.0
           CONFIG={"duration":DURATION,"first_burst_time":3.0,"rng_mode":"expected"}
           squad=spec.build_squad(list(MEMBERS)); config=spec.build_config(squad,dict(CONFIG))
           compiled=compile_moris_squad(squad); blockers=static_score_blockers(compiled)
           if blockers: raise RuntimeError(blockers)
-          policy=compile_burst_policy(squad,compiled,dict(CONFIG)); idx=MEMBERS.index(TARGET)
+          policy=compile_burst_policy(squad,compiled,dict(CONFIG))
           enemy=dict(DEFAULT_ENEMY); enemy["def"]=55000.0; enemy["code"]="작열"; enemy["core_px"]=10.0
           profile=EnemyStaticProfile(defense=55000.0,element="작열",core_uptime=1.0,core_px=10.0,duration=DURATION)
 
-          moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=False)
-          m_by_t=defaultdict(float)
-          for h in moris.hits:
-              if h.caster==TARGET and _is_normal(h):
-                  m_by_t[round(float(h.t),9)] += float(h.damage)
+          moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=True)
+          for r in moris.log.burst_log:
+              t=float(r.t)
+              if "사용" in r.event or "full_burst" in r.event:
+                  print(f"M|t={t:.6f}|event={r.event}|caster={getattr(r,'caster',None)}")
 
           sink=SimpleDamageScoreSink(compiled,profile)
           runtime=BurstRuntime(compiled,policy,profile,damage_sink=sink)
-          class TraceObserver(StaticNormalAttackObserver):
-              def __init__(self,*a,**k):
-                  self.rows=[]
-                  super().__init__(*a,**k)
-              def _score_shots(self,actor,count,*,eval_time):
-                  before=float(self.char_total[actor])
-                  out=super()._score_shots(actor,count,eval_time=eval_time)
-                  if actor==idx:
-                      self.rows.append((float(eval_time),int(count),float(self.char_total[actor])-before))
-                  return out
-          obs=TraceObserver(runtime,duration=DURATION)
-          rr=runtime.run(duration=DURATION,score_observer=obs)
-          final=obs.finish(events_processed=rr.events_processed)
-
-          for cp in (30,60,75,90,105,120,135,150,165,180):
-              md=sum(v for t,v in m_by_t.items() if t < cp-1e-9)
-              mc=sum(1 for t in m_by_t if t < cp-1e-9)
-              fd=sum(d for t,c,d in obs.rows if t < cp-1e-9)
-              fc=sum(c for t,c,d in obs.rows if t < cp-1e-9)
-              print(f"CUM|t={cp}|m={md:.3f}|f={fd:.3f}|err={fd/md-1:.8f}|m_shots={mc}|f_shots={fc}|shot_delta={fc-mc}")
-          print(f"FINAL|m={sum(m_by_t.values()):.3f}|f={float(final.char_total[idx]):.3f}|err={float(final.char_total[idx])/sum(m_by_t.values())-1:.8f}")
-          print("FAST_STARTS|"+",".join(f"{x:.6f}" for x in rr.full_burst_starts))
+          obs=StaticNormalAttackObserver(runtime,duration=DURATION)
+          rr=runtime.run(duration=DURATION,score_observer=obs); obs.finish(events_processed=rr.events_processed)
+          for t,actor,stage in rr.casts:
+              print(f"F|t={t:.6f}|stage={stage}|caster={compiled.names[actor]}")
+          print("F_STARTS|"+",".join(f"{x:.6f}" for x in rr.full_burst_starts))
           PY
