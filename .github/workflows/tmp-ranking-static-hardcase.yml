@@ -13,167 +13,115 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Trial Moris-frame rapid cadence
+      - name: Trial rapid observed-frame timestamps
         shell: bash
         run: |
           python - <<'PY'
-          from bisect import bisect_left, bisect_right
-          from dataclasses import dataclass
+          from bisect import bisect_left
+          from dataclasses import replace
+          from collections import defaultdict
           from calculator.timeline import DEFAULT_ENEMY, DT, simulate
+          from calculator.sim_result import _is_normal
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import score_static_squad, static_score_blockers
+          from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
           import fast_engine.engine.dynamic_reload as dr
           import fast_engine.engine.dynamic_rapid as rapid
-          from fast_engine.engine.weapon import DynamicChargeCadenceRuntime
+          from fast_engine.engine.dynamic_reload import DynamicRapidToken, DynamicRapidBoundary, DynamicRapidCountSignal
 
-          TEAMS = {
-              "MM": ("미란다", "브리드 : 사일런트 트랙", "헬름", "루주", "미하라 : 본딩 체인"),
-              "RHQ": ("라피 : 레드 후드", "레드 후드", "프리카", "민트", "퀀시 : 이스케이프 퀸"),
-          }
-          CONFIG = {"duration": 180.0, "first_burst_time": 3.0, "rng_mode": "expected"}
-          enemy = dict(DEFAULT_ENEMY)
-          enemy["def"] = 55000.0; enemy["code"] = "작열"; enemy["core_px"] = 10.0
-          profile = EnemyStaticProfile(defense=55000.0, element="작열", core_uptime=1.0, core_px=10.0, duration=180.0)
+          MEMBERS=("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸")
+          TARGET="퀀시 : 이스케이프 퀸"; DURATION=10.0
+          squad=spec.build_squad(list(MEMBERS)); config=spec.build_config(squad,{"duration":DURATION,"first_burst_time":3.0,"rng_mode":"expected"})
+          compiled=compile_moris_squad(squad); blockers=static_score_blockers(compiled)
+          if blockers: raise RuntimeError(blockers)
+          policy=compile_burst_policy(squad,compiled,{"duration":DURATION,"first_burst_time":3.0,"rng_mode":"expected"})
+          idx=MEMBERS.index(TARGET)
+          enemy=dict(DEFAULT_ENEMY); enemy["def"]=55000.0; enemy["code"]="작열"; enemy["core_px"]=10.0
+          profile=EnemyStaticProfile(defense=55000.0,element="작열",core_uptime=1.0,core_px=10.0,duration=DURATION)
 
           ticks=[]; t=0.0
-          while t <= 182.0:
-              ticks.append(t); t += DT
-          def frame_at_or_after(x):
-              i=bisect_left(ticks,float(x)); return ticks[i] if i < len(ticks) else float(x)
-          def frame_after(x):
-              i=bisect_right(ticks,float(x)+1e-12); return ticks[i] if i < len(ticks) else float(x)+DT
+          while t<=DURATION+1.0: ticks.append(t); t+=DT
+          def obs(x):
+              i=bisect_left(ticks,float(x)); return ticks[i] if i<len(ticks) else float(x)
+          def due(deadline,t,inclusive):
+              w=obs(deadline); return w<=t+1e-9 if inclusive else w<t-1e-9
 
-          built={}; ms={}
-          for key,members in TEAMS.items():
-              squad=spec.build_squad(list(members)); config=spec.build_config(squad,dict(CONFIG))
-              compiled=compile_moris_squad(squad); blockers=static_score_blockers(compiled)
-              if blockers: raise RuntimeError(f"{key}:{blockers}")
-              policy=compile_burst_policy(squad,compiled,dict(CONFIG))
-              moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=False)
-              built[key]=(members,compiled,policy,moris); ms[key]=float(moris.squad_total)
+          moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=False)
+          mn=sum(float(h.damage) for h in moris.hits if h.caster==TARGET and _is_normal(h))
+          mc=len({round(float(h.t),6) for h in moris.hits if h.caster==TARGET and _is_normal(h)})
 
-          def scores(label):
-              out={}; rows={}
-              for key,(members,compiled,policy,moris) in built.items():
-                  fast=score_static_squad(compiled,policy,profile)
-                  out[key]=float(fast.squad_total)
-                  rows[key]=[(n,float(moris.char_total[n]),float(fast.char_total[i])) for i,n in enumerate(members)]
-              print(f"SET|{label}")
-              for key in TEAMS:
-                  print(f"TEAM|set={label}|team={key}|m={ms[key]:.3f}|f={out[key]:.3f}|err={out[key]/ms[key]-1:.8f}")
-                  for n,m,f in rows[key]:
-                      print(f"ACTOR|set={label}|team={key}|name={n}|m={m:.3f}|f={f:.3f}|err={f/m-1:.8f}")
-              return out
+          def fast_normal(label):
+              sink=SimpleDamageScoreSink(compiled,profile); runtime=BurstRuntime(compiled,policy,profile,damage_sink=sink)
+              class O(StaticNormalAttackObserver):
+                  def __init__(self,*a,**k): self.times=[]; super().__init__(*a,**k)
+                  def _score_shots(self,actor,count,*,eval_time):
+                      if actor==idx: self.times.extend([float(eval_time)]*int(count))
+                      return super()._score_shots(actor,count,eval_time=eval_time)
+              o=O(runtime,duration=DURATION); r=runtime.run(duration=DURATION,score_observer=o); o.finish(events_processed=r.events_processed)
+              print(f"RESULT|set={label}|m_normal={mn:.3f}|f_normal={o.char_total[idx]:.3f}|err={o.char_total[idx]/mn-1:.8f}|m_count={mc}|f_count={len(o.times)}")
+              print(f"TIMES|set={label}|first="+",".join(f"{x:.6f}" for x in o.times[:30]))
+              return o.char_total[idx]
 
-          def margin(s): return (s['MM']-s['RHQ'])/max(s['MM'],s['RHQ'])
-          base=scores('base')
+          base=fast_normal('base')
 
-          @dataclass(slots=True)
-          class FrameRapidState:
-              actor:int; ammo:int; phase:str; phase_end:float
-              hit_count:int=0; pellet_count:int=0
-              dispatched_hit_count:int=0; dispatched_pellet_count:int=0
-              generation:int=0; scheduled_time:float|None=None
-              signature:tuple[float,...]|None=None
-              warmup:float=0.0; last_shot:float=-999.0; last_inter:float=0.0
-              fire_deadline:float=0.0
-          dr._RapidActorState=FrameRapidState
+          def adv(self,actor,t,*,inclusive):
+              st=self._states[actor]
+              while due(st.phase_end,t,inclusive):
+                  if self._postpone_firing_for_cover(st): continue
+                  deadline=st.phase_end; when=obs(deadline)
+                  if when>self.duration+1e-9: break
+                  if st.phase=='firing':
+                      if self._shot_is_boundary(st): break
+                      self._after_shot(st,deadline)
+                      if self._score_sink is None: raise RuntimeError('no sink')
+                      self._score_sink(actor,1,when)
+                      continue
+                  # This 10 s probe stays inside Quency's first magazine; other
+                  # actors may reload, for which we retain current continuous semantics.
+                  self._finish_nonshot_phase(st,deadline)
+              self.state.set_ammo(actor,st.ammo)
 
-          def frame_start(self, now=0.0):
-              for actor in self.actors:
-                  full=self._full_ammo(actor,now)
-                  st=FrameRapidState(actor=actor,ammo=full,phase='firing',phase_end=frame_at_or_after(now),fire_deadline=float(now),signature=self._signature(actor,now))
-                  self._states[actor]=st; self.state.set_ammo(actor,full); self._plan(actor,now)
-          dr.DynamicRapidReloadRuntime.start=frame_start
+          def predict(self,actor):
+              probe=replace(self._states[actor])
+              while obs(probe.phase_end)<=self.duration+1e-9:
+                  if self._postpone_firing_for_cover(probe): continue
+                  deadline=probe.phase_end; when=obs(deadline)
+                  if probe.phase=='firing':
+                      if self._shot_is_boundary(probe): return when,probe.hit_count+1
+                      self._after_shot(probe,deadline); continue
+                  self._finish_nonshot_phase(probe,deadline)
+              return None
 
-          def frame_after_shot(self, st, shot_time):
-              hits=self._hits_per_shot(st.actor); inter=self._shot_interval(st)
-              next_deadline=float(st.fire_deadline)+inter
-              st.ammo-=1; st.hit_count+=1; st.pellet_count+=hits
-              st.last_shot=float(shot_time); st.last_inter=inter
-              st.phase='reload_wait' if st.ammo<=0 else 'firing'
-              if next_deadline <= float(shot_time)+1e-12:
-                  st.fire_deadline=float(shot_time); st.phase_end=frame_after(shot_time)
-              else:
-                  st.fire_deadline=next_deadline; st.phase_end=frame_at_or_after(next_deadline)
-          dr.DynamicRapidReloadRuntime._after_shot=frame_after_shot
+          def handle(self,event):
+              token=event.payload
+              if not isinstance(token,DynamicRapidToken): return None
+              st=self._states.get(token.actor)
+              if st is None or token.generation!=st.generation: return None
+              if st.scheduled_time is None or abs(st.scheduled_time-event.time)>1e-7: return None
+              self._advance_actor_to(token.actor,event.time,inclusive=False)
+              st=self._states[token.actor]
+              if st.phase!='firing' or abs(obs(st.phase_end)-event.time)>1e-7: return None
+              if st.hit_count+1!=token.expected_hit_count: return None
+              deadline=st.phase_end
+              self._after_shot(st,deadline); st.scheduled_time=None; self.state.set_ammo(token.actor,st.ammo)
+              if self._score_sink is None: raise RuntimeError('no sink')
+              self._score_sink(token.actor,1,float(event.time))
+              signals=[]
+              pellet_incs,pellet_last=self._crossing_increments(st.dispatched_pellet_count,st.pellet_count,self._pellet_thresholds.get(token.actor,()))
+              for inc in pellet_incs: signals.append(DynamicRapidCountSignal('pellet_hit',inc))
+              st.dispatched_pellet_count=pellet_last
+              hit_incs,hit_last=self._crossing_increments(st.dispatched_hit_count,st.hit_count,self._hit_thresholds.get(token.actor,()))
+              for inc in hit_incs: signals.append(DynamicRapidCountSignal('hit_count',inc))
+              st.dispatched_hit_count=hit_last
+              return DynamicRapidBoundary(token.actor,tuple(signals),is_last_bullet=st.ammo<=0)
 
-          def base_finish(self, st, transition_time):
-              actor=st.actor; weapon=self.squad.members[actor].weapon
-              if st.phase=='reload_wait':
-                  factor=self._reload_factor(actor,transition_time); st.phase='reloading'
-                  deadline=transition_time+(float(weapon.get('reload_start_delay',0.0))+float(weapon.get('reload_time',0.0)))*factor
-                  st.phase_end=frame_at_or_after(deadline); return
-              if st.phase=='reloading':
-                  st.ammo=self._full_ammo(actor,transition_time); factor=self._reload_factor(actor,transition_time)
-                  deadline=transition_time+float(weapon.get('post_reload_delay',0.0))*factor
-                  if str(weapon.get('fire_mode') or 'auto')=='auto_warmup':
-                      machine=self._machine(actor); cap=float(weapon.get('warmup_bullets') or 1.0)
-                      cooldown_time=max(float(weapon.get('warmup_cooldown_time') or 1.0),1e-9); cool_rate=cap/cooldown_time
-                      idle=deadline-st.last_shot
-                      if idle>st.last_inter*1.5: st.warmup=max(0.0,st.warmup-cool_rate*idle)
-                  st.phase='firing'; st.fire_deadline=deadline; st.phase_end=frame_at_or_after(deadline); return
-              raise RuntimeError(st.phase)
-          dr.DynamicRapidReloadRuntime._finish_nonshot_phase=base_finish
-
-          def rapid_finish(self, st, transition_time):
-              actor=st.actor; weapon=self.squad.members[actor].weapon
-              if st.phase=='reload_wait':
-                  factor=self._reload_factor(actor,transition_time); st.phase='reloading'
-                  deadline=transition_time+(float(weapon.get('reload_start_delay',0.0))+float(weapon.get('reload_time',0.0)))*factor
-                  st.phase_end=frame_at_or_after(deadline); return
-              if st.phase=='reloading':
-                  st.ammo=self._full_ammo(actor,transition_time); factor=self._reload_factor(actor,transition_time)
-                  deadline=transition_time+float(weapon.get('post_reload_delay',0.0))*factor
-                  st.phase='firing'; st.fire_deadline=deadline; st.phase_end=frame_at_or_after(deadline); return
-              raise RuntimeError(st.phase)
-          rapid.DynamicRapidCadenceRuntime._finish_nonshot_phase=rapid_finish
-
-          orig_postpone=rapid.DynamicRapidCadenceRuntime._postpone_firing_for_cover
-          def frame_postpone(self, st):
-              until=self._cover_end(st.actor)
-              if st.phase=='firing' and st.phase_end < until-1e-9:
-                  st.fire_deadline=float(until); st.phase_end=frame_at_or_after(until); return True
-              return False
-          rapid.DynamicRapidCadenceRuntime._postpone_firing_for_cover=frame_postpone
-
-          orig_begin=rapid.DynamicRapidCadenceRuntime.begin_full_burst
-          def frame_begin(self, now, casted, full_burst_end):
-              entered=orig_begin(self,now,casted,full_burst_end)
-              for actor in entered:
-                  st=self._states[actor]; st.phase_end=frame_at_or_after(st.phase_end)
-                  if st.phase=='firing': st.fire_deadline=st.phase_end
-                  self._invalidate(st); self._plan(actor,now)
-              return entered
-          rapid.DynamicRapidCadenceRuntime.begin_full_burst=frame_begin
-
-          rapid_scores=scores('rapid_frame')
-
-          # Add the previously validated charge phase-end projection so the two
-          # frame-semantic contributions can be measured together.
-          orig_enter=DynamicChargeCadenceRuntime._enter_charge
-          orig_after=DynamicChargeCadenceRuntime._after_shot
-          orig_finish=DynamicChargeCadenceRuntime._finish_nonshot_phase
-          orig_start=DynamicChargeCadenceRuntime.start
-          orig_sync=DynamicChargeCadenceRuntime.sync
-          def c_enter(self,st,at,now_for_mods): orig_enter(self,st,at,now_for_mods); st.phase_end=frame_at_or_after(st.phase_end)
-          def c_after(self,st,shot_time): orig_after(self,st,shot_time); st.phase_end=frame_at_or_after(st.phase_end)
-          def c_finish(self,st,transition_time,now_for_mods): orig_finish(self,st,transition_time,now_for_mods); st.phase_end=frame_at_or_after(st.phase_end)
-          def c_start(self,now=0.0):
-              orig_start(self,now)
-              for actor,st in self._states.items():
-                  q=frame_at_or_after(st.phase_end)
-                  if q!=st.phase_end: self._invalidate(st); st.phase_end=q; self._plan(actor,float(now))
-          def c_sync(self,now):
-              orig_sync(self,now)
-              for actor,st in self._states.items():
-                  q=frame_at_or_after(st.phase_end)
-                  if q!=st.phase_end: self._invalidate(st); st.phase_end=q; self._plan(actor,float(now))
-          DynamicChargeCadenceRuntime._enter_charge=c_enter; DynamicChargeCadenceRuntime._after_shot=c_after
-          DynamicChargeCadenceRuntime._finish_nonshot_phase=c_finish; DynamicChargeCadenceRuntime.start=c_start; DynamicChargeCadenceRuntime.sync=c_sync
-          both=scores('rapid_plus_charge_frame')
-          print(f"MARGINS|moris={margin(ms):.8f}|base={margin(base):.8f}|rapid={margin(rapid_scores):.8f}|both={margin(both):.8f}")
+          rapid.DynamicRapidCadenceRuntime._advance_actor_to=adv
+          rapid.DynamicRapidCadenceRuntime._predict_next_boundary=predict
+          dr.DynamicRapidReloadRuntime.handle_boundary=handle
+          projected=fast_normal('observed_frame')
+          print(f"DELTA|base_err={base/mn-1:.8f}|projected_err={projected/mn-1:.8f}")
           PY
