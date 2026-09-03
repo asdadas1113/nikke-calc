@@ -13,44 +13,52 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect exact blocker shape
+      - name: Compare coverage priority candidates
         run: |
+          echo '=== MORIS SQUAD AMMO SOURCE ==='
+          grep -R -n -C 5 'squad_ammo_consume' calculator fast_engine 2>/dev/null || true
           PYTHONPATH=. python - <<'PY'
+          from collections import Counter
           from context import spec
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.damage_events import compile_simple_damage_event
-          from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_supported
-          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
-          from fast_engine.engine.model import EnemyStaticProfile
           from fast_engine.engine.score import (
-              _direct_damage_buff_score_supported,
-              _named_buff_event_dependency_score_safe,
-              _shield_runtime_dependency_score_safe,
-              _uses_shield_runtime_semantics,
+              _is_dynamic_reload_score_supported,
+              _is_dynamic_max_ammo_score_supported,
+              _temporary_self_charge_weapon_change_score_supported,
           )
+          from fast_engine.research.public_ranking_probe import _source_corpus
 
-          names = ['리틀 머메이드', '크라운', '라피 : 레드 후드', '미하라 : 본딩 체인', '헬름']
-          compiled = compile_moris_squad(spec.build_squad(names))
-          sink = SimpleDamageScoreSink(compiled, EnemyStaticProfile(defense=0.0, duration=180.0))
-          for effect in compiled.effects:
-              if effect.name not in {'로얄 에타이어 4', '거품 난사'}:
+          print('=== PUBLIC SQUAD_AMMO USERS ===')
+          seen = set()
+          for source_name, names in _source_corpus():
+              key = tuple(names)
+              if key in seen:
                   continue
-              owner = compiled.members[effect.actor].name
-              print(f'EFFECT|id={effect.effect_id}|owner={owner}|name={effect.name}|type={effect.effect_type}|stat={effect.stat}|value={effect.value}|duration={effect.duration}|target={effect.target}')
-              print('  target_spec=', repr(effect.target_spec))
-              print('  parameters=', repr(effect.parameters))
-              print('  triggers=', [repr(r) for r in effect.triggers])
-              print('  conditions=', [repr(r) for r in effect.condition_rules])
-              print('  capability=', repr(effect.capability))
-              if effect.name == '로얄 에타이어 4':
-                  print('  direct_runtime=', is_direct_damage_buff_runtime_supported(effect))
-                  print('  uses_shield=', _uses_shield_runtime_semantics(effect))
-                  print('  shield_safe=', _shield_runtime_dependency_score_safe(compiled, effect))
-                  print('  named_event_safe=', _named_buff_event_dependency_score_safe(compiled, effect))
-                  print('  score_supported=', _direct_damage_buff_score_supported(compiled, effect))
-              else:
-                  print('  simple_spec=', repr(compile_simple_damage_event(effect, compiled.members[effect.actor])))
-                  print('  delivery_supported=', sink._delivery_supported(effect))
-                  print('  sink_supports=', sink.supports(effect))
-                  print('  unsupported_id=', effect.effect_id in sink.unsupported_effect_ids)
+              seen.add(key)
+              compiled = compile_moris_squad(spec.build_squad(list(names)))
+              rows = []
+              for effect in compiled.effects:
+                  for rule in effect.triggers:
+                      if rule.event_key == 'squad_ammo_consume':
+                          rows.append((compiled.members[effect.actor].name, effect.name, effect.stat, repr(rule)))
+              if rows:
+                  print('TEAM', source_name, rows)
+
+          candidates = {
+              'MOTAN': ['목단', '마스트 : 로망틱 메이드', '홍련 : 흑영', '리버렐리오', '앵커 : 이노센트 메이드'],
+              'PRIVATY': ['리틀 머메이드', '크라운', '라피 : 레드 후드', '앨리스', '프리바티'],
+          }
+          for tag, names in candidates.items():
+              print('===', tag, '===')
+              compiled = compile_moris_squad(spec.build_squad(names))
+              for effect in compiled.effects:
+                  owner = compiled.members[effect.actor].name
+                  if owner == '목단' and effect.effect_type == 'weapon_change':
+                      print('MOTAN_WC', effect.name, repr(effect), 'temp_charge_safe=', _temporary_self_charge_weapon_change_score_supported(compiled, effect))
+                  if owner == '프리바티' and (effect.stat or '') in {'reload_speed_pct', 'max_ammo_pct'}:
+                      print('PRIVATY_CADENCE', effect.name, effect.stat, repr(effect))
+                      if effect.stat == 'reload_speed_pct':
+                          print('  reload_supported=', _is_dynamic_reload_score_supported(compiled, effect))
+                      if effect.stat == 'max_ammo_pct':
+                          print('  max_ammo_supported=', _is_dynamic_max_ammo_score_supported(compiled, effect))
           PY
