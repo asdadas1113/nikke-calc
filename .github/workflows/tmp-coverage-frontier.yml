@@ -13,54 +13,39 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect live reload and max-ammo blocker shapes
+      - name: Probe last-bullet damage delivery
         run: |
           PYTHONPATH=. python - <<'PY'
           from context import spec
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.score import (
-              _is_folded_static_self_modifier,
-              _is_dynamic_reload_score_supported,
-              _is_dynamic_max_ammo_score_supported,
-              _possible_ally_targets,
-              _rapid_actor_score_safe,
-              _charge_actor_score_safe,
-          )
-          from fast_engine.research.public_ranking_probe import _source_corpus
+          from fast_engine.engine.model import EnemyStaticProfile
+          import fast_engine.engine.damage_runtime as dr
 
-          seen_members = set()
-          seen_effects = set()
-          for members, source_name in _source_corpus():
-              if members in seen_members:
-                  continue
-              seen_members.add(members)
-              squad = compile_moris_squad(spec.build_squad(list(members)))
+          names = ['리틀 머메이드', '크라운', '라피 : 레드 후드', '앨리스', '프리바티']
+          squad = compile_moris_squad(spec.build_squad(names))
+
+          def report(label):
+              sink = dr.SimpleDamageScoreSink(squad, EnemyStaticProfile(defense=0.0, duration=180.0))
+              print(label)
               for effect in squad.effects:
-                  stat = effect.stat or ''
-                  if stat not in {'reload_speed_pct', 'max_ammo_pct', 'max_ammo_flat'}:
+                  if squad.members[effect.actor].name != '프리바티' or effect.name not in {'LD 어설트 2', 'LD 어설트 3'}:
                       continue
-                  if _is_folded_static_self_modifier(effect):
-                      continue
-                  supported = (
-                      _is_dynamic_reload_score_supported(squad, effect)
-                      if stat == 'reload_speed_pct'
-                      else _is_dynamic_max_ammo_score_supported(squad, effect)
-                  )
-                  if supported:
-                      continue
-                  key = (squad.members[effect.actor].name, effect.name, stat)
-                  if key in seen_effects:
-                      continue
-                  seen_effects.add(key)
-                  targets = _possible_ally_targets(squad, effect)
-                  print('EFFECT|', key, '|first_team=', source_name)
-                  print('  target=', effect.target, 'targets=', [(a, squad.members[a].name, squad.members[a].weapon.get('fire_mode')) for a in targets])
-                  print('  triggers=', [repr(r) for r in effect.triggers])
-                  print('  conditions=', [repr(r) for r in effect.condition_rules])
-                  print('  params=', repr(effect.parameters), 'duration=', effect.duration, 'value=', effect.value)
-                  for a in targets:
-                      mode = str(squad.members[a].weapon.get('fire_mode') or '')
-                      rapid = _rapid_actor_score_safe(squad, a) if mode in {'auto', 'auto_warmup'} else None
-                      charge = _charge_actor_score_safe(squad, a) if mode == 'charge' else None
-                      print('    RECIPIENT|', a, squad.members[a].name, 'mode=', mode, 'rapid_safe=', rapid, 'charge_safe=', charge)
+                  print('EFFECT', effect.name)
+                  print(' target_spec=', repr(effect.target_spec))
+                  print(' conditions=', [(repr(r), r.is_runtime_supported) for r in effect.condition_rules])
+                  print(' supports=', sink.supports(effect))
+              return sink
+
+          report('BASE')
+          old = dr._SAFE_EVENT_KEYS
+          dr._SAFE_EVENT_KEYS = frozenset(set(old) | {'last_bullet'})
+          try:
+              report('WITH_LAST_BULLET')
+          finally:
+              dr._SAFE_EVENT_KEYS = old
+
+          print('STATE_PROVIDERS')
+          for effect in squad.effects:
+              if effect.name == '타겟 지정' or any('타겟 지정' in c for c in effect.conditions):
+                  print(repr(effect))
           PY
