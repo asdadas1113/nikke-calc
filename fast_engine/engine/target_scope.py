@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .targets import TargetMode, TargetSpec
+from .targets import TargetMode, TargetSpec, adjacent_ally_targets
 
 if TYPE_CHECKING:
     from .model import CompiledEffect, CompiledSquad
@@ -61,10 +61,7 @@ def possible_ally_targets(
     if mode == "all_allies_excl_self":
         return tuple(i for i in range(n) if i != effect.actor)
     if mode == "adjacent":
-        k = max(0, effect.target_spec.count or 0)
-        cand = [i for i in range(n) if i != effect.actor]
-        cand.sort(key=lambda i: (abs(i - effect.actor), i))
-        return tuple(cand[:k])
+        return adjacent_ally_targets(n, effect.actor, effect.target_spec.count)
     if mode in {"weapon", "weapon_excl_self"}:
         return tuple(
             i
