@@ -13,23 +13,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Localize Quency normal damage divergence
+      - name: Decompose Quency 180s damage
         shell: bash
         run: |
           python - <<'PY'
-          from collections import defaultdict
           from calculator.timeline import DEFAULT_ENEMY, simulate
           from calculator.sim_result import _is_normal
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
-          from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
+          from fast_engine.engine.score import score_static_squad, score_static_normal_squad, static_score_blockers
 
           MEMBERS=("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸")
-          TARGET="퀀시 : 이스케이프 퀸"; DURATION=35.0
+          TARGET="퀀시 : 이스케이프 퀸"; DURATION=180.0
           CONFIG={"duration":DURATION,"first_burst_time":3.0,"rng_mode":"expected"}
           squad=spec.build_squad(list(MEMBERS)); config=spec.build_config(squad,dict(CONFIG))
           compiled=compile_moris_squad(squad); blockers=static_score_blockers(compiled)
@@ -39,38 +36,21 @@ jobs:
           profile=EnemyStaticProfile(defense=55000.0,element="작열",core_uptime=1.0,core_px=10.0,duration=DURATION)
 
           moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=False)
-          m_by_t=defaultdict(float); m_shots=set()
-          for hit in moris.hits:
-              if hit.caster==TARGET and _is_normal(hit):
-                  t=round(float(hit.t),9); m_by_t[t]+=float(hit.damage); m_shots.add(t)
+          m_normal=sum(float(h.damage) for h in moris.hits if h.caster==TARGET and _is_normal(h))
+          m_total=float(moris.char_total[TARGET]); m_skill=m_total-m_normal
+          m_shots=len({round(float(h.t),9) for h in moris.hits if h.caster==TARGET and _is_normal(h)})
 
-          sink=SimpleDamageScoreSink(compiled,profile); runtime=BurstRuntime(compiled,policy,profile,damage_sink=sink)
-          class TraceObserver(StaticNormalAttackObserver):
-              def __init__(self,*a,**k): self.rows=[]; super().__init__(*a,**k)
-              def _score_shots(self,actor,count,*,eval_time):
-                  before=float(self.char_total[actor])
-                  out=super()._score_shots(actor,count,eval_time=eval_time)
-                  if actor==idx:
-                      after=float(self.char_total[actor])
-                      terms=self.resolver.resolve(actor,now=float(eval_time))
-                      self.rows.append((float(eval_time),int(count),after-before,terms.atk_pct,terms.pierce_dmg_pct,terms.projectile_explosion_dmg_pct))
-                  return out
-          obs=TraceObserver(runtime,duration=DURATION); rr=runtime.run(duration=DURATION,score_observer=obs); obs.finish(events_processed=rr.events_processed)
+          fast_total=score_static_squad(compiled,policy,profile)
+          fast_normal=score_static_normal_squad(compiled,policy,profile,duration=DURATION)
+          f_total=float(fast_total.char_total[idx]); f_normal=float(fast_normal.char_total[idx]); f_skill=f_total-f_normal
+          print(f"TOTAL|m={m_total:.3f}|f={f_total:.3f}|err={f_total/m_total-1:.8f}")
+          print(f"NORMAL|m={m_normal:.3f}|f={f_normal:.3f}|err={f_normal/m_normal-1:.8f}|m_shots={m_shots}")
+          print(f"SKILL|m={m_skill:.3f}|f={f_skill:.3f}|err={f_skill/m_skill-1:.8f}")
 
-          checkpoints=(5,10,12,13,15,20,23,24,25,30,35)
-          for cp in checkpoints:
-              md=sum(v for t,v in m_by_t.items() if t < cp-1e-9)
-              mc=sum(1 for t in m_shots if t < cp-1e-9)
-              fd=sum(r[2] for r in obs.rows if r[0] < cp-1e-9)
-              fc=sum(r[1] for r in obs.rows if r[0] < cp-1e-9)
-              print(f"CUM|t={cp}|m_dmg={md:.3f}|f_dmg={fd:.3f}|err={fd/md-1:.8f}|m_shots={mc}|f_shots={fc}")
-
-          print("M_DETAIL")
-          for t in sorted(m_by_t):
-              if 10.8 <= t <= 13.0 or 23.0 <= t <= 24.5:
-                  print(f"M|t={t:.6f}|dmg={m_by_t[t]:.3f}")
-          print("F_DETAIL")
-          for t,count,dmg,atk,pierce,proj in obs.rows:
-              if 10.8 <= t <= 13.0 or 23.0 <= t <= 24.5:
-                  print(f"F|t={t:.6f}|count={count}|dmg={dmg:.3f}|atk={atk:.3f}|pierce={pierce:.3f}|proj={proj:.3f}")
+          for cp in (30.0,60.0,90.0,120.0,150.0,180.0):
+              mn=sum(float(h.damage) for h in moris.hits if h.caster==TARGET and _is_normal(h) and float(h.t)<cp-1e-9)
+              mc=len({round(float(h.t),9) for h in moris.hits if h.caster==TARGET and _is_normal(h) and float(h.t)<cp-1e-9})
+              fn=score_static_normal_squad(compiled,policy,profile,duration=cp)
+              fv=float(fn.char_total[idx])
+              print(f"CUM_NORMAL|t={cp:.0f}|m={mn:.3f}|f={fv:.3f}|err={fv/mn-1:.8f}|m_shots={mc}")
           PY
