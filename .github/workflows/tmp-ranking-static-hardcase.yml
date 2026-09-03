@@ -13,23 +13,61 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Inspect Moris burst readiness semantics
+      - name: Trial epsilon-aware burst lattice
         shell: bash
         run: |
           python - <<'PY'
-          import inspect
-          import calculator.timeline as tl
-          names=[n for n in dir(tl) if 'Burst' in n or 'burst' in n.lower()]
-          print('NAMES',names)
-          for n in names:
-              obj=getattr(tl,n)
-              if inspect.isclass(obj) or inspect.isfunction(obj):
-                  try:
-                      src=inspect.getsource(obj)
-                  except Exception:
-                      continue
-                  if 'cooldown' in src.lower() or 'burst' in n.lower():
-                      print('SOURCE_BEGIN',n)
-                      print(src)
-                      print('SOURCE_END',n)
+          from bisect import bisect_left
+          from calculator.timeline import DEFAULT_ENEMY, DT, simulate
+          from calculator.buff_manager import BuffManager
+          from context import spec
+          from fast_engine.engine.burst import BurstMachine, compile_burst_policy
+          from fast_engine.engine.burst_runtime import BurstRuntime
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.model import EnemyStaticProfile
+
+          names=["라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸"]
+          D=180.0; cfg_raw={'duration':D,'first_burst_time':3.0,'rng_mode':'expected'}
+          squad=spec.build_squad(names); cfg=spec.build_config(squad,dict(cfg_raw))
+          enemy=dict(DEFAULT_ENEMY); enemy['def']=55000.0; enemy['code']='작열'; enemy['core_px']=10.0
+
+          moris=[]; orig_notify=BuffManager.notify
+          def wrapped(self,event,t,caster,**ctx):
+              if event in {'burst_cast','full_burst_start','full_burst_end'}:
+                  moris.append((float(t),event,caster))
+              return orig_notify(self,event,t,caster,**ctx)
+          BuffManager.notify=wrapped
+          simulate(squad,config=cfg,enemy=enemy,seed=42,verbose=False)
+          BuffManager.notify=orig_notify
+
+          cp=compile_moris_squad(squad); policy=compile_burst_policy(squad,cp,dict(cfg_raw))
+          profile=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=D)
+
+          ticks=[]; t=0.0
+          while t<=D+1.0:
+              ticks.append(t); t+=DT
+          def burst_tick(deadline):
+              i=bisect_left(ticks,float(deadline)-1e-9)
+              return ticks[i] if i<len(ticks) else float(deadline)
+
+          orig_schedule=BurstMachine._schedule
+          def patched_schedule(self,scheduler,time,kind,*,stage=None):
+              return orig_schedule(self,scheduler,burst_tick(time),kind,stage=stage)
+          BurstMachine._schedule=patched_schedule
+          rr=BurstRuntime(cp,policy,profile).run(duration=D)
+          BurstMachine._schedule=orig_schedule
+
+          mcasts=[x for x in moris if x[1]=='burst_cast']
+          mstarts=sorted(set(t for t,e,c in moris if e=='full_burst_start'))
+          mends=sorted(set(t for t,e,c in moris if e=='full_burst_end'))
+          print('CAST_COMPARE')
+          for i,((mt,_,mc),(ft,fa,fs)) in enumerate(zip(mcasts,rr.casts),1):
+              print(i,round(mt,9),round(ft,9),round(ft-mt,9),mc,fs,cp.names[fa])
+          print('FB_START_COMPARE')
+          for i,(m,f) in enumerate(zip(mstarts,rr.full_burst_starts),1):
+              print(i,round(m,9),round(f,9),round(f-m,9))
+          print('FB_END_COMPARE')
+          for i,(m,f) in enumerate(zip(mends,rr.full_burst_ends),1):
+              print(i,round(m,9),round(f,9),round(f-m,9))
+          print('COUNTS',len(mcasts),len(rr.casts),len(mstarts),len(rr.full_burst_starts),len(mends),len(rr.full_burst_ends))
           PY
