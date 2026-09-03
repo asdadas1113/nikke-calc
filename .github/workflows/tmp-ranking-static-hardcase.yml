@@ -13,128 +13,73 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Trace Quency first reload boundary
+      - name: Trial rapid nonshot frame boundaries
         shell: bash
         run: |
           python - <<'PY'
-          from calculator.timeline import DEFAULT_ENEMY, CharState, simulate
+          from math import ceil
+          from calculator.timeline import DEFAULT_ENEMY, DT, simulate
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
-          from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
+          from fast_engine.engine.score import score_static_squad, static_score_blockers
           from fast_engine.engine.dynamic_reload import DynamicRapidReloadRuntime
           from fast_engine.engine.dynamic_rapid import DynamicRapidCadenceRuntime
 
-          MEMBERS=("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸")
-          TARGET="퀀시 : 이스케이프 퀸"
-          DURATION=35.0
+          TEAMS={
+              "MM":("미란다","브리드 : 사일런트 트랙","헬름","루주","미하라 : 본딩 체인"),
+              "RHQ":("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸"),
+          }
+          DURATION=180.0
           CONFIG={"duration":DURATION,"first_burst_time":3.0,"rng_mode":"expected"}
-          squad=spec.build_squad(list(MEMBERS))
-          config=spec.build_config(squad,dict(CONFIG))
-          compiled=compile_moris_squad(squad)
-          blockers=static_score_blockers(compiled)
-          if blockers: raise RuntimeError(blockers)
-          policy=compile_burst_policy(squad,compiled,dict(CONFIG))
-          idx=MEMBERS.index(TARGET)
           enemy=dict(DEFAULT_ENEMY); enemy["def"]=55000.0; enemy["code"]="작열"; enemy["core_px"]=10.0
           profile=EnemyStaticProfile(defense=55000.0,element="작열",core_uptime=1.0,core_px=10.0,duration=DURATION)
-          print("WEAPON", compiled.members[idx].weapon)
+          built={}; moris_scores={}
+          for key,members in TEAMS.items():
+              squad=spec.build_squad(list(members)); config=spec.build_config(squad,dict(CONFIG))
+              compiled=compile_moris_squad(squad); blockers=static_score_blockers(compiled)
+              if blockers: raise RuntimeError(f"{key}:{blockers}")
+              policy=compile_burst_policy(squad,compiled,dict(CONFIG))
+              moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=False)
+              built[key]=(members,compiled,policy,moris); moris_scores[key]=float(moris.squad_total)
 
-          # Moris: only real target transitions around empty-magazine reload.
-          m_reload_count={"n":0}
-          orig_start=CharState._start_reload
-          def trace_start(self,t,bm,*args,**kwargs):
-              if self.name==TARGET and m_reload_count["n"]<2:
-                  print(f"M_RELOAD_START_PRE|t={t:.6f}|ammo={self.ammo}|until={self.reloading_until:.6f}|kwargs={kwargs}")
-              out=orig_start(self,t,bm,*args,**kwargs)
-              if self.name==TARGET and m_reload_count["n"]<2:
-                  print(f"M_RELOAD_START_POST|t={t:.6f}|ammo={self.ammo}|until={self.reloading_until:.6f}")
-                  m_reload_count["n"]+=1
+          def score_set(label):
+              out={}; rows={}
+              for key,(members,compiled,policy,moris) in built.items():
+                  fast=score_static_squad(compiled,policy,profile)
+                  out[key]=float(fast.squad_total)
+                  rows[key]=[(n,float(moris.char_total[n]),float(fast.char_total[i])) for i,n in enumerate(members)]
+              print(f"SET|{label}")
+              for key in TEAMS:
+                  print(f"TEAM|set={label}|team={key}|m={moris_scores[key]:.3f}|f={out[key]:.3f}|err={out[key]/moris_scores[key]-1:.8f}")
+                  for n,m,f in rows[key]: print(f"ACTOR|set={label}|team={key}|name={n}|m={m:.3f}|f={f:.3f}|err={f/m-1:.8f}")
               return out
-          CharState._start_reload=trace_start
+          def margin(s): return (s['MM']-s['RHQ'])/max(s['MM'],s['RHQ'])
+          base=score_set('base')
 
-          if hasattr(CharState,"_finish_reload"):
-              orig_finish=CharState._finish_reload
-              def trace_finish(self,t,bm,*args,**kwargs):
-                  watch=self.name==TARGET and m_reload_count["n"]<=2
-                  if watch:
-                      print(f"M_RELOAD_FINISH_PRE|t={t:.6f}|ammo={self.ammo}|until={self.reloading_until:.6f}")
-                  out=orig_finish(self,t,bm,*args,**kwargs)
-                  if watch:
-                      print(f"M_RELOAD_FINISH_POST|t={t:.6f}|ammo={self.ammo}|until={self.reloading_until:.6f}|next={self.next_fire_time:.6f}")
-                  return out
-              CharState._finish_reload=trace_finish
+          def frame_at_or_after(t):
+              x=float(t)
+              return ceil((x-1e-9)/DT)*DT
 
-          orig_fire=CharState._fire
-          m_after_reload={"armed":False}
-          def trace_fire(self,t,bm,enemy,cfg):
-              before=self.ammo
-              out=orig_fire(self,t,bm,enemy,cfg)
-              if self.name==TARGET:
-                  if before<=2:
-                      print(f"M_SHOT_EDGE|t={t:.6f}|ammo_before={before}|ammo_after={self.ammo}|next={self.next_fire_time:.6f}")
-                      if before==1: m_after_reload["armed"]=True
-                  elif m_after_reload["armed"] and before>2:
-                      print(f"M_FIRST_AFTER_RELOAD|t={t:.6f}|ammo_before={before}|ammo_after={self.ammo}|next={self.next_fire_time:.6f}")
-                      m_after_reload["armed"]=False
-              return out
-          CharState._fire=trace_fire
+          orig_base=DynamicRapidReloadRuntime._finish_nonshot_phase
+          def q_base(self,st,transition_time):
+              q=frame_at_or_after(transition_time)
+              if q>transition_time+1e-9:
+                  st.phase_end=q
+                  return
+              return orig_base(self,st,transition_time)
+          DynamicRapidReloadRuntime._finish_nonshot_phase=q_base
 
-          moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=False)
-          print(f"M_TOTAL|target={float(moris.char_total[TARGET]):.3f}|squad={float(moris.squad_total):.3f}")
+          orig_rapid=DynamicRapidCadenceRuntime._finish_nonshot_phase
+          def q_rapid(self,st,transition_time):
+              q=frame_at_or_after(transition_time)
+              if q>transition_time+1e-9:
+                  st.phase_end=q
+                  return
+              return orig_rapid(self,st,transition_time)
+          DynamicRapidCadenceRuntime._finish_nonshot_phase=q_rapid
 
-          # Fast: log only actual state objects, not prediction copies.
-          fast_flags={"after_reload":False,"reloads":0}
-          base_after=DynamicRapidReloadRuntime._after_shot
-          def trace_after(self,st,shot_time):
-              real=self._states.get(st.actor) is st
-              before=st.ammo
-              base_after(self,st,shot_time)
-              if real and st.actor==idx:
-                  if before<=2:
-                      print(f"F_SHOT_EDGE|t={shot_time:.6f}|ammo_before={before}|ammo_after={st.ammo}|phase={st.phase}|phase_end={st.phase_end:.6f}")
-                  elif fast_flags["after_reload"]:
-                      print(f"F_FIRST_AFTER_RELOAD|t={shot_time:.6f}|ammo_before={before}|ammo_after={st.ammo}|phase_end={st.phase_end:.6f}")
-                      fast_flags["after_reload"]=False
-          DynamicRapidReloadRuntime._after_shot=trace_after
-
-          base_finish=DynamicRapidReloadRuntime._finish_nonshot_phase
-          def trace_finish_base(self,st,transition_time):
-              real=self._states.get(st.actor) is st
-              old=st.phase
-              if real and st.actor==idx and fast_flags["reloads"]<2:
-                  print(f"F_PHASE_PRE|phase={old}|t={transition_time:.6f}|ammo={st.ammo}|phase_end={st.phase_end:.6f}")
-              out=base_finish(self,st,transition_time)
-              if real and st.actor==idx and fast_flags["reloads"]<2:
-                  print(f"F_PHASE_POST|old={old}|new={st.phase}|t={transition_time:.6f}|ammo={st.ammo}|phase_end={st.phase_end:.6f}")
-                  if old=="reloading" and st.phase=="firing":
-                      fast_flags["after_reload"]=True
-                      fast_flags["reloads"]+=1
-              return out
-          DynamicRapidReloadRuntime._finish_nonshot_phase=trace_finish_base
-
-          rapid_finish=DynamicRapidCadenceRuntime._finish_nonshot_phase
-          def trace_finish_rapid(self,st,transition_time):
-              real=self._states.get(st.actor) is st
-              old=st.phase
-              if real and st.actor==idx and fast_flags["reloads"]<2:
-                  print(f"F_RAPID_PHASE_PRE|phase={old}|t={transition_time:.6f}|ammo={st.ammo}|phase_end={st.phase_end:.6f}")
-              out=rapid_finish(self,st,transition_time)
-              if real and st.actor==idx and fast_flags["reloads"]<2:
-                  print(f"F_RAPID_PHASE_POST|old={old}|new={st.phase}|t={transition_time:.6f}|ammo={st.ammo}|phase_end={st.phase_end:.6f}")
-                  if old=="reloading" and st.phase=="firing":
-                      fast_flags["after_reload"]=True
-                      fast_flags["reloads"]+=1
-              return out
-          DynamicRapidCadenceRuntime._finish_nonshot_phase=trace_finish_rapid
-
-          sink=SimpleDamageScoreSink(compiled,profile)
-          runtime=BurstRuntime(compiled,policy,profile,damage_sink=sink)
-          observer=StaticNormalAttackObserver(runtime,duration=DURATION)
-          result=runtime.run(duration=DURATION,score_observer=observer)
-          scored=observer.finish(events_processed=result.events_processed)
-          print(f"F_TOTAL|target={float(scored.char_total[idx]):.3f}|squad={float(scored.squad_total):.3f}|events={result.events_processed}")
+          framed=score_set('rapid_nonshot_frame')
+          print(f"MARGINS|moris={margin(moris_scores):.8f}|base={margin(base):.8f}|framed={margin(framed):.8f}")
           PY
