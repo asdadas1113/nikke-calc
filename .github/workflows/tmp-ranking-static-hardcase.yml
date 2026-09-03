@@ -22,9 +22,11 @@ jobs:
           from calculator.sim_result import _is_normal
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import score_static_normal_squad, score_static_squad, static_score_blockers
+          from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
 
           TEAMS = {
               "MM": ("미란다", "브리드 : 사일런트 트랙", "헬름", "루주", "미하라 : 본딩 체인"),
@@ -43,11 +45,13 @@ jobs:
               if blockers:
                   raise RuntimeError(f"{key} blockers={blockers}")
               policy = compile_burst_policy(squad, compiled, dict(CONFIG))
+
               enemy = dict(DEFAULT_ENEMY)
               enemy["def"] = DEFENSE
               enemy["code"] = CODE
               enemy["core_px"] = CORE_PX
               moris = simulate(squad, config=config, enemy=enemy, seed=42, verbose=False)
+
               profile = EnemyStaticProfile(
                   defense=DEFENSE,
                   element=CODE,
@@ -55,8 +59,12 @@ jobs:
                   core_px=CORE_PX,
                   duration=policy.duration,
               )
-              fast_total = score_static_squad(compiled, policy, profile)
-              fast_normal = score_static_normal_squad(compiled, policy, profile)
+              sink = SimpleDamageScoreSink(compiled, profile)
+              runtime = BurstRuntime(compiled, policy, profile, damage_sink=sink)
+              observer = StaticNormalAttackObserver(runtime, duration=policy.duration)
+              result = runtime.run(duration=policy.duration, score_observer=observer)
+              normal = observer.finish(events_processed=result.events_processed)
+              fast_total = tuple(normal.char_total[i] + sink.char_total[i] for i in range(len(members)))
 
               m_normal = defaultdict(float)
               m_skill = defaultdict(float)
@@ -72,15 +80,15 @@ jobs:
                       skill_hits[hit.caster] += 1
                       skill_damage[hit.caster][hit.skill_name or hit.hit_tag] += float(hit.damage)
 
-              print(f"TEAM|team={key}|moris={float(moris.squad_total):.3f}|fast={float(fast_total.squad_total):.3f}")
+              print(f"TEAM|team={key}|moris={float(moris.squad_total):.3f}|fast={sum(fast_total):.3f}")
               for idx, name in enumerate(members):
                   mn = m_normal[name]
                   ms = m_skill[name]
-                  fn = float(fast_normal.char_total[idx])
-                  fs = float(fast_total.char_total[idx]) - fn
+                  fn = float(normal.char_total[idx])
+                  fs = float(sink.char_total[idx])
                   nerr = fn / mn - 1.0 if mn else 0.0
                   serr = fs / ms - 1.0 if ms else 0.0
-                  terr = float(fast_total.char_total[idx]) / float(moris.char_total.get(name, 1.0)) - 1.0
+                  terr = fast_total[idx] / float(moris.char_total.get(name, 1.0)) - 1.0
                   print(
                       f"CAT|team={key}|name={name}|moris_normal={mn:.3f}|fast_normal={fn:.3f}|normal_err={nerr:.8f}|"
                       f"moris_skill={ms:.3f}|fast_skill={fs:.3f}|skill_err={serr:.8f}|total_err={terr:.8f}|"
