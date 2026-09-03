@@ -24,6 +24,11 @@ def main() -> None:
     runtime = ROOT / "fast_engine" / "engine" / "burst_runtime.py"
     _replace_once(
         runtime,
+        '''from .conditions import SignalContext\n''',
+        '''from .conditions import ConditionMode, SignalContext\n''',
+    )
+    _replace_once(
+        runtime,
         '''from .damage_state import DamageTermResolver\nfrom .dispatcher import TriggerDispatcher\n''',
         '''from .damage_policy import is_direct_damage_buff_runtime_supported\nfrom .damage_state import DamageTermResolver\nfrom .dispatcher import TriggerDispatcher\n''',
     )
