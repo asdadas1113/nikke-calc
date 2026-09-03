@@ -136,13 +136,18 @@ def main() -> None:
     TEST_PATH.write_text(TEST_CONTENT, encoding="utf-8")
     _replace_once(
         EXISTING_SCORE_TEST,
-        "enemy = EnemyStaticProfile(duration=self.DURATION)",
-        "enemy = EnemyStaticProfile(duration=self.DURATION, core_px=0.0)",
+        '''class LiberelioPendingB3ParityTests(unittest.TestCase):\n    NAMES = ["미카", "아니스", "리버렐리오"]\n    DURATION = 1.0\n    SKILL = "잠기는 세계 2"\n\n    def test_first_burst_pending_bonus_matches_moris_before_first_full_charge(self):''',
+        '''class LiberelioPendingB3ParityTests(unittest.TestCase):\n    NAMES = ["미카", "아니스", "리버렐리오"]\n    DURATION = 1.0\n    SKILL = "잠기는 세계 2"\n\n    def test_first_burst_pending_bonus_matches_moris_before_first_full_charge(self):''',
     )
     _replace_once(
         EXISTING_SCORE_TEST,
-        "EnemyStaticProfile(duration=1.6),",
-        "EnemyStaticProfile(duration=1.6, core_px=0.0),",
+        '''        policy = compile_burst_policy(squad, compiled, config)\n        enemy = EnemyStaticProfile(duration=self.DURATION)\n        sink = SimpleDamageScoreSink(compiled, enemy)\n\n        actor = self.NAMES.index("리버렐리오")''',
+        '''        policy = compile_burst_policy(squad, compiled, config)\n        enemy = EnemyStaticProfile(duration=self.DURATION, core_px=0.0)\n        sink = SimpleDamageScoreSink(compiled, enemy)\n\n        actor = self.NAMES.index("리버렐리오")''',
+    )
+    _replace_once(
+        EXISTING_SCORE_TEST,
+        '''        runtime = BurstRuntime(\n            compiled,\n            policy,\n            EnemyStaticProfile(duration=1.6),\n        )\n        effect = next(e for e in compiled.members[0].effects if e.name == "격류")''',
+        '''        runtime = BurstRuntime(\n            compiled,\n            policy,\n            EnemyStaticProfile(duration=1.6, core_px=0.0),\n        )\n        effect = next(e for e in compiled.members[0].effects if e.name == "격류")''',
     )
     print(f"wrote production regression test: {TEST_PATH.relative_to(ROOT)}")
     print("made existing Riverellio no-core fixtures explicit")
