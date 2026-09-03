@@ -13,36 +13,26 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Inspect stage buff source semantics
+      - name: Trace Moris stage buff activations
         shell: bash
         run: |
           python - <<'PY'
+          from calculator.timeline import DEFAULT_ENEMY, simulate
           from context import spec
-          from fast_engine.engine.compiler import compile_moris_squad
 
           names=["라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸"]
-          cp=compile_moris_squad(spec.build_squad(names))
-          print('MEMBERS')
-          for i,m in enumerate(cp.members):
-              print(i,m.name,'base_atk',m.base_atk,'burst',m.burst_stage)
-          print('MATCHING_EFFECTS')
-          for e in cp.effects:
-              if e.name in {'무대, 시작할게.','무대, 시작할게. 2','무대, 시작할게. 3','보컬 효과','계승되는 힘 3'}:
-                  print({
-                      'id':e.effect_id,
-                      'actor':e.actor,
-                      'actor_name':cp.members[e.actor].name,
-                      'name':e.name,
-                      'type':e.effect_type,
-                      'stat':e.stat,
-                      'value':e.value,
-                      'target':e.target,
-                      'target_mode':e.target_spec.mode.value,
-                      'duration':e.duration,
-                      'max_stack':e.max_stack,
-                      'max_trigger':e.max_trigger,
-                      'triggers':[(r.event_key,r.mode.value,r.threshold) for r in e.triggers],
-                      'conditions':[(r.mode.value,r.key,r.value) for r in e.condition_rules],
-                      'parameters':e.parameters,
-                  })
+          squad=spec.build_squad(names)
+          cfg=spec.build_config(squad,{'duration':130.0,'first_burst_time':3.0,'rng_mode':'expected'})
+          enemy=dict(DEFAULT_ENEMY); enemy['def']=55000.0; enemy['code']='작열'; enemy['core_px']=10.0
+          r=simulate(squad,config=cfg,enemy=enemy,seed=42,verbose=False)
+          print('RESULT_ATTRS',sorted(k for k in vars(r) if not k.startswith('_')))
+          for attr in ('buff_events','events','buffs'):
+              rows=getattr(r,attr,None)
+              if rows is None: continue
+              print('ATTR',attr,'len',len(rows))
+              for row in rows:
+                  s=str(row)
+                  t=getattr(row,'t',getattr(row,'time',None))
+                  if t is not None and 120.0<=float(t)<=130.0 and ('무대, 시작할게. 3' in s or '무대, 시작할게.' in s):
+                      print('ROW',row)
           PY
