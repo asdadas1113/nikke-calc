@@ -22,10 +22,12 @@ jobs:
         run: |
           PYTHONPATH=. python - <<'PY'
           from pathlib import Path
+          import textwrap
           path = Path('fast_engine/engine/dispatcher.py')
           text = path.read_text(encoding='utf-8')
           anchor = '    @classmethod\n    def _named_event_marker_nop_shape_supported(cls, effect: "CompiledEffect") -> bool:\n'
-          helper = '''    @staticmethod
+          helper = textwrap.indent(textwrap.dedent('''\
+          @staticmethod
           def _timed_self_named_state_marker_shape_supported(effect: "CompiledEffect") -> bool:
               """Certify a pure finite self-state marker emitted by one burst cast."""
               return (
@@ -50,8 +52,7 @@ jobs:
                   and effect.triggers[0].event_key == "burst_cast"
               )
 
-          '''
-          helper = '\n'.join(line[10:] if line.startswith('          ') else line for line in helper.splitlines()) + '\n'
+          '''), '    ')
           if '_timed_self_named_state_marker_shape_supported' not in text:
               if anchor not in text:
                   raise SystemExit('marker anchor not found')
