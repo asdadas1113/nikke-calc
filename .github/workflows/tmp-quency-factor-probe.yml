@@ -82,7 +82,7 @@ jobs:
                   for e in compiled.members[ti].effects:
                       print(e.actor_effect_index,e.effect_id,e.effect_type,e.name,e.stat,e.value,e.duration,e.max_stack,e.parameters,
                             [(r.raw,r.event_key,r.mode.value,r.threshold) for r in e.triggers],
-                            [(r.raw,r.mode.value,r.key,r.threshold) for r in e.condition_rules])
+                            [repr(r) for r in e.condition_rules])
 
               ep = EnemyStaticProfile(defense=60000.0,element='작열',core_uptime=1.0 if core_px>0 else 0.0,core_px=core_px,duration=180.0)
               policy = compile_burst_policy(squad,compiled,dict(cfg))
