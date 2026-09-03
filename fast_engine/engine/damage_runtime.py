@@ -39,6 +39,7 @@ _SAFE_EVENT_KEYS = frozenset({
     "full_charge_hit",
     "core_hit",
     "pellet_hit",
+    "last_bullet",
     "burst_enter:1",
     "burst_enter:2",
     "burst_enter:3",
