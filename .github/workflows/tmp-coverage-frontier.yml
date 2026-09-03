@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   apply-max-ammo-fix:
-    if: github.event.head_commit.message == 'chore: apply source-quantized max ammo fix'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,23 +19,28 @@ jobs:
         with:
           python-version: '3.13'
       - name: Apply source-quantized permanent max-ammo fix
+        shell: bash
         run: |
+          if [ "$(git log -1 --pretty=%s)" != "chore: rerun source-quantized max ammo fix" ]; then
+            echo "helper-only follow-up push; no action"
+            exit 0
+          fi
           python - <<'PY'
           from pathlib import Path
 
-          p=Path('fast_engine/engine/weapon.py')
-          text=p.read_text()
-          old='''    def _full_ammo(self) -> int:\n        base = int(self.weapon["max_ammo"])\n        pct_gain = _round_half_up(base * self.mods.max_ammo_pct / 100.0)\n        flat = _round_half_up(self.mods.max_ammo_flat)\n        return max(1, base + pct_gain + flat)\n'''
-          new='''    def _full_ammo(self) -> int:\n        base = int(self.weapon["max_ammo"])\n        # Moris quantizes permanent max-ammo percentage sources separately before\n        # adding them. Aggregating equipment + collection percentages first can\n        # move the magazine by one bullet at half-step boundaries (for example,\n        # Asuka WILLE: 300 + round(388.92) + round(28.5) = 718, not 717).\n        pct_gain = 0\n        for effect in self.character.effects:\n            if effect.effect_type != "buff" or effect.stat != "max_ammo_pct":\n                continue\n            if effect.target != "self" or effect.condition_rules:\n                continue\n            if effect.duration not in (None, -1):\n                continue\n            if not any(rule.event_key == "battle_start" for rule in effect.triggers):\n                continue\n            pct_gain += _round_half_up(\n                base * float(effect.value or 0.0) / 100.0\n            )\n        flat = _round_half_up(self.mods.max_ammo_flat)\n        return max(1, base + pct_gain + flat)\n'''
+          p = Path('fast_engine/engine/weapon.py')
+          text = p.read_text()
+          old = '''    def _full_ammo(self) -> int:\n        base = int(self.weapon["max_ammo"])\n        pct_gain = _round_half_up(base * self.mods.max_ammo_pct / 100.0)\n        flat = _round_half_up(self.mods.max_ammo_flat)\n        return max(1, base + pct_gain + flat)\n'''
+          new = '''    def _full_ammo(self) -> int:\n        base = int(self.weapon["max_ammo"])\n        # Moris quantizes permanent max-ammo percentage sources separately before\n        # adding them. Aggregating equipment + collection percentages first can\n        # move the magazine by one bullet at half-step boundaries.\n        pct_gain = 0\n        for effect in self.character.effects:\n            if effect.effect_type != "buff" or effect.stat != "max_ammo_pct":\n                continue\n            if effect.target != "self" or effect.condition_rules:\n                continue\n            if effect.duration not in (None, -1):\n                continue\n            if not any(rule.event_key == "battle_start" for rule in effect.triggers):\n                continue\n            pct_gain += _round_half_up(\n                base * float(effect.value or 0.0) / 100.0\n            )\n        flat = _round_half_up(self.mods.max_ammo_flat)\n        return max(1, base + pct_gain + flat)\n'''
           assert old in text, 'weapon _full_ammo block moved'
-          p.write_text(text.replace(old,new,1))
+          p.write_text(text.replace(old, new, 1))
 
-          p=Path('fast_engine/tests/test_weapon_cadence.py')
-          text=p.read_text()
-          anchor='''    def test_permanent_equipment_and_cube_modifiers_enter_static_cadence(self):\n        squad = compile_moris_squad(build_squad(["라피", "폴리", "프로덕트 12", "델타", "아니스"]))\n        rapi = squad.members[0]\n        from fast_engine.engine.weapon import compile_static_cadence_modifiers\n        mods = compile_static_cadence_modifiers(rapi)\n        self.assertAlmostEqual(mods.max_ammo_pct, 129.64)\n        self.assertAlmostEqual(mods.reload_speed_pct, 29.69)\n'''
-          addition=anchor+'''\n    def test_permanent_max_ammo_pct_is_quantized_per_source(self):\n        squad = compile_moris_squad(\n            build_squad(["아스카 : WILLE", "라피", "폴리", "델타", "아니스"])\n        )\n        from fast_engine.engine.weapon import WeaponCadenceMachine, compile_static_cadence_modifiers\n\n        asuka = squad.members[0]\n        mods = compile_static_cadence_modifiers(asuka)\n        self.assertAlmostEqual(mods.max_ammo_pct, 139.14)\n        # Moris groups the 129.64% equipment and 9.5% collection sources:\n        # 300 + round_half_up(388.92) + round_half_up(28.5) = 718.\n        self.assertEqual(\n            WeaponCadenceMachine(0, asuka, duration=40.0)._full_ammo(),\n            718,\n        )\n'''
+          p = Path('fast_engine/tests/test_weapon_cadence.py')
+          text = p.read_text()
+          anchor = '''    def test_permanent_equipment_and_cube_modifiers_enter_static_cadence(self):\n        squad = compile_moris_squad(build_squad(["라피", "폴리", "프로덕트 12", "델타", "아니스"]))\n        rapi = squad.members[0]\n        from fast_engine.engine.weapon import compile_static_cadence_modifiers\n        mods = compile_static_cadence_modifiers(rapi)\n        self.assertAlmostEqual(mods.max_ammo_pct, 129.64)\n        self.assertAlmostEqual(mods.reload_speed_pct, 29.69)\n'''
+          addition = anchor + '''\n    def test_permanent_max_ammo_pct_is_quantized_per_source(self):\n        squad = compile_moris_squad(\n            build_squad(["아스카 : WILLE", "라피", "폴리", "델타", "아니스"])\n        )\n        from fast_engine.engine.weapon import WeaponCadenceMachine, compile_static_cadence_modifiers\n\n        asuka = squad.members[0]\n        mods = compile_static_cadence_modifiers(asuka)\n        self.assertAlmostEqual(mods.max_ammo_pct, 139.14)\n        self.assertEqual(\n            WeaponCadenceMachine(0, asuka, duration=40.0)._full_ammo(),\n            718,\n        )\n'''
           assert anchor in text, 'weapon cadence test anchor moved'
-          p.write_text(text.replace(anchor,addition,1))
+          p.write_text(text.replace(anchor, addition, 1))
           PY
           PYTHONPATH=. python -m unittest fast_engine.tests.test_weapon_cadence
           git config user.name github-actions[bot]
