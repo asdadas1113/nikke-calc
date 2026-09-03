@@ -16,22 +16,49 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Run marker regressions
-        run: |
-          PYTHONPATH=. python -m unittest fast_engine.tests.test_statless_named_state_marker fast_engine.tests.test_damage_state_end_force_reload fast_engine.tests.test_named_buff_event_runtime -v
-          python -m py_compile fast_engine/engine/dispatcher.py fast_engine/tests/test_statless_named_state_marker.py
-          git diff --check
-      - name: Scan public coverage frontier
-        run: |
-          PYTHONPATH=. python -m fast_engine.research.public_blocker_frontier
-      - name: Print affected public teams
+      - name: Inspect periodic direct-state shapes
         run: |
           PYTHONPATH=. python - <<'PY'
-          from fast_engine.research.public_blocker_frontier import scan_public_blockers
-          report = scan_public_blockers()
-          for row in report['rows']:
-              if row['source_name'] in {'레이드_미하라에이다','레이드_작열짬'}:
-                  print('TEAM',row['source_name'])
-                  print('BLOCKERS',row['blockers'])
-                  print('UNSUPPORTED',row['unsupported'])
+          from context import spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_supported
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+          from fast_engine.engine.score import _direct_damage_buff_score_supported, _is_score_safe_fixed_periodic, static_score_blockers
+
+          cases = [
+              (['미란다','헬름 : 아쿠아마린','에이드 : 에이전트 바니','스노우 화이트','에이다'], '헬름 : 아쿠아마린', '이지스 캐논 견제 사격 2'),
+              (['미란다','헬름 : 아쿠아마린','에이드 : 에이전트 바니','스노우 화이트','에이다'], '스노우 화이트', '세븐스 드워프 : V&VI 2'),
+              (['토브','나유타','도로시 : 세렌디피티','스노우 화이트 : 헤비암즈','디젤 : 윈터 스위츠'], '나유타', '기억 흡수'),
+          ]
+          for names, owner_name, effect_name in cases:
+              squad = compile_moris_squad(spec.build_squad(names))
+              effect = next(e for e in squad.effects if squad.members[e.actor].name == owner_name and e.name == effect_name)
+              print('EFFECT', owner_name, effect_name)
+              print(' repr=', repr(effect))
+              print(' timing=', [(r.raw,r.event_key,r.mode.value,r.interval,r.threshold,r.trigger_count_reducible) for r in effect.triggers])
+              print(' cond=', [(r.raw,r.mode.value,r.key,r.value,r.value2) for r in effect.condition_rules])
+              print(' target=', effect.target, effect.target_spec)
+              print(' runtime_policy=', is_direct_damage_buff_runtime_supported(effect))
+              print(' executable=', TriggerDispatcher.is_executable_effect(effect))
+              print(' score_direct=', _direct_damage_buff_score_supported(squad,effect))
+              print(' score_fixed_periodic=', _is_score_safe_fixed_periodic(effect))
+              print(' blockers=', [b for b in static_score_blockers(squad) if owner_name in b and (effect_name in b or (effect.stat or '') in b)])
+              print()
+          PY
+      - name: Inspect periodic runtime contracts
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          from context import spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+          from fast_engine.engine.score import _PERIODIC_AUX_STATS, _PERIODIC_GRID_INVALIDATORS
+
+          print('PERIODIC_AUX_STATS', sorted(_PERIODIC_AUX_STATS))
+          print('PERIODIC_GRID_INVALIDATORS', sorted(_PERIODIC_GRID_INVALIDATORS))
+          names=['토브','나유타','도로시 : 세렌디피티','스노우 화이트 : 헤비암즈','디젤 : 윈터 스위츠']
+          squad=compile_moris_squad(spec.build_squad(names))
+          for e in squad.effects:
+              if e.name=='기억 흡수':
+                  print('NAYUTA_CAP',e.capability.disposition.value,e.capability.blockers)
+                  print('NAYUTA_PERIODIC_ONLY',TriggerDispatcher._periodic_timing_is_only_blocker(e))
           PY
