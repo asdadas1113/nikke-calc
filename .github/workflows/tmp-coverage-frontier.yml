@@ -13,14 +13,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect public bonus-damage blocker shapes
+      - name: Inspect live reload and max-ammo blocker shapes
         run: |
           PYTHONPATH=. python - <<'PY'
           from context import spec
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.damage_events import compile_simple_damage_event, compile_pending_b3_bonus_damage_event
-          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
-          from fast_engine.engine.model import EnemyStaticProfile
+          from fast_engine.engine.score import (
+              _is_folded_static_self_modifier,
+              _is_dynamic_reload_score_supported,
+              _is_dynamic_max_ammo_score_supported,
+              _possible_ally_targets,
+              _rapid_actor_score_safe,
+              _charge_actor_score_safe,
+          )
           from fast_engine.research.public_ranking_probe import _source_corpus
 
           seen_members = set()
@@ -29,21 +34,33 @@ jobs:
               if members in seen_members:
                   continue
               seen_members.add(members)
-              compiled = compile_moris_squad(spec.build_squad(list(members)))
-              sink = SimpleDamageScoreSink(compiled, EnemyStaticProfile(defense=0.0, duration=180.0))
-              for effect in compiled.effects:
-                  if effect.effect_type != 'damage' or (effect.stat or '') != 'bonus_damage':
+              squad = compile_moris_squad(spec.build_squad(list(members)))
+              for effect in squad.effects:
+                  stat = effect.stat or ''
+                  if stat not in {'reload_speed_pct', 'max_ammo_pct', 'max_ammo_flat'}:
                       continue
-                  key = (compiled.members[effect.actor].name, effect.name)
+                  if _is_folded_static_self_modifier(effect):
+                      continue
+                  supported = (
+                      _is_dynamic_reload_score_supported(squad, effect)
+                      if stat == 'reload_speed_pct'
+                      else _is_dynamic_max_ammo_score_supported(squad, effect)
+                  )
+                  if supported:
+                      continue
+                  key = (squad.members[effect.actor].name, effect.name, stat)
                   if key in seen_effects:
                       continue
                   seen_effects.add(key)
-                  print('EFFECT|owner=', key[0], '|name=', key[1])
-                  print('  source=', effect.source, 'value=', effect.value, 'target=', effect.target)
+                  targets = _possible_ally_targets(squad, effect)
+                  print('EFFECT|', key, '|first_team=', source_name)
+                  print('  target=', effect.target, 'targets=', [(a, squad.members[a].name, squad.members[a].weapon.get('fire_mode')) for a in targets])
                   print('  triggers=', [repr(r) for r in effect.triggers])
                   print('  conditions=', [repr(r) for r in effect.condition_rules])
-                  print('  params=', repr(effect.parameters), 'duration=', effect.duration)
-                  print('  simple=', repr(compile_simple_damage_event(effect, compiled.members[effect.actor])))
-                  print('  pending_b3=', repr(compile_pending_b3_bonus_damage_event(effect, compiled.members[effect.actor])))
-                  print('  sink_supports=', sink.supports(effect))
+                  print('  params=', repr(effect.parameters), 'duration=', effect.duration, 'value=', effect.value)
+                  for a in targets:
+                      mode = str(squad.members[a].weapon.get('fire_mode') or '')
+                      rapid = _rapid_actor_score_safe(squad, a) if mode in {'auto', 'auto_warmup'} else None
+                      charge = _charge_actor_score_safe(squad, a) if mode == 'charge' else None
+                      print('    RECIPIENT|', a, squad.members[a].name, 'mode=', mode, 'rapid_safe=', rapid, 'charge_safe=', charge)
           PY
