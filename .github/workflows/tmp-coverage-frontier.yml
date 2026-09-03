@@ -13,69 +13,47 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Classify unique public coverage gaps
+      - name: Inspect Crown and Little Mermaid blockers
         run: |
           PYTHONPATH=. python - <<'PY'
-          from collections import Counter, defaultdict
-          from fast_engine.research.public_blocker_frontier import scan_public_blockers, _conceptual_key
+          from dataclasses import asdict
+          from context import spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.damage_events import compile_simple_damage_event
+          from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_supported
+          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
+          from fast_engine.engine.model import EnemyStaticProfile
+          from fast_engine.engine.score import (
+              _direct_damage_buff_score_supported,
+              _named_buff_event_dependency_score_safe,
+              _shield_runtime_dependency_score_safe,
+              _uses_shield_runtime_semantics,
+          )
 
-          def family(item: str) -> str:
-              if item.startswith(('normal_delivery:', 'skill_state_delivery:', 'damage_delivery:')):
-                  return 'damage_delivery'
-              if item.startswith('skill_damage:'):
-                  return 'skill_damage'
-              if item.startswith('cadence:'):
-                  return 'cadence'
-              if item.startswith('weapon_change:'):
-                  return 'weapon_change'
-              if item.startswith('control:'):
-                  return 'control'
-              if item.startswith('normal_state:'):
-                  return 'normal_state'
-              if item.startswith('runtime:'):
-                  return 'runtime'
-              if item.startswith('unsupported:'):
-                  return 'unsupported'
-              if item.startswith('probe_error:'):
-                  return 'probe_error'
-              return item.split(':', 1)[0]
+          names = ['리틀 머메이드', '크라운', '라피 : 레드 후드', '미하라 : 본딩 체인', '헬름']
+          squad = spec.build_squad(names)
+          compiled = compile_moris_squad(squad)
+          sink = SimpleDamageScoreSink(compiled, EnemyStaticProfile(defense=0.0, duration=180.0))
 
-          report = scan_public_blockers()
-          unique = {}
-          aliases = defaultdict(list)
-          for row in report['rows']:
-              key = tuple(row['members'])
-              aliases[key].append(row['source_name'])
-              unique.setdefault(key, row)
-
-          gaps = []
-          family_teams = Counter()
-          conceptual_teams = Counter()
-          family_to_teams = defaultdict(list)
-          for members, row in unique.items():
-              raw = tuple(row['blockers']) + tuple('unsupported:' + x for x in row['unsupported'])
-              concepts = tuple(dict.fromkeys(_conceptual_key(x) for x in raw))
-              if not concepts:
+          for effect in compiled.effects:
+              if effect.name not in {'로얄 에타이어 4', '거품 난사'}:
                   continue
-              fams = tuple(sorted({family(x) for x in concepts}))
-              for f in fams:
-                  family_teams[f] += 1
-                  family_to_teams[f].append(row['source_name'])
-              for x in concepts:
-                  conceptual_teams[x] += 1
-              gaps.append((len(concepts), row['source_name'], members, fams, concepts, aliases[members]))
-
-          gaps.sort(key=lambda x: (x[0], x[1]))
-          print(f'UNIQUE_SUMMARY|source={len(report["rows"])}|unique={len(unique)}|certified={len(unique)-len(gaps)}|gaps={len(gaps)}')
-          print('FAMILY_PRESSURE')
-          for f, n in family_teams.most_common():
-              print(f'FAMILY|{f}|teams={n}|names={family_to_teams[f]}')
-          print('TOP_CONCEPTUAL_UNIQUE_TEAMS')
-          for item, n in conceptual_teams.most_common(30):
-              print(f'CONCEPT|teams={n}|{item}')
-          print('ALL_GAPS')
-          for count, name, members, fams, concepts, alias in gaps:
-              print(f'GAP|concepts={count}|{name}|aliases={alias}|families={fams}|members={members}')
-              for item in concepts:
-                  print('  BLOCK|' + item)
+              owner = compiled.members[effect.actor].name
+              print(f'EFFECT|owner={owner}|name={effect.name}|type={effect.effect_type}|stat={effect.stat}|value={effect.value}|duration={effect.duration}|target={effect.target}')
+              print('  parameters=', effect.parameters)
+              print('  triggers=', [(r.raw, r.event_key, r.mode.value, r.threshold, r.is_runtime_supported) for r in effect.triggers])
+              print('  conditions=', [(r.raw, r.mode.value, r.is_runtime_supported) for r in effect.condition_rules])
+              print('  target_spec=', effect.target_spec)
+              print('  capability=', effect.capability)
+              if effect.name == '로얄 에타이어 4':
+                  print('  direct_runtime=', is_direct_damage_buff_runtime_supported(effect))
+                  print('  uses_shield=', _uses_shield_runtime_semantics(effect))
+                  print('  shield_safe=', _shield_runtime_dependency_score_safe(compiled, effect))
+                  print('  named_event_safe=', _named_buff_event_dependency_score_safe(compiled, effect))
+                  print('  score_supported=', _direct_damage_buff_score_supported(compiled, effect))
+              else:
+                  print('  simple_spec=', compile_simple_damage_event(effect, compiled.members[effect.actor]))
+                  print('  delivery_supported=', sink._delivery_supported(effect))
+                  print('  sink_supports=', sink.supports(effect))
+                  print('  unsupported_id=', effect.effect_id in sink.unsupported_effect_ids)
           PY
