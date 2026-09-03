@@ -13,28 +13,39 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Inspect Red Hood cadence effects
+      - name: Trace Moris Red Hood charge window
         shell: bash
         run: |
           python - <<'PY'
+          from calculator.timeline import DEFAULT_ENEMY, CharState, simulate
+          from calculator.buff_manager import _QUANT_PARTS_KEY
           from context import spec
-          from fast_engine.engine.compiler import compile_moris_squad
 
           names=["라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸"]
-          cp=compile_moris_squad(spec.build_squad(names))
-          actor=cp.names.index('레드 후드')
-          print('WEAPON',cp.members[actor].weapon)
-          for e in cp.members[actor].effects:
-              if e.effect_type=='weapon_change' or (e.stat or '') in {
-                  'charge_speed_pct','charge_speed_caster_based_pct','charge_time_flat',
-                  'max_ammo_pct','max_ammo_flat','reload_speed_pct','max_ammo_infinite',
-                  'charge_speed_overflow_conversion_pct'
-              }:
-                  print('EFFECT',{
-                      'id':e.effect_id,'name':e.name,'type':e.effect_type,'stat':e.stat,
-                      'value':e.value,'duration':e.duration,'max_stack':e.max_stack,
-                      'max_trigger':e.max_trigger,'params':e.parameters,
-                      'triggers':[(r.event_key,r.mode.value,r.threshold) for r in e.triggers],
-                      'conditions':[(r.kind,r.key,r.value) for r in e.condition_rules],
-                  })
+          squad=spec.build_squad(names)
+          cfg=spec.build_config(squad,{'duration':20.0,'first_burst_time':3.0,'rng_mode':'expected'})
+          enemy=dict(DEFAULT_ENEMY); enemy['def']=55000.0; enemy['code']='작열'; enemy['core_px']=10.0
+
+          orig=CharState._tick_charge
+          def wrapped(self,t,bm,enemy,cfg):
+              watch=self.name=='레드 후드' and 13.0<=t<=18.5
+              if watch:
+                  buffs=bm.get_buffs(self.name,'__enemy__',t)
+                  parts=(buffs.get(_QUANT_PARTS_KEY) or {}).get('charge_speed_pct')
+                  before=(self._charge_phase,self._charge_start_t,self._charge_end_t,self._post_delay_end_t,self.ammo)
+                  eff=self._effective_charge_time(bm,t)
+              out=orig(self,t,bm,enemy,cfg)
+              if watch:
+                  after=(self._charge_phase,self._charge_start_t,self._charge_end_t,self._post_delay_end_t,self.ammo)
+                  if before!=after or out:
+                      print('TRACE',{
+                          't':round(t,9),'before':before,'after':after,'eff':eff,
+                          'speed':buffs.get('charge_speed_pct',0.0),'parts':parts,
+                          'shots':len(out),
+                      })
+              return out
+          CharState._tick_charge=wrapped
+          result=simulate(squad,config=cfg,enemy=enemy,seed=42,verbose=False)
+          CharState._tick_charge=orig
+          print('DONE',result.total_damage)
           PY
