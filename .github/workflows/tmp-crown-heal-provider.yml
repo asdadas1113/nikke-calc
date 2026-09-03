@@ -7,23 +7,33 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   probe:
+    if: contains(github.event.head_commit.message, 'tmp: promote Crown production candidate') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Apply temporary generic stack-heal bridge
+      - name: Apply generic stack-heal bridge to production source
         run: python -m fast_engine.research.tmp_apply_crown_stack_heal_bridge
-      - name: Score Crown self-only public teams
-        run: python -m fast_engine.research.tmp_crown_self_only_score_probe
-      - name: Focused timing regression
+      - name: Install production regressions
+        run: python -m fast_engine.research.tmp_apply_crown_stack_heal_tests
+      - name: Full Fast regression suite
+        run: python -m unittest discover -s fast_engine/tests -v
+      - name: Commit validated production change
         run: |
-          python -m unittest fast_engine.tests.test_damage_dynamic_reload_scoring -v
-          python -m unittest fast_engine.tests.test_damage_dynamic_mg_warmup -v
-          python -m unittest fast_engine.tests.test_damage_moris_frame_timing -v
-          python -m unittest fast_engine.tests.test_damage_rapid_cover_control -v
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fast_engine/engine/dispatcher.py fast_engine/engine/score.py \
+            fast_engine/tests/test_named_buff_event_runtime.py \
+            fast_engine/tests/test_statless_named_state_marker.py \
+            fast_engine/tests/test_stack_heal_received_runtime.py
+          git diff --cached --check
+          git commit -m "fix: support self-stack heal-received bridge"
+          git fetch origin fast-engine-phase2-20260901
+          git rebase origin/fast-engine-phase2-20260901
+          git push origin HEAD:fast-engine-phase2-20260901
