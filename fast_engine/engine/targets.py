@@ -62,6 +62,27 @@ def _counted(raw: str, prefix: str) -> int:
     return int(raw[len(prefix):])
 
 
+def adjacent_ally_targets(member_count: int, actor: int, count: int | None) -> tuple[int, ...]:
+    """Return Moris' ``allies_adjacent:N`` cohort.
+
+    Moris always includes the caster, then appends at most ``N`` immediate
+    neighbours in deterministic left-then-right order. It never walks farther
+    than one slot away when an edge leaves fewer than ``N`` neighbours.
+    """
+
+    n = int(member_count)
+    owner = int(actor)
+    if owner < 0 or owner >= n:
+        raise IndexError(f"actor out of range: {owner}")
+    k = max(0, int(count or 0))
+    adjacent: list[int] = []
+    if owner > 0:
+        adjacent.append(owner - 1)
+    if owner + 1 < n:
+        adjacent.append(owner + 1)
+    return (owner, *adjacent[:k])
+
+
 def compile_target(raw: Any, *, actor_by_name: dict[str, int]) -> TargetSpec:
     if isinstance(raw, list):
         return TargetSpec(
@@ -223,10 +244,7 @@ class TargetResolver:
                         out.append(actor)
             return tuple(out)
         if mode is TargetMode.ADJACENT:
-            k = max(0, spec.count or 0)
-            cand = [i for i in range(n) if i != owner_actor]
-            cand.sort(key=lambda i: (abs(i - owner_actor), i))
-            return tuple(cand[:k])
+            return adjacent_ally_targets(n, owner_actor, spec.count)
         if mode in {TargetMode.WEAPON, TargetMode.WEAPON_EXCL_SELF}:
             return tuple(
                 i
