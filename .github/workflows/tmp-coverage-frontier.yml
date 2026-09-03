@@ -9,128 +9,81 @@ permissions:
   contents: read
 
 jobs:
-  asuka-reload-anchor-trace:
+  asuka-max-ammo-probe:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Compare Asuka physical shots around empty reload
+      - name: Inspect Asuka max ammo sources and live values
         run: |
           PYTHONPATH=. python - <<'PY'
           from unittest.mock import patch
-          from calculator.buff_manager import BuffManager
-          from calculator.timeline import CharState, DEFAULT_ENEMY, simulate
+          from calculator.timeline import CharState, simulate
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
           from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.engine.dynamic_rapid import DynamicRapidCadenceRuntime
+          from fast_engine.engine.dynamic_reload import DynamicRapidReloadRuntime
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import score_static_squad
+          from fast_engine.engine.score import StaticNormalAttackObserver
+          from fast_engine.engine.weapon import WeaponCadenceMachine, compile_static_cadence_modifiers
           from fast_engine.engine.targets import TargetMode
           from fast_engine.engine.triggers import TriggerMode
 
           names=['미란다','아스카 : WILLE','브리드 : 사일런트 트랙','헬름','루주']
-          asuka=1; duration=39.0
-          cfg={'duration':duration,'first_burst_time':3.0,'rng_mode':'expected'}
-          enemy=dict(DEFAULT_ENEMY); enemy.update({'def':55000.0,'code':'작열','core_px':10.0})
-          profile=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=duration)
+          raw=spec.build_squad(names); squad=compile_moris_squad(raw); asuka=1
+          member=squad.members[asuka]
+          print('WEAPON',member.weapon)
+          print('STATIC_MODS',compile_static_cadence_modifiers(member))
+          wm=WeaponCadenceMachine(asuka,member,duration=45.0)
+          print('STATIC_FULL_AMMO',wm._full_ammo())
+          print('MAX_AMMO_EFFECTS')
+          for e in squad.effects:
+              if (e.stat or '') in {'max_ammo_pct','max_ammo_flat','max_ammo_infinite'} and asuka in range(len(squad.members)):
+                  print(e.effect_id,e.actor,squad.members[e.actor].name,e.name,e.stat,e.value,e.duration,e.max_stack,e.target,e.triggers,e.conditions,e.parameters)
 
-          def build():
-              raw=spec.build_squad(names); return raw,compile_moris_squad(raw)
-          def state_end_safe(squad_obj,effect):
-              keys=[r.event_key or '' for r in effect.triggers]
-              if not keys or any(r.mode is not TriggerMode.EVENT or not k.startswith('event:state_end:') for r,k in zip(effect.triggers,keys)): return False
-              for key in keys:
-                  n=key[len('event:state_end:'):]
-                  ps=[p for p in squad_obj.effects if p.actor==effect.actor and p.effect_id!=effect.effect_id and p.name==n]
-                  if len(ps)!=1: return False
-                  p=ps[0]
-                  if not (p.effect_type=='buff' and p.target_spec.mode is TargetMode.SELF and p.duration is not None and float(p.duration)>=0.0
-                          and p.parameters.get('duration_bullets') is None and TriggerDispatcher.is_executable_effect(p)): return False
-              return True
-          def finite_provider(sink,effect,ref,runtime=False):
-              ps=[p for p in sink.squad.effects if p.actor==effect.actor and p.name==ref]
-              if len(ps)!=1: return None
-              p=ps[0]
-              ok=(p.effect_type=='buff' and p.target_spec.mode is TargetMode.ENEMY and p.duration is not None and float(p.duration)>0.0
-                  and p.max_stack is not None and float(p.max_stack)>1.0 and not p.parameters
-                  and all(r.is_runtime_supported for r in p.condition_rules) and TriggerDispatcher.is_executable_effect(p))
-              if not ok: return None
-              if runtime and sink.runtime is not None and not sink.runtime.dispatcher.can_activate_effect(p): return None
-              return p
-          od=SimpleDamageScoreSink._delivery_supported
-          def td(s,e): return od(s,e) or (e.target_spec.mode is TargetMode.ENEMY and all(r.is_runtime_supported for r in e.condition_rules) and state_end_safe(s.squad,e))
-          os=SimpleDamageScoreSink._stack_count_shape_supported
-          def ts(s,e,sp): return os(s,e,sp) or finite_provider(s,e,sp.ref) is not None
-          ors=SimpleDamageScoreSink._stack_count_runtime_supported
-          def trs(s,e):
-              if ors(s,e): return True
-              sp=s.stack_specs.get(e.effect_id); return sp is not None and finite_provider(s,e,sp.ref,runtime=True) is not None
-          orr=TriggerDispatcher._enemy_remove_named_state_runtime_supported
-          def trr(d,e):
-              if orr(d,e): return True
-              if not (e.effect_type=='instant' and (e.stat or '')=='remove_named_buff' and e.target_spec.mode is TargetMode.ENEMY
-                      and set(e.parameters)=={'target_effect'} and not e.condition_rules and state_end_safe(d.squad,e)): return False
-              ref=str(e.parameters.get('target_effect') or '')
-              ps=[p for p in d.squad.effects if p.actor==e.actor and p.name==ref]
-              if len(ps)!=1: return False
-              p=ps[0]
-              return (p.effect_type=='buff' and p.target_spec.mode is TargetMode.ENEMY and p.duration is not None and float(p.duration)>0.0
-                      and p.max_stack is not None and float(p.max_stack)>1.0 and not p.parameters
-                      and TriggerDispatcher.is_executable_effect(p) and d.can_activate_effect(p))
-
-          # Moris physical shots/reload.
-          raw_m,_=build(); mshots=[]; mreload=[]
-          ofire=CharState._fire; ostart=CharState._start_reload; ofinish=CharState._finish_reload
-          def mfire(cs,t,bm,en,cfg0):
-              if cs.name=='아스카 : WILLE' and 32.6 <= float(t) <= 37.2:
-                  mshots.append((float(t),cs.ammo,cs.warmup_shots,cs.last_fire_t,cs._last_inter,cs.next_fire_time))
-              return ofire(cs,t,bm,en,cfg0)
-          def mstart(cs,t,bm,label='재장전 시작',from_empty=False):
-              if cs.name=='아스카 : WILLE' and 32.0 <= float(t) <= 37.2:
-                  mreload.append(('start',float(t),from_empty,cs.ammo,cs.warmup_shots,cs.last_fire_t,cs._last_inter,cs.reloading_until))
-              return ostart(cs,t,bm,label=label,from_empty=from_empty)
-          def mfinish(cs,t,bm):
-              if cs.name=='아스카 : WILLE' and 32.0 <= float(t) <= 37.2:
-                  mreload.append(('finish_before',float(t),cs.ammo,cs.warmup_shots,cs.last_fire_t,cs._last_inter,cs.reloading_until))
-              out=ofinish(cs,t,bm)
-              if cs.name=='아스카 : WILLE' and 32.0 <= float(t) <= 37.2:
-                  mreload.append(('finish_after',float(t),cs.ammo,cs.warmup_shots,cs.last_fire_t,cs._last_inter,cs.reloading_until,cs.next_fire_time,cs._post_reload_end_t))
+          # Moris value exactly when the second empty reload completes.
+          moris=[]
+          of=CharState._finish_reload
+          def mf(cs,t,bm):
+              if cs.name=='아스카 : WILLE' and 34.0 <= float(t) <= 35.0:
+                  buffs=bm.get_buffs(cs.name,'__enemy__',t)
+                  moris.append(('before',float(t),cs._full_ammo(bm,t),buffs.get('max_ammo_pct'),buffs.get('max_ammo_flat'),(buffs.get('_quant_parts') or {}).get('max_ammo_pct')))
+              out=of(cs,t,bm)
+              if cs.name=='아스카 : WILLE' and 34.0 <= float(t) <= 35.0:
+                  moris.append(('after',float(t),cs.ammo,cs._full_ammo(bm,t)))
               return out
-          with patch.object(CharState,'_fire',new=mfire), patch.object(CharState,'_start_reload',new=mstart), patch.object(CharState,'_finish_reload',new=mfinish):
-              simulate(raw_m,config=spec.build_config(raw_m,cfg),enemy=enemy,seed=42,verbose=False)
+          with patch.object(CharState,'_finish_reload',new=mf):
+              simulate(raw,config=spec.build_config(raw,{'duration':39.0,'first_burst_time':3.0,'rng_mode':'expected'}),verbose=False)
+          print('MORIS',moris)
 
-          # Fast score-path physical shots/reload.
-          raw_f,squad=build(); fshots=[]; freload=[]
-          oafter=DynamicRapidCadenceRuntime._after_shot; ofnp=DynamicRapidCadenceRuntime._finish_nonshot_phase
-          def fafter(rt,st,shot_time):
-              if st.actor==asuka and 32.6 <= float(shot_time) <= 37.2:
-                  fshots.append((float(shot_time),st.ammo,st.warmup,st.last_shot,st.last_inter,st.phase,st.phase_end,st.hit_count))
-              return oafter(rt,st,shot_time)
-          def ffnp(rt,st,transition_time):
-              if st.actor==asuka and 32.0 <= float(transition_time) <= 37.2:
-                  freload.append(('before',float(transition_time),st.ammo,st.phase,st.phase_end,st.warmup,st.last_shot,st.last_inter,st.hit_count))
-              out=ofnp(rt,st,transition_time)
-              if st.actor==asuka and 32.0 <= float(transition_time) <= 37.2:
-                  freload.append(('after',float(transition_time),st.ammo,st.phase,st.phase_end,st.warmup,st.last_shot,st.last_inter,st.hit_count))
+          # Fast compile/runtime value at its corresponding second reload completion.
+          # We only need normal/cadence runtime, so attach observer to initialize dynamic rapid state.
+          raw2=spec.build_squad(names); squad2=compile_moris_squad(raw2)
+          cfg={'duration':39.0,'first_burst_time':3.0,'rng_mode':'expected'}
+          policy=compile_burst_policy(raw2,squad2,cfg)
+          profile=EnemyStaticProfile(defense=0.0,duration=39.0)
+          rt=BurstRuntime(squad2,policy,profile)
+          # Build a minimal dynamic rapid path by selecting Asuka as score actor directly.
+          rows=[]
+          def sink(actor,count,t): pass
+          rt.weapons.attach_score_block_sink((asuka,),sink)
+          orig=DynamicRapidReloadRuntime._finish_nonshot_phase
+          def ff(dr,st,tt):
+              if st.actor==asuka and st.phase=='reloading' and 34.0 <= float(tt) <= 35.0:
+                  vals=[]
+                  for stat in ('max_ammo_pct','max_ammo_flat'):
+                      vals.append((stat,[(e.name,e.value,a.stacks,a.source_actor,a.target) for e,a in dr.effects.iter_stat(stat,now=tt) if a.target==asuka]))
+                  rows.append(('before',float(tt),dr._full_ammo(asuka,float(tt)),vals,dr._signature(asuka,float(tt))))
+              out=orig(dr,st,tt)
+              if st.actor==asuka and 34.0 <= float(tt) <= 35.0:
+                  rows.append(('after',float(tt),st.ammo,dr._full_ammo(asuka,float(tt))))
               return out
-          with (patch.object(SimpleDamageScoreSink,'_delivery_supported',new=td), patch.object(SimpleDamageScoreSink,'_stack_count_shape_supported',new=ts),
-                patch.object(SimpleDamageScoreSink,'_stack_count_runtime_supported',new=trs), patch.object(TriggerDispatcher,'_enemy_remove_named_state_runtime_supported',new=trr),
-                patch.object(DynamicRapidCadenceRuntime,'_after_shot',new=fafter), patch.object(DynamicRapidCadenceRuntime,'_finish_nonshot_phase',new=ffnp)):
-              policy=compile_burst_policy(raw_f,squad,cfg)
-              score_static_squad(squad,policy,profile,duration=duration)
-
-          def summarize(shots):
-              if not shots: return []
-              pre=[x for x in shots if x[0] < 33.2]
-              post=[x for x in shots if x[0] >= 34.0]
-              return pre[-12:] + post[:24]
-          print('MORIS_RELOAD',mreload)
-          print('FAST_RELOAD',freload)
-          print('MORIS_SHOTS',summarize(mshots))
-          print('FAST_SHOTS',summarize(fshots))
+          with patch.object(DynamicRapidReloadRuntime,'_finish_nonshot_phase',new=ff):
+              rt.run(duration=39.0)
+          print('FAST',rows)
           PY
