@@ -13,119 +13,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Trace MM static-shot and skill residuals
+      - name: Inspect Mihara body-contact effect
         shell: bash
         run: |
           python - <<'PY'
-          from bisect import bisect_left
-          from collections import defaultdict
-          from calculator.timeline import DEFAULT_ENEMY, DT, simulate
-          from calculator.sim_result import _is_normal
           from context import spec
-          from fast_engine.engine.burst import BurstMachine, compile_burst_policy
-          from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
-          from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
-          from fast_engine.engine.shot_blocks import compile_static_shot_blocks
-          from fast_engine.engine.weapon import DynamicChargeCadenceRuntime
-
-          NAMES=("미란다","브리드 : 사일런트 트랙","헬름","루주","미하라 : 본딩 체인")
-          STATIC=("미란다","브리드 : 사일런트 트랙","미하라 : 본딩 체인")
-          D=180.0; CFG={'duration':D,'first_burst_time':3.0,'rng_mode':'expected'}
-          enemy=dict(DEFAULT_ENEMY); enemy['def']=55000.0; enemy['code']='작열'; enemy['core_px']=10.0
-          profile=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=D)
-          squad=spec.build_squad(list(NAMES)); cp=compile_moris_squad(squad)
-          if static_score_blockers(cp): raise RuntimeError(static_score_blockers(cp))
-          policy=compile_burst_policy(squad,cp,dict(CFG))
-          moris=simulate(squad,config=spec.build_config(squad,dict(CFG)),enemy=enemy,seed=42,verbose=False)
-
-          # Static physical-shot timestamp comparison independent of score state.
-          blocks=compile_static_shot_blocks(cp,duration=D)
-          for n in STATIC:
-              a=cp.names.index(n)
-              mt=sorted(set(round(float(h.t),9) for h in moris.hits if h.caster==n and _is_normal(h)))
-              ft=[]
-              for b in blocks[a]:
-                  ft.extend(round(float(b.first_time+i*b.interval),9) for i in range(b.count))
-              print('SHOTPLAN|%s|mode=%s|weapon=%s|m=%d|f=%d' % (n,cp.members[a].weapon.get('fire_mode'),cp.members[a].weapon.get('weapon_type'),len(mt),len(ft)))
-              shown=0
-              for i,(m,f) in enumerate(zip(mt,ft)):
-                  if abs(m-f)>1e-7:
-                      print('SHOTDIFF|%s|i=%d|m=%.9f|f=%.9f|d=%+.9f' % (n,i,m,f,f-m))
-                      shown+=1
-                      if shown>=12: break
-
-          ticks=[]; t=0.0
-          while t<=D+1.0: ticks.append(t); t+=DT
-          def ct(x):
-              i=bisect_left(ticks,float(x)); return ticks[i] if i<len(ticks) else float(x)
-          def bt(x):
-              i=bisect_left(ticks,float(x)-1e-9); return ticks[i] if i<len(ticks) else float(x)
-
-          obsched=BurstMachine._schedule
-          def bs(self,scheduler,time,kind,*,stage=None): return obsched(self,scheduler,bt(time),kind,stage=stage)
-          BurstMachine._schedule=bs
-          oe=DynamicChargeCadenceRuntime._enter_charge; oa=DynamicChargeCadenceRuntime._after_shot
-          of=DynamicChargeCadenceRuntime._finish_nonshot_phase; os=DynamicChargeCadenceRuntime.sync
-          def pe(self,st,at,now): oe(self,st,at,now); st.phase_end=ct(st.phase_end)
-          def pa(self,st,shot): oa(self,st,shot); st.phase_end=ct(st.phase_end)
-          def pf(self,st,when,now): of(self,st,when,now); st.phase_end=ct(st.phase_end)
-          def ps(self,now):
-              for a in self.actors:
-                  st=self._states[a]
-                  while st.phase!='charging' and st.phase_end<=now+1e-9: pf(self,st,st.phase_end,now)
-                  wc=self._weapon_change_id(a,now); wc_changed=wc!=st.weapon_change_id
-                  if wc_changed:
-                      entering=wc is not None; st.weapon_change_id=wc; self._invalidate(st); st.ammo=self._full_ammo(a,now)
-                      if entering and st.phase=='charging':
-                          st.charge_start=float(now); st.phase_end=ct(float(now)+self._effective_charge_time(a,now))
-                      elif st.phase in {'post_fire_reload','reloading','post_reload'}: pe(self,st,float(now),float(now))
-                      elif not entering and st.phase=='charging': st.phase_end=ct(st.charge_start+self._effective_charge_time(a,now))
-                  old=st.signature; new=self._signature(a,now)
-                  if new!=old:
-                      st.signature=new
-                      if not wc_changed:
-                          self._invalidate(st)
-                          if st.phase=='charging' and (new[4],new[5])!=(old[4],old[5]): st.phase_end=ct(st.charge_start+self._effective_charge_time(a,now))
-                  if st.scheduled_time is None: self._plan(a,now)
-                  self.state.set_ammo(a,st.ammo)
-          DynamicChargeCadenceRuntime._enter_charge=pe; DynamicChargeCadenceRuntime._after_shot=pa
-          DynamicChargeCadenceRuntime._finish_nonshot_phase=pf; DynamicChargeCadenceRuntime.sync=ps
-
-          class TraceSink(SimpleDamageScoreSink):
-              def __init__(self,*a,**k):
-                  super().__init__(*a,**k); self.rows=[]; self.by_name=defaultdict(float)
-              def _score_spec(self,effect_id,*,now,full_burst):
-                  actor=self._effect_actor.get(effect_id); before=self.char_total[actor] if actor is not None else 0.0
-                  ok=super()._score_spec(effect_id,now=now,full_burst=full_burst)
-                  if ok and actor is not None:
-                      delta=self.char_total[actor]-before; e=self.squad.effects[effect_id]
-                      if self.squad.members[actor].name=='미하라 : 본딩 체인':
-                          self.rows.append((float(now),e.name,e.stat,delta,bool(full_burst)))
-                          self.by_name[e.name]+=delta
-                  return ok
-
-          sink=TraceSink(cp,profile); rt=BurstRuntime(cp,policy,profile,damage_sink=sink)
-          obs=StaticNormalAttackObserver(rt,duration=D); rr=rt.run(duration=D,score_observer=obs); normal=obs.finish(events_processed=rr.events_processed)
-
-          mm=defaultdict(float); mevents=defaultdict(list)
-          for h in moris.hits:
-              if h.caster!='미하라 : 본딩 체인' or _is_normal(h): continue
-              name=h.skill_name or h.hit_tag or '?'; mm[name]+=float(h.damage); mevents[name].append((float(h.t),float(h.damage)))
-          print('MIHARA_SKILLS_MORIS',dict(mm))
-          print('MIHARA_SKILLS_FAST',dict(sink.by_name))
-          for name in sorted(set(mm)|set(sink.by_name)):
-              m=mm[name]; f=sink.by_name[name]
-              print('SKILL|%s|m=%.3f|f=%.3f|err=%+.8f|m_events=%d|f_events=%d' % (name,m,f,f/m-1 if m else 0,len(mevents[name]),sum(1 for r in sink.rows if r[1]==name)))
-          print('FAST_SKILL_ROWS')
-          for row in sink.rows[:80]: print(row)
-          print('MORIS_SKILL_ROWS')
-          for name,rows in mevents.items():
-              for row in rows[:40]: print(name,round(row[0],9),round(row[1],3))
-
-          BurstMachine._schedule=obsched
-          DynamicChargeCadenceRuntime._enter_charge=oe; DynamicChargeCadenceRuntime._after_shot=oa
-          DynamicChargeCadenceRuntime._finish_nonshot_phase=of; DynamicChargeCadenceRuntime.sync=os
+          names=["미란다","브리드 : 사일런트 트랙","헬름","루주","미하라 : 본딩 체인"]
+          cp=compile_moris_squad(spec.build_squad(names))
+          a=cp.names.index('미하라 : 본딩 체인')
+          print('MEMBER',cp.members[a])
+          for e in cp.effects:
+              if e.actor!=a: continue
+              print({
+                  'id':e.effect_id,'idx':e.actor_effect_index,'name':e.name,'type':e.effect_type,
+                  'stat':e.stat,'value':e.value,'duration':e.duration,'max_stack':e.max_stack,
+                  'triggers':[(r.event_key,r.mode.value,r.threshold,r.raw) for r in e.triggers],
+                  'conditions':[(r.mode.value,r.key,r.value) for r in e.condition_rules],
+                  'target':e.target,'params':e.parameters,
+              })
           PY
