@@ -6,74 +6,32 @@ on:
       - fast-engine-phase2-20260901
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply:
+  probe:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Patch dispatcher
-        run: |
-          PYTHONPATH=. python - <<'PY'
-          from pathlib import Path
-          import textwrap
-          path = Path('fast_engine/engine/dispatcher.py')
-          text = path.read_text(encoding='utf-8')
-          anchor = '    @classmethod\n    def _named_event_marker_nop_shape_supported(cls, effect: "CompiledEffect") -> bool:\n'
-          helper = textwrap.indent(textwrap.dedent('''\
-          @staticmethod
-          def _timed_self_named_state_marker_shape_supported(effect: "CompiledEffect") -> bool:
-              """Certify a pure finite self-state marker emitted by one burst cast."""
-              return (
-                  effect.capability.disposition is CapabilityDisposition.PLANNED
-                  and set(effect.capability.blockers) == {"category:state_trigger", "stat:None"}
-                  and effect.effect_type == "buff"
-                  and not (effect.stat or "")
-                  and bool(effect.name)
-                  and effect.value is None
-                  and effect.polarity in (None, "neutral")
-                  and effect.target_spec.mode is TargetMode.SELF
-                  and effect.target_spec.runtime_supported
-                  and effect.duration is not None
-                  and float(effect.duration) > 0.0
-                  and effect.max_stack in (None, 1, 1.0)
-                  and effect.max_trigger is None
-                  and effect.tick_interval is None
-                  and not effect.condition_rules
-                  and set(effect.parameters).issubset({"note"})
-                  and len(effect.triggers) == 1
-                  and effect.triggers[0].mode is TriggerMode.EVENT
-                  and effect.triggers[0].event_key == "burst_cast"
-              )
-
-          '''), '    ')
-          if '_timed_self_named_state_marker_shape_supported' not in text:
-              if anchor not in text:
-                  raise SystemExit('marker anchor not found')
-              text = text.replace(anchor, helper + anchor, 1)
-          old = '        if (\n            TriggerDispatcher._named_event_control_shape_supported(effect)\n            or TriggerDispatcher._named_duration_extend_shape_supported(effect)\n'
-          new = '        if (\n            TriggerDispatcher._timed_self_named_state_marker_shape_supported(effect)\n            or TriggerDispatcher._named_event_control_shape_supported(effect)\n            or TriggerDispatcher._named_duration_extend_shape_supported(effect)\n'
-          if new not in text:
-              if old not in text:
-                  raise SystemExit('executable anchor not found')
-              text = text.replace(old, new, 1)
-          path.write_text(text, encoding='utf-8')
-          PY
-      - name: Run focused regressions
+      - name: Run marker regressions
         run: |
           PYTHONPATH=. python -m unittest fast_engine.tests.test_statless_named_state_marker fast_engine.tests.test_damage_state_end_force_reload fast_engine.tests.test_named_buff_event_runtime -v
           python -m py_compile fast_engine/engine/dispatcher.py fast_engine/tests/test_statless_named_state_marker.py
           git diff --check
-      - name: Commit production change
+      - name: Scan public coverage frontier
         run: |
-          git config user.name "fast-engine-research"
-          git config user.email "fast-engine-research@users.noreply.github.com"
-          git add fast_engine/engine/dispatcher.py
-          git commit -m "feat: support finite self named-state markers"
-          git push origin HEAD:fast-engine-phase2-20260901
+          PYTHONPATH=. python -m fast_engine.research.public_blocker_frontier
+      - name: Print affected public teams
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          from fast_engine.research.public_blocker_frontier import scan_public_blockers
+          report = scan_public_blockers()
+          for row in report['rows']:
+              if row['source_name'] in {'레이드_미하라에이다','레이드_작열짬'}:
+                  print('TEAM',row['source_name'])
+                  print('BLOCKERS',row['blockers'])
+                  print('UNSUPPORTED',row['unsupported'])
+          PY
