@@ -25,13 +25,15 @@ jobs:
           python -m py_compile fast_engine/engine/dynamic_reload.py fast_engine/engine/dynamic_rapid.py
           git diff --check
       - name: Asuka 180s 30-seed parity
+        id: asuka
+        continue-on-error: true
         run: |
           set -o pipefail
-          PYTHONPATH=. python fast_engine/research/tmp_validate_asuka_mg_v2.py | tee fast_engine/research/tmp_mg_v2_release_gate_report.txt
+          PYTHONPATH=. python fast_engine/research/tmp_validate_asuka_mg_v2.py 2>&1 | tee fast_engine/research/tmp_mg_v2_release_gate_report.txt
       - name: Certified baseline unchanged
         run: |
           set -o pipefail
-          PYTHONPATH=. python fast_engine/research/tmp_certified_baseline.py --compare /tmp/certified-pre.json | tee -a fast_engine/research/tmp_mg_v2_release_gate_report.txt
+          PYTHONPATH=. python fast_engine/research/tmp_certified_baseline.py --compare /tmp/certified-pre.json 2>&1 | tee -a fast_engine/research/tmp_mg_v2_release_gate_report.txt
       - name: Focused rapid reload regressions
         run: |
           set -o pipefail
@@ -53,9 +55,14 @@ jobs:
           assert report['coverage_gap_count'] == 22, report
           PY
       - name: Record release-gate report
+        if: always()
         run: |
+          printf '\nASUKA_STEP_OUTCOME=%s\n' '${{ steps.asuka.outcome }}' >> fast_engine/research/tmp_mg_v2_release_gate_report.txt
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add fast_engine/research/tmp_mg_v2_release_gate_report.txt
           git commit -m 'tmp: record MG v2 release gate [skip-mg-gate]'
           git push
+      - name: Enforce Asuka gate
+        if: ${{ steps.asuka.outcome != 'success' }}
+        run: exit 1
