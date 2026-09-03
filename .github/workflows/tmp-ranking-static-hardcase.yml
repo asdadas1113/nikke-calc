@@ -13,102 +13,136 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Trace Moris and Fast charge phases
+      - name: Trial Moris frame-lattice charge cadence
         shell: bash
         run: |
           python - <<'PY'
-          from calculator.timeline import DEFAULT_ENEMY, CharState, simulate
+          from bisect import bisect_left
+          from calculator.timeline import DEFAULT_ENEMY, DT, simulate
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
+          from fast_engine.engine.score import StaticNormalAttackObserver, score_static_squad, static_score_blockers
           from fast_engine.engine.weapon import DynamicChargeCadenceRuntime
 
-          MEMBERS = ("라피 : 레드 후드", "레드 후드", "프리카", "민트", "퀀시 : 이스케이프 퀸")
-          CONFIG = {"duration": 10.0, "first_burst_time": 3.0, "rng_mode": "expected"}
-          TARGET = "레드 후드"
+          TEAMS = {
+              "MM": ("미란다", "브리드 : 사일런트 트랙", "헬름", "루주", "미하라 : 본딩 체인"),
+              "RHQ": ("라피 : 레드 후드", "레드 후드", "프리카", "민트", "퀀시 : 이스케이프 퀸"),
+          }
+          CONFIG = {"duration": 180.0, "first_burst_time": 3.0, "rng_mode": "expected"}
+          DEFENSE = 55000.0
+          CODE = "작열"
+          CORE_PX = 10.0
 
-          orig_tick = CharState._tick_charge
-          def traced_tick(self, t, bm, enemy, cfg):
-              if self.name != TARGET:
-                  return orig_tick(self, t, bm, enemy, cfg)
-              before = (
-                  self._charge_phase,
-                  round(float(self._charge_start_t), 6),
-                  round(float(self._charge_end_t), 6),
-                  round(float(self._post_delay_end_t), 6),
-                  int(self.ammo),
-              )
-              out = orig_tick(self, t, bm, enemy, cfg)
-              after = (
-                  self._charge_phase,
-                  round(float(self._charge_start_t), 6),
-                  round(float(self._charge_end_t), 6),
-                  round(float(self._post_delay_end_t), 6),
-                  int(self.ammo),
-              )
-              if 2.8 <= t <= 7.2 and (before != after or out):
-                  eff = float(self._effective_charge_time(bm, t))
-                  print(
-                      f"MSTATE|t={t:.6f}|before={before}|after={after}|"
-                      f"eff_charge={eff:.6f}|post={float(self.post_fire_delay):.6f}|hits={len(out)}"
-                  )
-              return out
-          CharState._tick_charge = traced_tick
+          ticks = []
+          t = 0.0
+          while t <= 181.0:
+              ticks.append(t)
+              t += DT
 
-          squad = spec.build_squad(list(MEMBERS))
-          config = spec.build_config(squad, dict(CONFIG))
-          compiled = compile_moris_squad(squad)
-          blockers = static_score_blockers(compiled)
-          if blockers:
-              raise RuntimeError(f"blockers={blockers}")
-          policy = compile_burst_policy(squad, compiled, dict(CONFIG))
-          idx = MEMBERS.index(TARGET)
-          print(f"WEAPON|{compiled.members[idx].weapon}")
+          def snap(t: float) -> float:
+              i = bisect_left(ticks, float(t))
+              if i >= len(ticks):
+                  return float(t)
+              return ticks[i]
 
-          enemy = dict(DEFAULT_ENEMY)
-          enemy["def"] = 55000.0
-          enemy["code"] = "작열"
-          enemy["core_px"] = 0.0
-          simulate(squad, config=config, enemy=enemy, seed=42, verbose=False)
+          built = {}
+          moris_scores = {}
+          profile = EnemyStaticProfile(
+              defense=DEFENSE, element=CODE, core_uptime=1.0,
+              core_px=CORE_PX, duration=180.0,
+          )
+          for key, members in TEAMS.items():
+              squad = spec.build_squad(list(members))
+              config = spec.build_config(squad, dict(CONFIG))
+              compiled = compile_moris_squad(squad)
+              blockers = static_score_blockers(compiled)
+              if blockers:
+                  raise RuntimeError(f"{key} blockers={blockers}")
+              policy = compile_burst_policy(squad, compiled, dict(CONFIG))
+              enemy = dict(DEFAULT_ENEMY)
+              enemy["def"] = DEFENSE
+              enemy["code"] = CODE
+              enemy["core_px"] = CORE_PX
+              moris_scores[key] = float(simulate(squad, config=config, enemy=enemy, seed=42, verbose=False).squad_total)
+              built[key] = (members, compiled, policy)
+
+          before = {
+              key: float(score_static_squad(compiled, policy, profile).squad_total)
+              for key, (_members, compiled, policy) in built.items()
+          }
 
           orig_enter = DynamicChargeCadenceRuntime._enter_charge
           orig_after = DynamicChargeCadenceRuntime._after_shot
+          orig_finish = DynamicChargeCadenceRuntime._finish_nonshot_phase
+          orig_start = DynamicChargeCadenceRuntime.start
           orig_sync = DynamicChargeCadenceRuntime.sync
 
-          def f_enter(self, st, at, now_for_mods):
+          def snapped_enter(self, st, at, now_for_mods):
               orig_enter(self, st, at, now_for_mods)
-              if st.actor == idx and 2.8 <= at <= 7.2:
-                  print(
-                      f"FENTER|at={at:.6f}|mods={now_for_mods:.6f}|end={st.phase_end:.6f}|"
-                      f"eff_charge={self._effective_charge_time(st.actor, now_for_mods):.6f}"
-                  )
-          def f_after(self, st, shot_time):
-              orig_after(self, st, shot_time)
-              if st.actor == idx and 2.8 <= shot_time <= 7.2:
-                  print(f"FSHOT|t={shot_time:.6f}|phase={st.phase}|end={st.phase_end:.6f}|ammo={st.ammo}")
-          def f_sync(self, now):
-              before = None
-              st0 = self._states.get(idx)
-              if st0 is not None:
-                  before = (st0.phase, st0.phase_end, st0.charge_start, st0.ammo)
-              orig_sync(self, now)
-              st = self._states.get(idx)
-              if st is not None and 2.8 <= now <= 7.2:
-                  after = (st.phase, st.phase_end, st.charge_start, st.ammo)
-                  if before != after:
-                      print(f"FSYNC|t={now:.6f}|before={before}|after={after}")
-          DynamicChargeCadenceRuntime._enter_charge = f_enter
-          DynamicChargeCadenceRuntime._after_shot = f_after
-          DynamicChargeCadenceRuntime.sync = f_sync
+              st.phase_end = snap(st.phase_end)
 
-          profile = EnemyStaticProfile(defense=55000.0, element="작열", core_uptime=0.0, core_px=0.0, duration=10.0)
+          def snapped_after(self, st, shot_time):
+              orig_after(self, st, shot_time)
+              st.phase_end = snap(st.phase_end)
+
+          def snapped_finish(self, st, transition_time, now_for_mods):
+              orig_finish(self, st, transition_time, now_for_mods)
+              st.phase_end = snap(st.phase_end)
+
+          def snapped_start(self, now=0.0):
+              orig_start(self, now)
+              for actor, st in self._states.items():
+                  q = snap(st.phase_end)
+                  if q != st.phase_end:
+                      self._invalidate(st)
+                      st.phase_end = q
+                      self._plan(actor, float(now))
+
+          def snapped_sync(self, now):
+              orig_sync(self, now)
+              for actor, st in self._states.items():
+                  q = snap(st.phase_end)
+                  if q != st.phase_end:
+                      self._invalidate(st)
+                      st.phase_end = q
+                      self._plan(actor, float(now))
+
+          DynamicChargeCadenceRuntime._enter_charge = snapped_enter
+          DynamicChargeCadenceRuntime._after_shot = snapped_after
+          DynamicChargeCadenceRuntime._finish_nonshot_phase = snapped_finish
+          DynamicChargeCadenceRuntime.start = snapped_start
+          DynamicChargeCadenceRuntime.sync = snapped_sync
+
+          after = {
+              key: float(score_static_squad(compiled, policy, profile).squad_total)
+              for key, (_members, compiled, policy) in built.items()
+          }
+
+          def margin(scores):
+              return (scores["MM"] - scores["RHQ"]) / max(scores["MM"], scores["RHQ"])
+
+          print(f"MORIS|MM={moris_scores['MM']:.3f}|RHQ={moris_scores['RHQ']:.3f}|margin={margin(moris_scores):.8f}")
+          print(f"BEFORE|MM={before['MM']:.3f}|RHQ={before['RHQ']:.3f}|margin={margin(before):.8f}")
+          print(f"AFTER|MM={after['MM']:.3f}|RHQ={after['RHQ']:.3f}|margin={margin(after):.8f}")
+
+          class CountingObserver(StaticNormalAttackObserver):
+              def __init__(self, runtime, *, duration):
+                  super().__init__(runtime, duration=duration)
+                  self.shot_counts = [0] * len(runtime.squad.members)
+              def _score_shots(self, actor, count, *, eval_time):
+                  self.shot_counts[actor] += int(count)
+                  return super()._score_shots(actor, count, eval_time=eval_time)
+
+          members, compiled, policy = built["RHQ"]
           sink = SimpleDamageScoreSink(compiled, profile)
           runtime = BurstRuntime(compiled, policy, profile, damage_sink=sink)
-          observer = StaticNormalAttackObserver(runtime, duration=policy.duration)
+          observer = CountingObserver(runtime, duration=policy.duration)
           result = runtime.run(duration=policy.duration, score_observer=observer)
           observer.finish(events_processed=result.events_processed)
+          for idx, name in enumerate(members):
+              print(f"SHOT|name={name}|count={observer.shot_counts[idx]}")
           PY
