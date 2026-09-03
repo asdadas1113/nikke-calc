@@ -13,72 +13,101 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Trace Quency third-magazine ammo divergence
+      - name: Trial rapid max-ammo expiry clamp
         shell: bash
         run: |
           python - <<'PY'
-          from bisect import bisect_left
-          from calculator.timeline import DEFAULT_ENEMY, DT, simulate
+          from collections import defaultdict
+          from calculator.timeline import DEFAULT_ENEMY, simulate
+          from calculator.sim_result import _is_normal
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
-          from fast_engine.engine.dynamic_rapid import DynamicRapidCadenceRuntime
+          from fast_engine.engine.dynamic_reload import DynamicRapidReloadRuntime
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
+          from fast_engine.engine.score import StaticNormalAttackObserver, score_static_squad, static_score_blockers
 
-          MEMBERS=("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸")
-          TARGET="퀀시 : 이스케이프 퀸"; DURATION=45.0
+          RHQ=("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸")
+          MM=("미란다","브리드 : 사일런트 트랙","헬름","루주","미하라 : 본딩 체인")
+          TARGET="퀀시 : 이스케이프 퀸"; DURATION=180.0
           CONFIG={"duration":DURATION,"first_burst_time":3.0,"rng_mode":"expected"}
-          squad=spec.build_squad(list(MEMBERS)); config=spec.build_config(squad,dict(CONFIG))
-          compiled=compile_moris_squad(squad); blockers=static_score_blockers(compiled)
-          if blockers: raise RuntimeError(blockers)
-          policy=compile_burst_policy(squad,compiled,dict(CONFIG)); idx=MEMBERS.index(TARGET)
           enemy=dict(DEFAULT_ENEMY); enemy["def"]=55000.0; enemy["code"]="작열"; enemy["core_px"]=10.0
           profile=EnemyStaticProfile(defense=55000.0,element="작열",core_uptime=1.0,core_px=10.0,duration=DURATION)
 
-          print("RELEVANT_EFFECTS")
-          for e in compiled.members[idx].effects:
-              if (e.stat or '') in {'max_ammo_pct','max_ammo_flat','ammo_charge_pct','ammo_charge_flat','reload_speed_pct','trigger_count_reduce'} or '탄' in (e.name or ''):
-                  print("EFFECT|"+repr(e))
+          squad=spec.build_squad(list(RHQ)); config=spec.build_config(squad,dict(CONFIG))
+          compiled=compile_moris_squad(squad); blockers=static_score_blockers(compiled)
+          if blockers: raise RuntimeError(blockers)
+          policy=compile_burst_policy(squad,compiled,dict(CONFIG)); idx=RHQ.index(TARGET)
 
-          ticks=[]; t=0.0
-          while t <= DURATION + 1.0:
-              ticks.append(t); t += DT
-          def frame_at_or_after(deadline):
-              i=bisect_left(ticks,float(deadline)); return ticks[i] if i < len(ticks) else float(deadline)
+          print("TEMP_MAX_AMMO_SOURCES")
+          for e in compiled.effects:
+              if (e.stat or '') in {'max_ammo_pct','max_ammo_flat'} and e.duration not in (None,-1,-1.0):
+                  print(f"MAXAMMO|owner={compiled.names[e.actor]}|name={e.name}|stat={e.stat}|value={e.value}|duration={e.duration}|target={e.target_spec}")
 
           moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=True)
-          for row in moris.log.reload_log:
-              if getattr(row,'caster','')==TARGET:
-                  print(f"M_RELOAD|t={float(row.t):.9f}|event={row.event}")
-          for row in moris.log.ammo_log:
-              if getattr(row,'caster','')==TARGET and 20.0 <= float(row.t) <= 40.0:
-                  print(f"M_AMMO|t={float(row.t):.9f}|ammo={row.ammo}")
+          mstarts=[float(r.t) for r in moris.log.burst_log if r.event=="full_burst 시작"]
+          mends=[float(r.t) for r in moris.log.burst_log if r.event=="full_burst 종료"]
+          mcaster=[getattr(r,'caster','') for r in moris.log.burst_log if r.event=="stage:3 사용"]
+          def classify(t,starts,ends,casters):
+              for i,(s,e) in enumerate(zip(starts,ends)):
+                  if s-1e-9 <= t < e-1e-9:
+                      return 'FB_Q' if i < len(casters) and casters[i]==TARGET else 'FB_OTHER'
+              return 'OUT'
+          mrows=defaultdict(lambda:[0,0.0]); by_time=defaultdict(float)
+          for h in moris.hits:
+              if h.caster==TARGET and _is_normal(h): by_time[round(float(h.t),9)]+=float(h.damage)
+          for t,d in by_time.items():
+              k=classify(t,mstarts,mends,mcaster); mrows[k][0]+=1; mrows[k][1]+=d
+          m_normal=sum(v[1] for v in mrows.values())
 
-          orig_after=DynamicRapidCadenceRuntime._after_shot
-          orig_finish=DynamicRapidCadenceRuntime._finish_nonshot_phase
-          def patched_after(self,st,shot_time):
-              orig_after(self,st,shot_time)
-              if st.phase=='reload_wait':
-                  before=st.phase_end; st.phase_end=frame_at_or_after(before)
-                  if self._states.get(st.actor) is st and st.actor==idx:
-                      print(f"F_EMPTY|last_shot={shot_time:.9f}|reload_probe={st.phase_end:.9f}|hit_count={st.hit_count}")
-          def patched_finish(self,st,transition_time):
-              was=st.phase
-              if self._states.get(st.actor) is st and st.actor==idx and was=='reload_wait':
-                  print(f"F_RELOAD_START|t={transition_time:.9f}|full={self._full_ammo(st.actor,transition_time)}|ammo={st.ammo}|sig={self._signature(st.actor,transition_time)}")
-              orig_finish(self,st,transition_time)
-              if was=='reload_wait' and st.phase=='reloading':
-                  st.phase_end=frame_at_or_after(st.phase_end)
-              elif was=='reloading' and self._states.get(st.actor) is st and st.actor==idx:
-                  print(f"F_RELOAD_COMPLETE|t={transition_time:.9f}|ammo={st.ammo}|full={self._full_ammo(st.actor,transition_time)}|sig={self._signature(st.actor,transition_time)}|next={st.phase_end:.9f}")
-          DynamicRapidCadenceRuntime._after_shot=patched_after
-          DynamicRapidCadenceRuntime._finish_nonshot_phase=patched_finish
+          class O(StaticNormalAttackObserver):
+              def __init__(self,*a,**k): self.rows=[]; super().__init__(*a,**k)
+              def _score_shots(self,actor,count,*,eval_time):
+                  before=float(self.char_total[actor]); out=super()._score_shots(actor,count,eval_time=eval_time)
+                  if actor==idx: self.rows.append((float(eval_time),int(count),float(self.char_total[actor])-before))
+                  return out
+          def run_rhq(label):
+              sink=SimpleDamageScoreSink(compiled,profile); runtime=BurstRuntime(compiled,policy,profile,damage_sink=sink)
+              obs=O(runtime,duration=DURATION); rr=runtime.run(duration=DURATION,score_observer=obs); res=obs.finish(events_processed=rr.events_processed)
+              fcaster=[compiled.names[a] for t,a,s in rr.casts if s=='3']; frows=defaultdict(lambda:[0,0.0])
+              for t,c,d in obs.rows:
+                  k=classify(t,rr.full_burst_starts,rr.full_burst_ends,fcaster); frows[k][0]+=c; frows[k][1]+=d
+              total=float(res.char_total[idx]); print(f"Q_NORMAL|set={label}|m={m_normal:.3f}|f={total:.3f}|err={total/m_normal-1:.8f}")
+              for k in ('OUT','FB_OTHER','FB_Q'):
+                  mc,md=mrows[k]; fc,fd=frows[k]
+                  print(f"PART|set={label}|{k}|m_shots={mc}|f_shots={fc}|delta={fc-mc}|dmg_err={fd/md-1:.8f}")
+              return total
 
-          sink=SimpleDamageScoreSink(compiled,profile); runtime=BurstRuntime(compiled,policy,profile,damage_sink=sink)
-          obs=StaticNormalAttackObserver(runtime,duration=DURATION)
-          rr=runtime.run(duration=DURATION,score_observer=obs); obs.finish(events_processed=rr.events_processed)
-          print("F_STARTS|"+",".join(f"{x:.9f}" for x in rr.full_burst_starts))
+          base=run_rhq('base')
+          orig_sync=DynamicRapidReloadRuntime.sync
+          clamp_rows=[]
+          def patched_sync(self,now):
+              for actor in self.actors:
+                  st=self._states.get(actor)
+                  if st is None or st.phase=='reloading':
+                      continue
+                  full=self._full_ammo(actor,float(now))
+                  if st.ammo > full:
+                      if len(clamp_rows)<20:
+                          clamp_rows.append((actor,float(now),st.ammo,full,st.phase))
+                      st.ammo=full
+                      self._invalidate(st)
+              return orig_sync(self,now)
+          DynamicRapidReloadRuntime.sync=patched_sync
+          patched=run_rhq('max_ammo_clamp')
+          print(f"Q_DELTA|base_err={base/m_normal-1:.8f}|patched_err={patched/m_normal-1:.8f}")
+          for actor,t,before,after,phase in clamp_rows:
+              print(f"CLAMP|actor={compiled.names[actor]}|t={t:.9f}|before={before}|after={after}|phase={phase}")
+
+          def fast_team(members):
+              sq=spec.build_squad(list(members)); cp=compile_moris_squad(sq)
+              bl=static_score_blockers(cp)
+              if bl: raise RuntimeError(bl)
+              po=compile_burst_policy(sq,cp,dict(CONFIG))
+              return float(score_static_squad(cp,po,profile).team_total)
+          mm=fast_team(MM); rhq=fast_team(RHQ)
+          margin=(mm-rhq)/max(mm,rhq)
+          print(f"HARDCASE|MM={mm:.3f}|RHQ={rhq:.3f}|margin={margin:.8f}")
           PY
