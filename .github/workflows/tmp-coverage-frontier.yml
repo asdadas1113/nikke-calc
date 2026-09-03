@@ -9,45 +9,66 @@ permissions:
   contents: read
 
 jobs:
-  inspect-brady:
+  robust-damage-frontier:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect Brady team, state producer, and DoT sink support
+      - name: Classify all blocked damage effects without colon parsing
         run: |
           PYTHONPATH=. python - <<'PY'
+          from collections import defaultdict
           from context import snapshot, spec
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.score import static_score_blockers
           from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.dispatcher import TriggerDispatcher
 
-          name='레이드_앨리스브래디'
-          members=tuple(snapshot.SQUADS[name]['members'])
-          raw=spec.build_squad(list(members)); squad=compile_moris_squad(raw)
-          print('TEAM',members)
-          print('BLOCKERS',static_score_blockers(squad))
-          sink=SimpleDamageScoreSink(squad,EnemyStaticProfile(defense=0,duration=180))
-          print('\nBRADY EFFECTS')
-          actor=members.index('브래디')
-          for e in squad.effects:
-              if e.actor!=actor: continue
-              print({
-                  'id':e.effect_id,'name':e.name,'type':e.effect_type,'stat':e.stat,'value':e.value,
-                  'target':e.target,'target_mode':e.target_spec.mode.value,'duration':e.duration,
-                  'tick_interval':e.tick_interval,'max_stack':e.max_stack,'max_trigger':e.max_trigger,
-                  'parameters':dict(e.parameters),
-                  'triggers':[(r.mode.value,r.event_key,r.threshold,r.interval,r.raw,r.is_runtime_supported) for r in e.triggers],
-                  'conditions':[(r.mode.value,r.key,r.value,r.raw,r.is_runtime_supported) for r in e.condition_rules],
-                  'cap':e.capability.disposition.value,'cap_blockers':tuple(e.capability.blockers),
-                  'dispatcher_exec':TriggerDispatcher.is_executable_effect(e),
-                  'sink_support':sink.supports(e) if e.effect_type=='damage' else None,
-                  'sink_unsupported':e.effect_id in sink.unsupported_effect_ids,
-              })
-          print('DOT_SPECS',sink.dot_specs)
-          print('STATEFUL_DOT_SPECS',sink.stateful_dot_specs)
+          groups=defaultdict(list); seen=set()
+          for source_name, case in snapshot.SQUADS.items():
+              if str(source_name).startswith('지그_'): continue
+              members=tuple(str(x) for x in case.get('members',()))
+              if len(members)!=5 or members in seen: continue
+              seen.add(members)
+              squad=compile_moris_squad(spec.build_squad(list(members)))
+              blockers=tuple(static_score_blockers(squad))
+              sink=SimpleDamageScoreSink(squad,EnemyStaticProfile(defense=0,duration=180))
+              for e in squad.effects:
+                  if e.effect_type!='damage': continue
+                  owner=squad.members[e.actor].name
+                  key=f'skill_damage:{owner}:{e.name}:{e.stat or ""}'
+                  if key not in blockers: continue
+                  owner_unsafe=tuple(b for b in blockers if (
+                      b.startswith(f'cadence:{owner}:')
+                      or b==f'control:{owner}'
+                      or b.startswith(f'weapon_change:{owner}:')
+                  ))
+                  shape=(
+                      e.stat,e.target_spec.mode.value,e.target,e.duration,e.tick_interval,
+                      e.max_stack,e.max_trigger,
+                      tuple(sorted((str(k),repr(v)) for k,v in e.parameters.items())),
+                      tuple((r.mode.value,r.event_key,r.threshold,r.interval,r.raw) for r in e.triggers),
+                      tuple((r.mode.value,r.key,r.value,r.raw,getattr(r,'is_runtime_supported',None)) for r in e.condition_rules),
+                  )
+                  groups[(owner,e.name,e.stat,shape)].append({
+                      'team':str(source_name),'members':members,'nblock':len(blockers),
+                      'owner_unsafe':owner_unsafe,'sink_support':sink.supports(e),
+                      'sink_unsupported':e.effect_id in sink.unsupported_effect_ids,
+                      'cap':e.capability.disposition.value,'cap_blockers':tuple(e.capability.blockers),
+                  })
+
+          ordered=sorted(groups.items(),key=lambda kv:(
+              min(x['nblock'] for x in kv[1]),
+              any(x['owner_unsafe'] for x in kv[1]),
+              -len(kv[1]),kv[0][0],kv[0][1]
+          ))
+          print('GROUPS',len(ordered))
+          for (owner,name,stat,shape),uses in ordered:
+              print('\nGROUP',len(uses),'MIN_TEAM_BLOCKERS',min(x['nblock'] for x in uses),owner,name,stat)
+              print('SHAPE',shape)
+              print('ALL_SINK_SUPPORT',all(x['sink_support'] for x in uses),'ANY_OWNER_UNSAFE',any(x['owner_unsafe'] for x in uses))
+              for x in uses:
+                  print(' USE',x)
           PY
