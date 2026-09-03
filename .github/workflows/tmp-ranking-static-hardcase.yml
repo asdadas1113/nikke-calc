@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Isolate reload completion frame semantics
+      - name: Decompose matched charge cadence damage
         shell: bash
         run: |
           python - <<'PY'
@@ -21,20 +21,20 @@ jobs:
           from calculator.timeline import DT
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
-          from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import StaticNormalAttackObserver, score_static_squad, static_score_blockers
+          from fast_engine.engine.score import score_static_squad, static_score_blockers
           from fast_engine.engine.weapon import DynamicChargeCadenceRuntime
 
           TEAMS={
             'MM':("미란다","브리드 : 사일런트 트랙","헬름","루주","미하라 : 본딩 체인"),
             'RHQ':("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸"),
           }
-          TARGETS={'헬름','루주','레드 후드','프리카','민트'}
-          MORIS_COUNTS={'헬름':111,'루주':119,'레드 후드':333,'프리카':122,'민트':122}
-          MORIS={'MM':3532610672.0,'RHQ':3528909503.0}
+          MORIS_ACTOR={
+            '미란다':293239789.0,'브리드 : 사일런트 트랙':172087812.0,'헬름':1365843066.0,'루주':136122279.0,'미하라 : 본딩 체인':1565317726.0,
+            '라피 : 레드 후드':475777021.0,'레드 후드':924584568.0,'프리카':454595046.0,'민트':205844576.0,'퀀시 : 이스케이프 퀸':1468108292.0,
+          }
+          MORIS_TEAM={'MM':3532610672.0,'RHQ':3528909503.0}
           D=180.0; CFG={'duration':D,'first_burst_time':3.0,'rng_mode':'expected'}
           profile=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=D)
           ticks=[]; t=0.0
@@ -55,46 +55,32 @@ jobs:
               DynamicChargeCadenceRuntime._enter_charge=oe
               DynamicChargeCadenceRuntime._after_shot=oa
               DynamicChargeCadenceRuntime._finish_nonshot_phase=of
-          def install_ea():
-              def pe(self,st,at,now_for_mods):
-                  oe(self,st,at,now_for_mods); st.phase_end=snap(st.phase_end)
-              def pa(self,st,shot_time):
-                  oa(self,st,shot_time); st.phase_end=snap(st.phase_end)
-              DynamicChargeCadenceRuntime._enter_charge=pe
-              DynamicChargeCadenceRuntime._after_shot=pa
-          def install_reload_end():
-              def pf(self,st,transition_time,now_for_mods):
-                  before=st.phase
-                  of(self,st,transition_time,now_for_mods)
-                  if before=='post_fire_reload' and st.phase=='reloading':
-                      st.phase_end=snap(st.phase_end)
-              DynamicChargeCadenceRuntime._finish_nonshot_phase=pf
-
-          def run_variant(tag,ea=False,reload_end=False):
+          def install(ea=False,reload_end=False):
               reset()
-              if ea: install_ea()
-              if reload_end: install_reload_end()
-              totals={}
-              for label,(names,cp,po) in built.items():
-                  scored=score_static_squad(cp,po,profile); totals[label]=sum(float(v) for v in scored.char_total)
-                  sink=SimpleDamageScoreSink(cp,profile); runtime=BurstRuntime(cp,po,profile,damage_sink=sink)
-                  class O(StaticNormalAttackObserver):
-                      def __init__(self,*a,**k): self.ts=[[] for _ in cp.members]; super().__init__(*a,**k)
-                      def _score_shots(self,actor,count,*,eval_time):
-                          if cp.names[actor] in TARGETS: self.ts[actor].extend([float(eval_time)]*int(count))
-                          return super()._score_shots(actor,count,eval_time=eval_time)
-                  obs=O(runtime,duration=D); rr=runtime.run(duration=D,score_observer=obs); obs.finish(events_processed=rr.events_processed)
-                  for i,name in enumerate(names):
-                      if name not in TARGETS: continue
-                      ts=obs.ts[i]
-                      print(f'ACTOR|set={tag}|name={name}|count={len(ts)}|delta={len(ts)-MORIS_COUNTS[name]}|first='+','.join(f'{x:.6f}' for x in ts[:16]))
-              margin=(totals['MM']-totals['RHQ'])/max(totals.values())
-              mm=(MORIS['MM']-MORIS['RHQ'])/max(MORIS.values())
-              print(f'SCORE|set={tag}|MM={totals["MM"]:.3f}|RHQ={totals["RHQ"]:.3f}|margin={margin:.8f}|delta_to_moris={margin-mm:+.8f}')
+              if ea:
+                  def pe(self,st,at,now_for_mods): oe(self,st,at,now_for_mods); st.phase_end=snap(st.phase_end)
+                  def pa(self,st,shot_time): oa(self,st,shot_time); st.phase_end=snap(st.phase_end)
+                  DynamicChargeCadenceRuntime._enter_charge=pe; DynamicChargeCadenceRuntime._after_shot=pa
+              if reload_end:
+                  def pf(self,st,transition_time,now_for_mods):
+                      before=st.phase; of(self,st,transition_time,now_for_mods)
+                      if before=='post_fire_reload' and st.phase=='reloading': st.phase_end=snap(st.phase_end)
+                  DynamicChargeCadenceRuntime._finish_nonshot_phase=pf
 
-          run_variant('base')
-          run_variant('ea',ea=True)
-          run_variant('ea_reload_end',ea=True,reload_end=True)
+          def run(tag,ea=False,reload_end=False):
+              install(ea,reload_end); totals={}
+              for label,(names,cp,po) in built.items():
+                  r=score_static_squad(cp,po,profile); total=sum(float(v) for v in r.char_total); totals[label]=total
+                  print(f'TEAM|set={tag}|team={label}|m={MORIS_TEAM[label]:.3f}|f={total:.3f}|err={total/MORIS_TEAM[label]-1:.8f}|delta={total-MORIS_TEAM[label]:.3f}')
+                  for i,name in enumerate(names):
+                      f=float(r.char_total[i]); m=MORIS_ACTOR[name]
+                      print(f'ACTOR|set={tag}|team={label}|name={name}|m={m:.3f}|f={f:.3f}|err={f/m-1:.8f}|delta={f-m:.3f}')
+              margin=(totals['MM']-totals['RHQ'])/max(totals.values())
+              mm=(MORIS_TEAM['MM']-MORIS_TEAM['RHQ'])/max(MORIS_TEAM.values())
+              print(f'MARGIN|set={tag}|fast={margin:.8f}|moris={mm:.8f}|delta={margin-mm:+.8f}')
+
+          run('base')
+          run('ea',ea=True)
+          run('ea_reload_end',ea=True,reload_end=True)
           reset()
-          print(f'MORIS|margin={(MORIS["MM"]-MORIS["RHQ"])/max(MORIS.values()):.8f}')
           PY
