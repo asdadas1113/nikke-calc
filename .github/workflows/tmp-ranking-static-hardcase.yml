@@ -13,111 +13,111 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Trace Mihara full-burst-end ordering
+      - name: Compare Mihara active damage buffs at 26.4s
         shell: bash
         run: |
           python - <<'PY'
           from bisect import bisect_left
-          from collections import defaultdict
-
           from calculator.timeline import DEFAULT_ENEMY, DT, simulate
           from calculator.buff_manager import BuffManager
-          from calculator.sim_result import _is_normal
           from context import spec
           from fast_engine.engine.burst import BurstMachine, compile_burst_policy
           from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
-          from fast_engine.engine.dispatcher import TriggerDispatcher
           from fast_engine.engine.model import EnemyStaticProfile
+          from fast_engine.engine.weapon import DynamicChargeCadenceRuntime
 
           NAMES=("미란다","브리드 : 사일런트 트랙","헬름","루주","미하라 : 본딩 체인")
-          WATCH_LO=25.5; WATCH_HI=27.0; D=30.0
+          D=30.0; WATCH=26.4
           CFG={'duration':D,'first_burst_time':3.0,'rng_mode':'expected'}
-          squad=spec.build_squad(list(NAMES))
-          config=spec.build_config(squad,dict(CFG))
+          squad=spec.build_squad(list(NAMES)); config=spec.build_config(squad,dict(CFG))
           enemy=dict(DEFAULT_ENEMY); enemy['def']=55000.0; enemy['code']='작열'; enemy['core_px']=10.0
 
-          # --- Moris: print the exact same-event effect order/state. ---
-          orig_activate=BuffManager._activate
-          watched={'바디 컨텍 2','바디 컨텍 3','사슬 감기','바디 컨텍 5'}
-          def gauge_m(self):
-              return self.state.get('gauges',{}).get('미하라 : 본딩 체인',{}).get('포획 사슬',0.0)
-          def mactivate(self,eff,caster,t,suppress_event=False):
-              name=eff.get('name','')
-              watch=(caster=='미하라 : 본딩 체인' and name in watched and WATCH_LO<=float(t)<=WATCH_HI)
-              if watch:
-                  buffs=self.get_buffs('미하라 : 본딩 체인','__enemy__',float(t))
-                  keep={k:v for k,v in buffs.items() if k in {
-                      'atk_pct','atk_flat','atk_dmg_pct','crit_rate','crit_dmg','dot_dmg_pct',
-                      'element_bonus_pct','received_dmg','received_dmg_pct'
-                  }}
-                  print('M_BEFORE|t=%.9f|name=%s|gauge=%s|fb=%s|buffs=%s' % (
-                      float(t),name,gauge_m(self),self.state.get('full_burst'),keep))
-              out=orig_activate(self,eff,caster,t,suppress_event=suppress_event)
-              if watch:
-                  print('M_AFTER|t=%.9f|name=%s|gauge=%s|fb=%s' % (
-                      float(t),name,gauge_m(self),self.state.get('full_burst')))
-              return out
-          BuffManager._activate=mactivate
-          mr=simulate(squad,config=config,enemy=enemy,seed=42,verbose=False)
-          BuffManager._activate=orig_activate
-          grouped=defaultdict(float); counts=defaultdict(int)
-          for h in mr.hits:
-              if h.caster=='미하라 : 본딩 체인' and not _is_normal(h) and h.skill_name=='바디 컨텍 3' and WATCH_LO<=float(h.t)<=WATCH_HI:
-                  grouped[round(float(h.t),9)]+=float(h.damage); counts[round(float(h.t),9)]+=1
-          print('M_BODY_DAMAGE',[(t,counts[t],grouped[t]) for t in sorted(grouped)])
+          # Moris active effect inventory just before Body Contact 3 scores.
+          orig=BuffManager._activate
+          def mact(self,eff,caster,t,suppress_event=False):
+              if caster=='미하라 : 본딩 체인' and eff.get('name')=='바디 컨텍 3' and abs(float(t)-WATCH)<1e-6:
+                  print('M_TERMS',self.get_buffs('미하라 : 본딩 체인','__enemy__',float(t)))
+                  rows=[]
+                  for ab in self._active:
+                      if '미하라 : 본딩 체인' not in (ab.target_chars or []): continue
+                      if not (ab.expires_at==float('inf') or float(t)<ab.expires_at): continue
+                      e=ab.effect
+                      rows.append((ab.caster,e.get('name'),e.get('stat'),e.get('fixed_value'),e.get('values'),ab.stack,ab.activated_at,ab.expires_at,e.get('trigger',{}).get('condition',[])))
+                  for row in rows: print('M_ACTIVE',row)
+              return orig(self,eff,caster,t,suppress_event=suppress_event)
+          BuffManager._activate=mact
+          simulate(squad,config=config,enemy=enemy,seed=42,verbose=False)
+          BuffManager._activate=orig
 
-          # --- Fast: apply the already-validated epsilon-aware burst lattice. ---
-          cp=compile_moris_squad(squad)
-          policy=compile_burst_policy(squad,cp,dict(CFG))
-          profile=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=D)
+          cp=compile_moris_squad(squad); policy=compile_burst_policy(squad,cp,dict(CFG))
           actor=cp.names.index('미하라 : 본딩 체인')
+          profile=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=D)
+          print('CANDIDATES')
+          for e in cp.effects:
+              if (e.stat or '') in {'crit_rate','crit_dmg','atk_dmg_pct','received_dmg_pct','atk_pct','atk_caster_based_pct'}:
+                  print('EFFECT',e.effect_id,cp.names[e.actor],e.name,e.stat,e.value,e.duration,[(r.event_key,r.raw) for r in e.triggers],e.target)
+
           ticks=[]; t=0.0
-          while t<=D+1.0:
-              ticks.append(t); t+=DT
-          def burst_tick(x):
-              i=bisect_left(ticks,float(x)-1e-9)
-              return ticks[i] if i<len(ticks) else float(x)
-          orig_schedule=BurstMachine._schedule
-          def bs(self,scheduler,time,kind,*,stage=None):
-              return orig_schedule(self,scheduler,burst_tick(time),kind,stage=stage)
+          while t<=D+1.0: ticks.append(t); t+=DT
+          def ct(x):
+              i=bisect_left(ticks,float(x)); return ticks[i] if i<len(ticks) else float(x)
+          def bt(x):
+              i=bisect_left(ticks,float(x)-1e-9); return ticks[i] if i<len(ticks) else float(x)
+
+          # Validated burst lattice.
+          obs=BurstMachine._schedule
+          def bs(self,scheduler,time,kind,*,stage=None): return obs(self,scheduler,bt(time),kind,stage=stage)
           BurstMachine._schedule=bs
 
-          class TraceSink(SimpleDamageScoreSink):
+          # MM has no weapon-change; apply the already-validated selective charge lattice to Helm/Rouge.
+          oe=DynamicChargeCadenceRuntime._enter_charge; oa=DynamicChargeCadenceRuntime._after_shot
+          of=DynamicChargeCadenceRuntime._finish_nonshot_phase; os=DynamicChargeCadenceRuntime.sync
+          def pe(self,st,at,now): oe(self,st,at,now); st.phase_end=ct(st.phase_end)
+          def pa(self,st,shot): oa(self,st,shot); st.phase_end=ct(st.phase_end)
+          def pf(self,st,when,now):
+              of(self,st,when,now)
+              if st.phase in {'charging','post_reload','reloading'}: st.phase_end=ct(st.phase_end)
+          def ps(self,now):
+              for a in self.actors:
+                  st=self._states[a]
+                  while st.phase!='charging' and st.phase_end<=now+1e-9: pf(self,st,st.phase_end,now)
+                  wc=self._weapon_change_id(a,now); wc_changed=wc!=st.weapon_change_id
+                  if wc_changed:
+                      entering=wc is not None; st.weapon_change_id=wc; self._invalidate(st); st.ammo=self._full_ammo(a,now)
+                      if entering and st.phase=='charging':
+                          st.charge_start=float(now); st.phase_end=ct(float(now)+self._effective_charge_time(a,now))
+                      elif st.phase in {'post_fire_reload','reloading','post_reload'}: pe(self,st,float(now),float(now))
+                      elif not entering and st.phase=='charging': st.phase_end=ct(st.charge_start+self._effective_charge_time(a,now))
+                  old=st.signature; new=self._signature(a,now)
+                  if new!=old:
+                      st.signature=new
+                      if not wc_changed:
+                          self._invalidate(st)
+                          if st.phase=='charging' and (new[4],new[5])!=(old[4],old[5]):
+                              st.phase_end=ct(st.charge_start+self._effective_charge_time(a,now))
+                  if st.scheduled_time is None: self._plan(a,now)
+                  self.state.set_ammo(a,st.ammo)
+          DynamicChargeCadenceRuntime._enter_charge=pe; DynamicChargeCadenceRuntime._after_shot=pa
+          DynamicChargeCadenceRuntime._finish_nonshot_phase=pf; DynamicChargeCadenceRuntime.sync=ps
+
+          class Sink(SimpleDamageScoreSink):
               def _score_spec(self,effect_id,*,now,full_burst):
                   e=self.squad.effects[effect_id]
-                  if e.actor==actor and e.name=='바디 컨텍 3' and WATCH_LO<=float(now)<=WATCH_HI:
-                      gauge=self.runtime.state.actors[actor].gauges.get('포획 사슬',0.0)
-                      terms=self.resolver.resolve(actor,now=float(now))
-                      hit_count=self._stack_count_hit_count(effect_id)
-                      print('F_SCORE_BEFORE|t=%.9f|gauge=%s|hit_count=%s|arg_fb=%s|phase=%s|terms=%s' % (
-                          float(now),gauge,hit_count,full_burst,self.runtime.machine.phase,terms))
-                      before=self.char_total[actor]
-                      out=super()._score_spec(effect_id,now=now,full_burst=full_burst)
-                      print('F_SCORE_AFTER|t=%.9f|delta=%.6f' % (float(now),self.char_total[actor]-before))
-                      return out
+                  if e.actor==actor and e.name=='바디 컨텍 3' and abs(float(now)-WATCH)<1e-6:
+                      print('F_TERMS',self.resolver.resolve(actor,now=float(now)))
+                      rows=[]
+                      for ae in self.runtime.dispatcher.effects._active.values():
+                          if ae.target!=actor or not ae.active(float(now)): continue
+                          x=self.squad.effects[ae.effect_id]
+                          rows.append((cp.names[ae.source_actor],x.name,x.stat,x.value,ae.stacks,ae.expires_at,[(r.event_key,r.raw) for r in x.triggers]))
+                      for row in sorted(rows,key=lambda x:(str(x[1]),str(x[2]),str(x[0]))): print('F_ACTIVE',row)
                   return super()._score_spec(effect_id,now=now,full_burst=full_burst)
 
-          orig_fast_activate=TriggerDispatcher._activate
-          def factivate(self,effect,*,now,context,conditions_prechecked=False,target_owner_actor=None):
-              watch=(effect.actor==actor and effect.name in watched and WATCH_LO<=float(now)<=WATCH_HI)
-              if watch:
-                  gauge=self.state.actors[actor].gauges.get('포획 사슬',0.0)
-                  print('F_BEFORE|t=%.9f|id=%d|name=%s|gauge=%s|phase=%s' % (
-                      float(now),effect.effect_id,effect.name,gauge,self.burst.phase))
-              out=orig_fast_activate(self,effect,now=now,context=context,conditions_prechecked=conditions_prechecked,target_owner_actor=target_owner_actor)
-              if watch:
-                  gauge=self.state.actors[actor].gauges.get('포획 사슬',0.0)
-                  print('F_AFTER|t=%.9f|id=%d|name=%s|ok=%s|gauge=%s|phase=%s' % (
-                      float(now),effect.effect_id,effect.name,out,gauge,self.burst.phase))
-              return out
-          TriggerDispatcher._activate=factivate
-          sink=TraceSink(cp,profile)
-          rt=BurstRuntime(cp,policy,profile,damage_sink=sink)
-          rr=rt.run(duration=D)
-          TriggerDispatcher._activate=orig_fast_activate
-          BurstMachine._schedule=orig_schedule
-          print('FAST_CASTS',[(round(t,9),stage,cp.names[a]) for t,a,stage in rr.casts])
-          print('FAST_FB_ENDS',[round(x,9) for x in rr.full_burst_ends])
+          sink=Sink(cp,profile); rt=BurstRuntime(cp,policy,profile,damage_sink=sink); rt.run(duration=D)
+
+          BurstMachine._schedule=obs
+          DynamicChargeCadenceRuntime._enter_charge=oe; DynamicChargeCadenceRuntime._after_shot=oa
+          DynamicChargeCadenceRuntime._finish_nonshot_phase=of; DynamicChargeCadenceRuntime.sync=os
           PY
