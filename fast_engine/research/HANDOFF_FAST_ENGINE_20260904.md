@@ -10,6 +10,7 @@
 
 현재 핵심 runtime commit:
 
+- `46af96866b9462ec22455b9c9f5121cfa3b35bdd` — `fix: support last-bullet damage delivery`
 - `0f522925b2cac86ab74329a9ce4d02347f739abe` — `fix: align Fast timing with Moris outer ticks [timing-apply]`
 
 그 전 generic ranking fixes:
@@ -23,18 +24,17 @@
 재개 시 우선 읽을 문서:
 
 1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260904.md`
-2. `fast_engine/research/TIMING_SEMANTICS_RANKING_CHECKPOINT_20260904.md`
-3. `fast_engine/research/HANDOFF_FAST_ENGINE_20260903.md`
-4. `fast_engine/research/SELF_STATE_PASSIVE_RANKING_CHECKPOINT_20260903.md`
-5. `fast_engine/research/RANKING_CORE_CROSSOVER_CHECKPOINT_20260903.md`
+2. `fast_engine/research/COVERAGE_FRONTIER_CHECKPOINT_20260904.md`
+3. `fast_engine/research/TIMING_SEMANTICS_RANKING_CHECKPOINT_20260904.md`
+4. `fast_engine/research/HANDOFF_FAST_ENGINE_20260903.md`
+5. `fast_engine/research/SELF_STATE_PASSIVE_RANKING_CHECKPOINT_20260903.md`
+6. `fast_engine/research/RANKING_CORE_CROSSOVER_CHECKPOINT_20260903.md`
 
 ---
 
 ## 1. 현재 phase
 
-Fast coverage 확장은 아직 적극 재개하지 않는다.
-
-현재까지는 ranking validation phase를 유지했고, 이번 checkpoint에서 certified pair의 static hard-case inversion을 해결했다.
+certified pair의 static ranking hard case는 닫았고, 2026-09-04 후반부터 coverage expansion을 다시 시작했다.
 
 Fast-certified real public memberships:
 
@@ -52,7 +52,7 @@ Fast-certified real public memberships:
 
 ---
 
-## 2. 이번 checkpoint의 핵심 결론
+## 2. timing checkpoint 핵심 결론
 
 이전 DEF/core near-tie ranking inversion의 주요 원인은 result-fitting이 아니라 Moris/Fast 사이의 generic timing semantics 차이였다.
 
@@ -87,7 +87,7 @@ Fast-certified real public memberships:
 - parts / immunity chronology / element-window chronology 없음
 - pair: Miranda/Mihara vs Red Hood/Quency
 
-최종 permanent runtime에서 monkey patch 없이 실행한 결과:
+최종 permanent timing runtime에서 monkey patch 없이 실행한 결과:
 
 - core grid: `6/6` order agreement
 - DEF grid: `11/11` order agreement
@@ -149,7 +149,7 @@ Rouge `소드 코인` self buff 누락을 설명했던 문제다.
 
 ---
 
-## 6. 채택하지 않은 실험
+## 6. 채택하지 않은 timing 실험
 
 다음은 정식 구현하지 않았다.
 
@@ -165,50 +165,102 @@ rapid path는 현재 그대로 둔다.
 
 ---
 
-## 7. regression 상태
+## 7. coverage frontier 재개 결과
 
-정식 runtime commit 전 focused regression 통과:
+21 coverage gaps를 mechanic 기준으로 다시 분류했다.
 
-- `fast_engine.tests.test_damage_moris_frame_timing`
-- `fast_engine.tests.test_dynamic_weapon_change`
-- `fast_engine.tests.test_damage_dynamic_charge_scoring`
-- `fast_engine.tests.test_burst_machine`
-- `py_compile`
-- `git diff --check`
+첫 조사에서 다음 broad 후보는 보류했다.
 
-추가된 regression은 repeated-add timing, burst epsilon, true expiry, DEF55 near-tie order를 고정한다.
+### Crown `heal_received`
+
+`로얄 에타이어 4`는 heal chronology가 comparison-critical이므로 HP/heal event chronology를 열기 전에는 fail closed 유지.
+
+### Little Mermaid `squad_ammo_consume`
+
+real `스쿼드1` 180초에서:
+
+- Moris squad ammo consume 34,587
+- Fast physical shots 34,476
+- 일부 500-shot crossing이 약 +0.6~0.7초 어긋남
+
+team-global threshold가 current cadence approximation을 증폭하므로 아직 인증하지 않는다.
+
+### broad `bonus_damage`
+
+하나의 mechanic이 아니었다. Privaty last-bullet, Isabel pending B3, Cinderella stack-count, Asuka state-end/enemy-stack으로 분리된다.
+
+### reload/max-ammo broad enable
+
+Fast live runtime은 이미 있으나 public blockers의 상당수가 unsafe recipient의 weapon-change/control에서 파생된다. safety를 우회하지 않는다.
+
+세부 자료는 `COVERAGE_FRONTIER_CHECKPOINT_20260904.md` 참조.
 
 ---
 
-## 8. 다음 단일 checkpoint
+## 8. 첫 coverage 확장 — `last_bullet` damage delivery
 
-이번 certified pair의 static ranking hard case는 닫는다.
+Privaty `LD 어설트 2/3`에서 작은 generic gap을 확인했다.
 
-다음에는 새 timing micro-fix를 더 찾지 않는다.
+Fast에는 이미 static/dynamic post-shot last-bullet boundary가 있었고 damage sink safe event key만 빠져 있었다.
 
-우선 선택지는 둘 중 하나다.
+정식 변경:
 
-### A. ranking sample 확대
+- `46af96866b9462ec22455b9c9f5121cfa3b35bdd` — `_SAFE_EVENT_KEYS`에 `last_bullet` 1줄 추가
+- `4a3d6f1378f482d41d6bcc8676150509a91d2474` — real Privaty named-state gating regression
 
-이미 Fast-certified 가능한 다른 real membership을 찾거나, 기존 public universe에서 coverage gap 하나를 generic하게 해소해 comparable certified sample을 늘린다.
+Moris parity probe, burst 없음 35초:
 
-### B. coverage 재개 판단
+- LD2 activation 6 vs 6
+- LD3 0 vs 0
+- LD2 damage relative error 약 `-0.00006991%`
 
-현재 certified pair의 core/DEF/code static axes가 안정됐으므로 coverage 확장을 다시 시작할지 판단한다.
+named-state probe:
 
-권장 순서:
+- `타겟 지정` active at t=3.1 → LD3 fires
+- duration expiry after t=13.0 → t=13.1 last-bullet에서 LD3 추가 발동 없음
 
-1. 21 coverage gaps를 mechanic family 기준으로 다시 분류
-2. 여러 public teams를 동시에 열 수 있는 generic mechanic을 우선
-3. 새 mechanic 구현 전 ranking-critical 여부와 fail-closed contract 확인
-4. 한 번에 하나의 mechanic family만 확장
-5. coverage 증가 뒤 standardized public audit + ranking validation 재실행
+focused last-bullet regression 8/8 success.
+
+public blocker scan 후:
+
+- source24 / unique23 / certified2 / gaps21 유지
+- Privaty LD2/LD3 blockers: 0
+
+영향 팀 4개:
+
+- `스쿼드2`
+- `레이드_라피앨리스`
+- `레이드_아니스서머메이든`
+- `레이드_트리나홍련`
+
+다른 cadence/weapon/control blockers가 남아 아직 새 membership이 certified되지는 않았다.
+
+---
+
+## 9. 다음 단일 checkpoint
+
+다음 mechanic을 단순 stat 빈도로 고르지 않는다.
+
+이미 보류 근거가 있는 축은 건너뛴다.
+
+- Crown heal chronology
+- Little Mermaid squad-ammo chronology
+- broad weapon-change
+- unsafe recipient를 무시한 reload/max-ammo broad enable
+
+다음 작업:
+
+1. 남은 repeated damage-delivery blockers를 trigger/target/condition shape로 묶는다.
+2. 같은 root cause를 공유하고 HP chronology/weapon replacement를 새로 요구하지 않는 작은 generic slice를 찾는다.
+3. real effect shape probe → Moris parity → 최소 구현 → focused regression 순서를 유지한다.
+4. 한 번에 하나의 mechanic만 확장한다.
+5. certified membership이 실제 증가하면 standardized public audit + ranking validation을 즉시 다시 실행한다.
 
 **optimizer production integration은 아직 하지 않는다.**
 
 ---
 
-## 9. 고정 설계 원칙
+## 10. 고정 설계 원칙
 
 - Fast는 broad scorer이지 Moris 2.0이 아니다.
 - unsupported comparison-critical mechanic은 fail closed.
@@ -223,20 +275,15 @@ rapid path는 현재 그대로 둔다.
 
 ---
 
-## 10. cleanup 목표 상태
+## 11. cleanup 목표 상태
 
-조사용 파일은 제거했다.
+조사용 temporary workflow는 checkpoint 종료 전에 제거한다.
 
-제거 대상:
-
-- `.github/workflows/tmp-ranking-static-hardcase.yml`
-- `fast_engine/research/tmp_apply_moris_timing.py`
-
-최종 확인 시 `.github/workflows`에는 반드시:
+최종 `.github/workflows`에는 반드시:
 
 - `ci.yml`
 - `pages.yml`
 
-만 남아야 한다.
+만 남겨야 한다.
 
-최종 normal CI 성공 여부를 확인한 뒤 이 checkpoint를 닫는다.
+최종 normal CI 성공 여부를 확인한 뒤 checkpoint를 닫는다.
