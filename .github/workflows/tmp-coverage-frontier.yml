@@ -9,19 +9,19 @@ permissions:
   contents: read
 
 jobs:
-  asuka-force-reload-trial:
+  asuka-score-path-mg-trace:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Compare Asuka score path with Moris force-reload semantics
+      - name: Trace second Asuka stance in Moris and Fast score path
         run: |
           PYTHONPATH=. python - <<'PY'
           from unittest.mock import patch
           from calculator.buff_manager import BuffManager
-          from calculator.timeline import DEFAULT_ENEMY, simulate
+          from calculator.timeline import CharState, DEFAULT_ENEMY, simulate
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.compiler import compile_moris_squad
@@ -35,143 +35,118 @@ jobs:
           from fast_engine.engine.triggers import TriggerMode
 
           names=['미란다','아스카 : WILLE','브리드 : 사일런트 트랙','헬름','루주']
-          duration=100.0
+          asuka=1; duration=45.0
           cfg={'duration':duration,'first_burst_time':3.0,'rng_mode':'expected'}
           enemy=dict(DEFAULT_ENEMY); enemy.update({'def':55000.0,'code':'작열','core_px':10.0})
           profile=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=duration)
 
           def build():
-              raw=spec.build_squad(names)
-              squad=compile_moris_squad(raw)
-              return raw,squad
-
+              raw=spec.build_squad(names); return raw,compile_moris_squad(raw)
           def state_end_safe(squad_obj,effect):
               keys=[r.event_key or '' for r in effect.triggers]
-              if not keys or any(r.mode is not TriggerMode.EVENT or not k.startswith('event:state_end:') for r,k in zip(effect.triggers,keys)):
-                  return False
+              if not keys or any(r.mode is not TriggerMode.EVENT or not k.startswith('event:state_end:') for r,k in zip(effect.triggers,keys)): return False
               for key in keys:
                   n=key[len('event:state_end:'):]
                   ps=[p for p in squad_obj.effects if p.actor==effect.actor and p.effect_id!=effect.effect_id and p.name==n]
                   if len(ps)!=1: return False
                   p=ps[0]
-                  if not (p.effect_type=='buff' and p.target_spec.mode is TargetMode.SELF and p.duration is not None
-                          and float(p.duration)>=0.0 and p.parameters.get('duration_bullets') is None
-                          and TriggerDispatcher.is_executable_effect(p)):
-                      return False
+                  if not (p.effect_type=='buff' and p.target_spec.mode is TargetMode.SELF and p.duration is not None and float(p.duration)>=0.0
+                          and p.parameters.get('duration_bullets') is None and TriggerDispatcher.is_executable_effect(p)): return False
               return True
-
           def finite_provider(sink,effect,ref,runtime=False):
               ps=[p for p in sink.squad.effects if p.actor==effect.actor and p.name==ref]
               if len(ps)!=1: return None
               p=ps[0]
-              ok=(p.effect_type=='buff' and p.target_spec.mode is TargetMode.ENEMY and p.duration is not None
-                  and float(p.duration)>0.0 and p.max_stack is not None and float(p.max_stack)>1.0
-                  and not p.parameters and all(r.is_runtime_supported for r in p.condition_rules)
-                  and TriggerDispatcher.is_executable_effect(p))
+              ok=(p.effect_type=='buff' and p.target_spec.mode is TargetMode.ENEMY and p.duration is not None and float(p.duration)>0.0
+                  and p.max_stack is not None and float(p.max_stack)>1.0 and not p.parameters
+                  and all(r.is_runtime_supported for r in p.condition_rules) and TriggerDispatcher.is_executable_effect(p))
               if not ok: return None
               if runtime and sink.runtime is not None and not sink.runtime.dispatcher.can_activate_effect(p): return None
               return p
-
-          orig_delivery=SimpleDamageScoreSink._delivery_supported
-          def trial_delivery(s,e):
-              return orig_delivery(s,e) or (
-                  e.target_spec.mode is TargetMode.ENEMY
-                  and all(r.is_runtime_supported for r in e.condition_rules)
-                  and state_end_safe(s.squad,e)
-              )
-          orig_stack_shape=SimpleDamageScoreSink._stack_count_shape_supported
-          def trial_stack_shape(s,e,sp):
-              return orig_stack_shape(s,e,sp) or finite_provider(s,e,sp.ref) is not None
-          orig_stack_runtime=SimpleDamageScoreSink._stack_count_runtime_supported
-          def trial_stack_runtime(s,e):
-              if orig_stack_runtime(s,e): return True
-              sp=s.stack_specs.get(e.effect_id)
-              return sp is not None and finite_provider(s,e,sp.ref,runtime=True) is not None
-          orig_remove_runtime=TriggerDispatcher._enemy_remove_named_state_runtime_supported
-          def trial_remove_runtime(d,e):
-              if orig_remove_runtime(d,e): return True
-              if not (e.effect_type=='instant' and (e.stat or '')=='remove_named_buff'
-                      and e.target_spec.mode is TargetMode.ENEMY and set(e.parameters)=={'target_effect'}
-                      and not e.condition_rules and state_end_safe(d.squad,e)):
-                  return False
+          od=SimpleDamageScoreSink._delivery_supported
+          def td(s,e): return od(s,e) or (e.target_spec.mode is TargetMode.ENEMY and all(r.is_runtime_supported for r in e.condition_rules) and state_end_safe(s.squad,e))
+          os=SimpleDamageScoreSink._stack_count_shape_supported
+          def ts(s,e,sp): return os(s,e,sp) or finite_provider(s,e,sp.ref) is not None
+          ors=SimpleDamageScoreSink._stack_count_runtime_supported
+          def trs(s,e):
+              if ors(s,e): return True
+              sp=s.stack_specs.get(e.effect_id); return sp is not None and finite_provider(s,e,sp.ref,runtime=True) is not None
+          orr=TriggerDispatcher._enemy_remove_named_state_runtime_supported
+          def trr(d,e):
+              if orr(d,e): return True
+              if not (e.effect_type=='instant' and (e.stat or '')=='remove_named_buff' and e.target_spec.mode is TargetMode.ENEMY
+                      and set(e.parameters)=={'target_effect'} and not e.condition_rules and state_end_safe(d.squad,e)): return False
               ref=str(e.parameters.get('target_effect') or '')
               ps=[p for p in d.squad.effects if p.actor==e.actor and p.name==ref]
               if len(ps)!=1: return False
               p=ps[0]
-              return (p.effect_type=='buff' and p.target_spec.mode is TargetMode.ENEMY
-                      and p.duration is not None and float(p.duration)>0.0
-                      and p.max_stack is not None and float(p.max_stack)>1.0
-                      and not p.parameters and TriggerDispatcher.is_executable_effect(p)
-                      and d.can_activate_effect(p))
+              return (p.effect_type=='buff' and p.target_spec.mode is TargetMode.ENEMY and p.duration is not None and float(p.duration)>0.0
+                      and p.max_stack is not None and float(p.max_stack)>1.0 and not p.parameters
+                      and TriggerDispatcher.is_executable_effect(p) and d.can_activate_effect(p))
 
-          # Moris reference chronology.
-          raw_ref,squad_ref=build(); asuka=1
-          moris_state=[]
-          orig_notify=BuffManager.notify
-          def mstack(bm):
-              return max((ab.stack for ab in bm._active if ab.caster=='아스카 : WILLE' and ab.effect.get('name')=='안티 AT 필드'),default=0)
-          def traced_notify(bm,event,t,caster,**ctx):
-              if caster=='아스카 : WILLE' and event=='event:state_end:섬멸 태세':
-                  moris_state.append((float(t),mstack(bm)))
-              return orig_notify(bm,event,t,caster,**ctx)
-          with patch.object(BuffManager,'notify',new=traced_notify):
-              moris=simulate(raw_ref,config=spec.build_config(raw_ref,cfg),enemy=enemy,seed=42,verbose=False)
-          print('MORIS_STATE_END',moris_state)
-          print('MORIS_TOTAL',moris.squad_total)
+          # Moris: record only second stance field activations + reload boundaries.
+          raw_m,_=build(); mfield=[]; mreload=[]; mstate=[]
+          oa=BuffManager._activate; on=BuffManager.notify; osr=CharState._start_reload
+          def ma(bm,eff,caster,t,*args,**kwargs):
+              out=oa(bm,eff,caster,t,*args,**kwargs)
+              if caster=='아스카 : WILLE' and eff.get('name')=='안티 AT 필드' and 29.0 <= float(t) <= 39.0:
+                  stack=max((ab.stack for ab in bm._active if ab.caster==caster and ab.effect.get('name')=='안티 AT 필드'),default=0)
+                  mfield.append((float(t),stack))
+              return out
+          def mn(bm,event,t,caster,**ctx):
+              if caster=='아스카 : WILLE' and event=='event:state_end:섬멸 태세' and 29.0 <= float(t) <= 39.0:
+                  stack=max((ab.stack for ab in bm._active if ab.caster==caster and ab.effect.get('name')=='안티 AT 필드'),default=0)
+                  mstate.append((float(t),stack))
+              return on(bm,event,t,caster,**ctx)
+          def msr(cs,t,bm,label='재장전 시작',from_empty=False):
+              before=(cs.ammo,cs.reloading_until,cs.next_fire_time,cs.warmup_shots,cs.last_fire_t,cs._last_inter)
+              out=osr(cs,t,bm,label=label,from_empty=from_empty)
+              if cs.name=='아스카 : WILLE' and 28.0 <= float(t) <= 39.0:
+                  after=(cs.ammo,cs.reloading_until,cs.next_fire_time,cs.warmup_shots,cs.last_fire_t,cs._last_inter)
+                  mreload.append((float(t),label,from_empty,before,after))
+              return out
+          with patch.object(BuffManager,'_activate',new=ma), patch.object(BuffManager,'notify',new=mn), patch.object(CharState,'_start_reload',new=msr):
+              simulate(raw_m,config=spec.build_config(raw_m,cfg),enemy=enemy,seed=42,verbose=False)
 
-          def run_fast(label, force_patch=None):
-              raw,squad=build()
-              annihilate=next(e for e in squad.effects if e.actor==asuka and e.name=='섬멸' and e.effect_type=='damage')
-              rows=[]; reloads=[]
-              orig_score=SimpleDamageScoreSink._score_spec
-              def traced_score(s,effect_id,*,now,full_burst):
-                  ref=None
-                  if effect_id==annihilate.effect_id and s.runtime is not None:
-                      ref=s.runtime.dispatcher.effects.named_stack(ENEMY,'안티 AT 필드',now=now)
-                  before=s.char_total[asuka]
-                  ok=orig_score(s,effect_id,now=now,full_burst=full_burst)
-                  if effect_id==annihilate.effect_id:
-                      rows.append((float(now),ref,s.char_total[asuka]-before,ok))
-                  return ok
-              cm=(patch.object(DynamicRapidReloadRuntime,'apply_force_reload',new=force_patch)
-                  if force_patch is not None else patch.object(DynamicRapidReloadRuntime,'apply_force_reload',new=DynamicRapidReloadRuntime.apply_force_reload))
-              with (patch.object(SimpleDamageScoreSink,'_delivery_supported',new=trial_delivery),
-                    patch.object(SimpleDamageScoreSink,'_stack_count_shape_supported',new=trial_stack_shape),
-                    patch.object(SimpleDamageScoreSink,'_stack_count_runtime_supported',new=trial_stack_runtime),
-                    patch.object(TriggerDispatcher,'_enemy_remove_named_state_runtime_supported',new=trial_remove_runtime),
-                    patch.object(SimpleDamageScoreSink,'_score_spec',new=traced_score), cm):
-                  print(label,'BLOCKERS',static_score_blockers(squad))
-                  policy=compile_burst_policy(raw,squad,cfg)
-                  fast=score_static_squad(squad,policy,profile,duration=duration)
-              print(label,'ANNIHILATE',rows)
-              print(label,'TOTAL',fast.squad_total,'REL',fast.squad_total/moris.squad_total-1.0)
-              return fast
+          # Fast score path.
+          raw_f,squad=build(); ffield=[]; fstate=[]; freload=[]
+          fa=TriggerDispatcher._activate; ffinish=DynamicRapidReloadRuntime._finish_nonshot_phase; fforce=DynamicRapidReloadRuntime.apply_force_reload
+          def fstack(d,now): return d.effects.named_stack(ENEMY,'안티 AT 필드',now=now)
+          def fact(d,e,*,now,context,conditions_prechecked=False,target_owner_actor=None):
+              out=fa(d,e,now=now,context=context,conditions_prechecked=conditions_prechecked,target_owner_actor=target_owner_actor)
+              if e.actor==asuka and e.name=='안티 AT 필드' and 29.0 <= float(now) <= 39.0 and out:
+                  ffield.append((float(now),fstack(d,float(now))))
+              if e.actor==asuka and e.name=='섬멸' and 29.0 <= float(now) <= 39.0 and out:
+                  fstate.append((float(now),fstack(d,float(now))))
+              return out
+          def ffin(rt,st,transition_time):
+              before=(st.ammo,st.phase,st.phase_end,st.warmup,st.last_shot,st.last_inter,st.hit_count)
+              out=ffinish(rt,st,transition_time)
+              if st.actor==asuka and 28.0 <= float(transition_time) <= 39.0:
+                  after=(st.ammo,st.phase,st.phase_end,st.warmup,st.last_shot,st.last_inter,st.hit_count)
+                  freload.append((float(transition_time),'finish',before,after))
+              return out
+          def ffr(rt,targets,now):
+              st=rt._states.get(asuka); before=None if st is None else (st.ammo,st.phase,st.phase_end,st.warmup,st.last_shot,st.last_inter,st.hit_count)
+              out=fforce(rt,targets,now)
+              st=rt._states.get(asuka); after=None if st is None else (st.ammo,st.phase,st.phase_end,st.warmup,st.last_shot,st.last_inter,st.hit_count)
+              if asuka in targets and 28.0 <= float(now) <= 39.0:
+                  freload.append((float(now),'force',before,after,out))
+              return out
+          with (patch.object(SimpleDamageScoreSink,'_delivery_supported',new=td), patch.object(SimpleDamageScoreSink,'_stack_count_shape_supported',new=ts),
+                patch.object(SimpleDamageScoreSink,'_stack_count_runtime_supported',new=trs), patch.object(TriggerDispatcher,'_enemy_remove_named_state_runtime_supported',new=trr),
+                patch.object(TriggerDispatcher,'_activate',new=fact), patch.object(DynamicRapidReloadRuntime,'_finish_nonshot_phase',new=ffin),
+                patch.object(DynamicRapidReloadRuntime,'apply_force_reload',new=ffr)):
+              print('BLOCKERS',static_score_blockers(squad))
+              policy=compile_burst_policy(raw_f,squad,cfg)
+              score_static_squad(squad,policy,profile,duration=duration)
 
-          run_fast('BASE')
-
-          orig_force=DynamicRapidReloadRuntime.apply_force_reload
-          def moris_force_reload(self,targets,now):
-              selected=tuple(dict.fromkeys(int(actor) for actor in targets))
-              if not selected or any(actor not in self.actors for actor in selected):
-                  return False
-              self.advance_to(float(now),inclusive=False)
-              for actor in selected:
-                  st=self._states.get(actor)
-                  if st is None: return False
-                  before=(st.ammo,st.phase,st.phase_end,st.warmup,st.hit_count)
-                  if st.phase=='reloading':
-                      continue
-                  weapon=self.squad.members[actor].weapon
-                  factor=self._reload_factor(actor,float(now))
-                  st.ammo=0
-                  st.phase='reloading'
-                  # Moris forced/manual reload calls _start_reload(..., from_empty=False):
-                  # no reload_start_delay; only the reload action duration is applied.
-                  st.phase_end=float(now)+float(weapon.get('reload_time',0.0))*factor
-                  self._invalidate(st); self._plan(actor,float(now)); self.state.set_ammo(actor,0)
-                  reloads=(before,(st.ammo,st.phase,st.phase_end,st.warmup,st.hit_count))
-                  print('FORCE_RELOAD',actor,float(now),reloads)
-              return True
-
-          run_fast('NO_START_DELAY',moris_force_reload)
+          def compact(rows):
+              return rows
+          print('MORIS_FIELD',compact(mfield))
+          print('MORIS_STATE_END',mstate)
+          print('MORIS_RELOAD',mreload)
+          print('FAST_FIELD',compact(ffield))
+          print('FAST_ANNIHILATE',fstate)
+          print('FAST_RELOAD',freload)
           PY
