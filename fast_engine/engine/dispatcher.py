@@ -545,6 +545,31 @@ class TriggerDispatcher:
             )
         )
 
+    @staticmethod
+    def _timed_self_named_state_marker_shape_supported(effect: "CompiledEffect") -> bool:
+        """Certify a pure finite self-state marker emitted by one burst cast."""
+        return (
+            effect.capability.disposition is CapabilityDisposition.PLANNED
+            and set(effect.capability.blockers) == {"category:state_trigger", "stat:None"}
+            and effect.effect_type == "buff"
+            and not (effect.stat or "")
+            and bool(effect.name)
+            and effect.value is None
+            and effect.polarity in (None, "neutral")
+            and effect.target_spec.mode is TargetMode.SELF
+            and effect.target_spec.runtime_supported
+            and effect.duration is not None
+            and float(effect.duration) > 0.0
+            and effect.max_stack in (None, 1, 1.0)
+            and effect.max_trigger is None
+            and effect.tick_interval is None
+            and not effect.condition_rules
+            and set(effect.parameters).issubset({"note"})
+            and len(effect.triggers) == 1
+            and effect.triggers[0].mode is TriggerMode.EVENT
+            and effect.triggers[0].event_key == "burst_cast"
+        )
+
     @classmethod
     def _named_event_marker_nop_shape_supported(cls, effect: "CompiledEffect") -> bool:
         """Allow a Moris-NOP buff to exist only as a named-event marker.
@@ -645,7 +670,8 @@ class TriggerDispatcher:
     def is_executable_effect(effect: "CompiledEffect") -> bool:
         stat = effect.stat or ""
         if (
-            TriggerDispatcher._named_event_control_shape_supported(effect)
+            TriggerDispatcher._timed_self_named_state_marker_shape_supported(effect)
+            or TriggerDispatcher._named_event_control_shape_supported(effect)
             or TriggerDispatcher._named_duration_extend_shape_supported(effect)
             or TriggerDispatcher._on_attack_charge_speed_shape_supported(effect)
             or TriggerDispatcher._charge_overflow_conversion_shape_supported(effect)
