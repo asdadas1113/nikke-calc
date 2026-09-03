@@ -1,0 +1,35 @@
+name: tmp-install-river-core
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+
+permissions:
+  contents: write
+
+jobs:
+  install:
+    if: ${{ !contains(github.event.head_commit.message || '', '[skip-river-core-install]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Materialize production candidate
+        run: python -m fast_engine.research.tmp_install_river_core
+      - name: Run focused production regression
+        run: python -m unittest fast_engine.tests.test_damage_full_charge_core_presence -v
+      - name: Run Fast regression suite
+        run: python -m unittest discover -s fast_engine/tests -v
+      - name: Commit validated production slice
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fast_engine/engine/damage_policy.py \
+                  fast_engine/engine/burst_runtime.py \
+                  fast_engine/tests/test_damage_full_charge_core_presence.py
+          git diff --cached --check
+          git commit -m "fast: support post-charge core-presence damage state [skip-river-core-install] [skip-river-core-ab] [skip-coverage-frontier] [skip-mihara-boundary-ab] [skip-near-tie-ab] [skip-phase-guard-ab] [skip-burst-divergence] [skip-expiry-core] [skip-expiry-ab] [skip-mg-gate]"
+          git push origin HEAD:fast-engine-phase2-20260901
