@@ -13,73 +13,64 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Trial rapid nonshot frame boundaries
+      - name: Localize Quency normal damage divergence
         shell: bash
         run: |
           python - <<'PY'
-          from math import ceil
-          from calculator.timeline import DEFAULT_ENEMY, DT, simulate
+          from collections import defaultdict
+          from calculator.timeline import DEFAULT_ENEMY, simulate
+          from calculator.sim_result import _is_normal
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import score_static_squad, static_score_blockers
-          from fast_engine.engine.dynamic_reload import DynamicRapidReloadRuntime
-          from fast_engine.engine.dynamic_rapid import DynamicRapidCadenceRuntime
+          from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
 
-          TEAMS={
-              "MM":("미란다","브리드 : 사일런트 트랙","헬름","루주","미하라 : 본딩 체인"),
-              "RHQ":("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸"),
-          }
-          DURATION=180.0
+          MEMBERS=("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸")
+          TARGET="퀀시 : 이스케이프 퀸"; DURATION=35.0
           CONFIG={"duration":DURATION,"first_burst_time":3.0,"rng_mode":"expected"}
+          squad=spec.build_squad(list(MEMBERS)); config=spec.build_config(squad,dict(CONFIG))
+          compiled=compile_moris_squad(squad); blockers=static_score_blockers(compiled)
+          if blockers: raise RuntimeError(blockers)
+          policy=compile_burst_policy(squad,compiled,dict(CONFIG)); idx=MEMBERS.index(TARGET)
           enemy=dict(DEFAULT_ENEMY); enemy["def"]=55000.0; enemy["code"]="작열"; enemy["core_px"]=10.0
           profile=EnemyStaticProfile(defense=55000.0,element="작열",core_uptime=1.0,core_px=10.0,duration=DURATION)
-          built={}; moris_scores={}
-          for key,members in TEAMS.items():
-              squad=spec.build_squad(list(members)); config=spec.build_config(squad,dict(CONFIG))
-              compiled=compile_moris_squad(squad); blockers=static_score_blockers(compiled)
-              if blockers: raise RuntimeError(f"{key}:{blockers}")
-              policy=compile_burst_policy(squad,compiled,dict(CONFIG))
-              moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=False)
-              built[key]=(members,compiled,policy,moris); moris_scores[key]=float(moris.squad_total)
 
-          def score_set(label):
-              out={}; rows={}
-              for key,(members,compiled,policy,moris) in built.items():
-                  fast=score_static_squad(compiled,policy,profile)
-                  out[key]=float(fast.squad_total)
-                  rows[key]=[(n,float(moris.char_total[n]),float(fast.char_total[i])) for i,n in enumerate(members)]
-              print(f"SET|{label}")
-              for key in TEAMS:
-                  print(f"TEAM|set={label}|team={key}|m={moris_scores[key]:.3f}|f={out[key]:.3f}|err={out[key]/moris_scores[key]-1:.8f}")
-                  for n,m,f in rows[key]: print(f"ACTOR|set={label}|team={key}|name={n}|m={m:.3f}|f={f:.3f}|err={f/m-1:.8f}")
-              return out
-          def margin(s): return (s['MM']-s['RHQ'])/max(s['MM'],s['RHQ'])
-          base=score_set('base')
+          moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=False)
+          m_by_t=defaultdict(float); m_shots=set()
+          for hit in moris.hits:
+              if hit.caster==TARGET and _is_normal(hit):
+                  t=round(float(hit.t),9); m_by_t[t]+=float(hit.damage); m_shots.add(t)
 
-          def frame_at_or_after(t):
-              x=float(t)
-              return ceil((x-1e-9)/DT)*DT
+          sink=SimpleDamageScoreSink(compiled,profile); runtime=BurstRuntime(compiled,policy,profile,damage_sink=sink)
+          class TraceObserver(StaticNormalAttackObserver):
+              def __init__(self,*a,**k): self.rows=[]; super().__init__(*a,**k)
+              def _score_shots(self,actor,count,*,eval_time):
+                  before=float(self.char_total[actor])
+                  out=super()._score_shots(actor,count,eval_time=eval_time)
+                  if actor==idx:
+                      after=float(self.char_total[actor])
+                      terms=self.resolver.resolve(actor,now=float(eval_time))
+                      self.rows.append((float(eval_time),int(count),after-before,terms.atk_pct,terms.pierce_dmg_pct,terms.projectile_explosion_dmg_pct))
+                  return out
+          obs=TraceObserver(runtime,duration=DURATION); rr=runtime.run(duration=DURATION,score_observer=obs); obs.finish(events_processed=rr.events_processed)
 
-          orig_base=DynamicRapidReloadRuntime._finish_nonshot_phase
-          def q_base(self,st,transition_time):
-              q=frame_at_or_after(transition_time)
-              if q>transition_time+1e-9:
-                  st.phase_end=q
-                  return
-              return orig_base(self,st,transition_time)
-          DynamicRapidReloadRuntime._finish_nonshot_phase=q_base
+          checkpoints=(5,10,12,13,15,20,23,24,25,30,35)
+          for cp in checkpoints:
+              md=sum(v for t,v in m_by_t.items() if t < cp-1e-9)
+              mc=sum(1 for t in m_shots if t < cp-1e-9)
+              fd=sum(r[2] for r in obs.rows if r[0] < cp-1e-9)
+              fc=sum(r[1] for r in obs.rows if r[0] < cp-1e-9)
+              print(f"CUM|t={cp}|m_dmg={md:.3f}|f_dmg={fd:.3f}|err={fd/md-1:.8f}|m_shots={mc}|f_shots={fc}")
 
-          orig_rapid=DynamicRapidCadenceRuntime._finish_nonshot_phase
-          def q_rapid(self,st,transition_time):
-              q=frame_at_or_after(transition_time)
-              if q>transition_time+1e-9:
-                  st.phase_end=q
-                  return
-              return orig_rapid(self,st,transition_time)
-          DynamicRapidCadenceRuntime._finish_nonshot_phase=q_rapid
-
-          framed=score_set('rapid_nonshot_frame')
-          print(f"MARGINS|moris={margin(moris_scores):.8f}|base={margin(base):.8f}|framed={margin(framed):.8f}")
+          print("M_DETAIL")
+          for t in sorted(m_by_t):
+              if 10.8 <= t <= 13.0 or 23.0 <= t <= 24.5:
+                  print(f"M|t={t:.6f}|dmg={m_by_t[t]:.3f}")
+          print("F_DETAIL")
+          for t,count,dmg,atk,pierce,proj in obs.rows:
+              if 10.8 <= t <= 13.0 or 23.0 <= t <= 24.5:
+                  print(f"F|t={t:.6f}|count={count}|dmg={dmg:.3f}|atk={atk:.3f}|pierce={pierce:.3f}|proj={proj:.3f}")
           PY
