@@ -9,32 +9,189 @@ permissions:
   contents: read
 
 jobs:
-  find-asuka-control:
+  asuka-state-end-trial:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Find a low-blocker Asuka control squad
+      - name: Compare Asuka finite enemy-stack state-end damage chain
         run: |
           PYTHONPATH=. python - <<'PY'
+          from unittest.mock import patch
+          from calculator.buff_manager import BuffManager
+          from calculator.timeline import DEFAULT_ENEMY, simulate
           from context import spec
+          from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+          from fast_engine.engine.model import EnemyStaticProfile
+          from fast_engine.engine.score import score_static_squad, static_score_blockers
+          from fast_engine.engine.state import ENEMY
+          from fast_engine.engine.targets import TargetMode
+          from fast_engine.engine.triggers import TriggerMode
 
-          candidates=[
-            ['라피 : 레드 후드','레드 후드','프리카','민트','아스카 : WILLE'],
-            ['미란다','브리드 : 사일런트 트랙','헬름','루주','아스카 : WILLE'],
-            ['미란다','브리드 : 사일런트 트랙','헬름','미하라 : 본딩 체인','아스카 : WILLE'],
-            ['라피 : 레드 후드','프리카','민트','퀀시 : 이스케이프 퀸','아스카 : WILLE'],
-          ]
-          for names in candidates:
-              try:
-                  squad=compile_moris_squad(spec.build_squad(names))
-                  blockers=static_score_blockers(squad)
-                  print('\nTEAM',tuple(names),'N',len(blockers))
-                  for b in blockers: print(' ',b)
-              except Exception as exc:
-                  print('\nTEAM_FAIL',tuple(names),type(exc).__name__,str(exc))
+          names=['미란다','아스카 : WILLE','브리드 : 사일런트 트랙','헬름','루주']
+          raw=spec.build_squad(names)
+          squad=compile_moris_squad(raw)
+          asuka=names.index('아스카 : WILLE')
+          annihilate=next(e for e in squad.effects if e.actor==asuka and e.name=='섬멸' and e.effect_type=='damage')
+          remove=next(e for e in squad.effects if e.actor==asuka and e.name=='섬멸 2')
+          field=next(e for e in squad.effects if e.actor==asuka and e.name=='안티 AT 필드' and e.effect_type=='buff')
+          stance=next(e for e in squad.effects if e.actor==asuka and e.name=='섬멸 태세' and e.effect_type=='buff')
+          print('BASE_BLOCKERS',static_score_blockers(squad))
+          print('IDS',stance.effect_id,field.effect_id,annihilate.effect_id,remove.effect_id)
+
+          def finite_state_end_source_safe(squad_obj, effect):
+              keys=[r.event_key or '' for r in effect.triggers]
+              if not keys or any(r.mode is not TriggerMode.EVENT or not k.startswith('event:state_end:') for r,k in zip(effect.triggers,keys)):
+                  return False
+              for key in keys:
+                  state_name=key[len('event:state_end:'):]
+                  providers=[p for p in squad_obj.effects if p.actor==effect.actor and p.effect_id!=effect.effect_id and p.name==state_name]
+                  if len(providers)!=1:
+                      return False
+                  p=providers[0]
+                  if not (p.effect_type=='buff' and p.target_spec.mode is TargetMode.SELF
+                          and p.duration is not None and float(p.duration)>=0.0
+                          and p.parameters.get('duration_bullets') is None
+                          and TriggerDispatcher.is_executable_effect(p)):
+                      return False
+              return True
+
+          def finite_enemy_stack_provider(sink, effect, ref, *, runtime=False):
+              providers=[p for p in sink.squad.effects if p.actor==effect.actor and p.name==ref]
+              if len(providers)!=1:
+                  return None
+              p=providers[0]
+              if not (p.effect_type=='buff' and p.target_spec.mode is TargetMode.ENEMY
+                      and p.duration is not None and float(p.duration)>0.0
+                      and p.max_stack is not None and float(p.max_stack)>1.0
+                      and not p.parameters
+                      and all(r.is_runtime_supported for r in p.condition_rules)
+                      and TriggerDispatcher.is_executable_effect(p)):
+                  return None
+              if runtime and sink.runtime is not None and not sink.runtime.dispatcher.can_activate_effect(p):
+                  return None
+              return p
+
+          orig_delivery=SimpleDamageScoreSink._delivery_supported
+          def trial_delivery(sink,effect):
+              if orig_delivery(sink,effect):
+                  return True
+              return (
+                  effect.target_spec.mode is TargetMode.ENEMY
+                  and all(r.is_runtime_supported for r in effect.condition_rules)
+                  and finite_state_end_source_safe(sink.squad,effect)
+              )
+
+          orig_stack_shape=SimpleDamageScoreSink._stack_count_shape_supported
+          def trial_stack_shape(sink,effect,stack_spec):
+              if orig_stack_shape(sink,effect,stack_spec):
+                  return True
+              return finite_enemy_stack_provider(sink,effect,stack_spec.ref) is not None
+
+          orig_stack_runtime=SimpleDamageScoreSink._stack_count_runtime_supported
+          def trial_stack_runtime(sink,effect):
+              if orig_stack_runtime(sink,effect):
+                  return True
+              stack_spec=sink.stack_specs.get(effect.effect_id)
+              return stack_spec is not None and finite_enemy_stack_provider(sink,effect,stack_spec.ref,runtime=True) is not None
+
+          orig_remove_runtime=TriggerDispatcher._enemy_remove_named_state_runtime_supported
+          def trial_remove_runtime(dispatcher,effect):
+              if orig_remove_runtime(dispatcher,effect):
+                  return True
+              if not (effect.effect_type=='instant' and (effect.stat or '')=='remove_named_buff'
+                      and effect.target_spec.mode is TargetMode.ENEMY
+                      and set(effect.parameters)=={'target_effect'}
+                      and not effect.condition_rules
+                      and finite_state_end_source_safe(dispatcher.squad,effect)):
+                  return False
+              ref=str(effect.parameters.get('target_effect') or '')
+              providers=[p for p in dispatcher.squad.effects if p.actor==effect.actor and p.name==ref]
+              if len(providers)!=1:
+                  return False
+              p=providers[0]
+              return (
+                  p.effect_type=='buff' and p.target_spec.mode is TargetMode.ENEMY
+                  and p.duration is not None and float(p.duration)>0.0
+                  and p.max_stack is not None and float(p.max_stack)>1.0
+                  and not p.parameters
+                  and TriggerDispatcher.is_executable_effect(p)
+                  and dispatcher.can_activate_effect(p)
+              )
+
+          fast_rows=[]
+          remove_rows=[]
+          orig_score=SimpleDamageScoreSink._score_spec
+          def traced_score(sink,effect_id,*,now,full_burst):
+              before=sink.char_total[sink._effect_actor.get(effect_id,0)] if sink._effect_actor.get(effect_id) is not None else 0.0
+              ref_stack=None
+              if effect_id==annihilate.effect_id and sink.runtime is not None:
+                  ref_stack=sink.runtime.dispatcher.effects.named_stack(ENEMY,'안티 AT 필드',now=now)
+              ok=orig_score(sink,effect_id,now=now,full_burst=full_burst)
+              if effect_id==annihilate.effect_id:
+                  actor=sink._effect_actor[effect_id]
+                  fast_rows.append((float(now),ref_stack,sink.char_total[actor]-before,ok))
+              return ok
+
+          from fast_engine.engine.effects import ActiveEffectStore
+          orig_remove=ActiveEffectStore.remove_named_state
+          def traced_remove(store,target,name,*,now):
+              if target==ENEMY and name=='안티 AT 필드':
+                  before=store.named_stack(ENEMY,name,now=now)
+                  out=orig_remove(store,target,name,now=now)
+                  after=store.named_stack(ENEMY,name,now=now)
+                  remove_rows.append((float(now),before,after,tuple(out)))
+                  return out
+              return orig_remove(store,target,name,now=now)
+
+          duration=100.0
+          cfg={'duration':duration,'first_burst_time':3.0,'rng_mode':'expected'}
+          enemy=dict(DEFAULT_ENEMY)
+          enemy.update({'def':55000.0,'code':'작열','core_px':10.0})
+          profile=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=duration)
+
+          moris_state=[]
+          orig_notify=BuffManager.notify
+          def traced_notify(bm,event,t,caster,**ctx):
+              if caster=='아스카 : WILLE' and event=='event:state_end:섬멸 태세':
+                  stacks=[ab.stack for ab in bm._active if ab.caster==caster and ab.effect.get('name')=='안티 AT 필드']
+                  moris_state.append((float(t),max(stacks,default=0)))
+              return orig_notify(bm,event,t,caster,**ctx)
+
+          with patch.object(BuffManager,'notify',new=traced_notify):
+              moris=simulate(raw,config=spec.build_config(raw,cfg),enemy=enemy,seed=42,verbose=True)
+          print('MORIS_STATE_END_STACKS',moris_state)
+          print('MORIS_BURSTS',[(x.t,x.event,getattr(x,'caster',None)) for x in moris.log.burst_log if '버스트' in x.event][:30])
+          same_time=[]
+          for h in moris.hits:
+              if h.caster!='아스카 : WILLE':
+                  continue
+              if any(abs(float(h.t)-t)<1e-7 for t,_ in moris_state):
+                  same_time.append(repr(h))
+          print('MORIS_ASUKA_HITS_AT_STATE_END')
+          for row in same_time[:40]: print(row)
+
+          with (
+              patch.object(SimpleDamageScoreSink,'_delivery_supported',new=trial_delivery),
+              patch.object(SimpleDamageScoreSink,'_stack_count_shape_supported',new=trial_stack_shape),
+              patch.object(SimpleDamageScoreSink,'_stack_count_runtime_supported',new=trial_stack_runtime),
+              patch.object(TriggerDispatcher,'_enemy_remove_named_state_runtime_supported',new=trial_remove_runtime),
+              patch.object(SimpleDamageScoreSink,'_score_spec',new=traced_score),
+              patch.object(ActiveEffectStore,'remove_named_state',new=traced_remove),
+          ):
+              print('TRIAL_BLOCKERS',static_score_blockers(squad))
+              policy=compile_burst_policy(raw,squad,cfg)
+              fast=score_static_squad(squad,policy,profile,duration=duration)
+          print('FAST_ANNIHILATE',fast_rows)
+          print('FAST_FIELD_REMOVALS',remove_rows)
+          print('MORIS_TOTAL',moris.squad_total)
+          print('FAST_TOTAL',fast.squad_total)
+          print('TOTAL_REL_ERR',fast.squad_total/moris.squad_total-1.0)
+          print('MORIS_CHAR',list(zip(names,moris.char_total)))
+          print('FAST_CHAR',list(zip(names,fast.char_total)))
           PY
