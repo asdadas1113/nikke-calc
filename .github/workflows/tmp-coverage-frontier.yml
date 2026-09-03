@@ -16,49 +16,85 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect periodic direct-state shapes
+      - name: Compare Snow White periodic activation timing
         run: |
           PYTHONPATH=. python - <<'PY'
+          from unittest.mock import patch
+          from calculator.buff_manager import BuffManager
+          from calculator.timeline import simulate
           from context import spec
-          from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_supported
-          from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.engine.score import _direct_damage_buff_score_supported, _is_score_safe_fixed_periodic, static_score_blockers
-
-          cases = [
-              (['미란다','헬름 : 아쿠아마린','에이드 : 에이전트 바니','스노우 화이트','에이다'], '헬름 : 아쿠아마린', '이지스 캐논 견제 사격 2'),
-              (['미란다','헬름 : 아쿠아마린','에이드 : 에이전트 바니','스노우 화이트','에이다'], '스노우 화이트', '세븐스 드워프 : V&VI 2'),
-              (['토브','나유타','도로시 : 세렌디피티','스노우 화이트 : 헤비암즈','디젤 : 윈터 스위츠'], '나유타', '기억 흡수'),
-          ]
-          for names, owner_name, effect_name in cases:
-              squad = compile_moris_squad(spec.build_squad(names))
-              effect = next(e for e in squad.effects if squad.members[e.actor].name == owner_name and e.name == effect_name)
-              print('EFFECT', owner_name, effect_name)
-              print(' repr=', repr(effect))
-              print(' timing=', [(r.raw,r.event_key,r.mode.value,r.interval,r.threshold,r.trigger_count_reducible) for r in effect.triggers])
-              print(' cond=', [(r.raw,r.mode.value,r.key,r.value,r.value2) for r in effect.condition_rules])
-              print(' target=', effect.target, effect.target_spec)
-              print(' runtime_policy=', is_direct_damage_buff_runtime_supported(effect))
-              print(' executable=', TriggerDispatcher.is_executable_effect(effect))
-              print(' score_direct=', _direct_damage_buff_score_supported(squad,effect))
-              print(' score_fixed_periodic=', _is_score_safe_fixed_periodic(effect))
-              print(' blockers=', [b for b in static_score_blockers(squad) if owner_name in b and (effect_name in b or (effect.stat or '') in b)])
-              print()
-          PY
-      - name: Inspect periodic runtime contracts
-        run: |
-          PYTHONPATH=. python - <<'PY'
-          from context import spec
+          from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.engine.score import _PERIODIC_AUX_STATS, _PERIODIC_GRID_INVALIDATORS
+          from fast_engine.engine.model import EnemyStaticProfile
+          from fast_engine.engine.triggers import TriggerMode
 
-          print('PERIODIC_AUX_STATS', sorted(_PERIODIC_AUX_STATS))
-          print('PERIODIC_GRID_INVALIDATORS', sorted(_PERIODIC_GRID_INVALIDATORS))
-          names=['토브','나유타','도로시 : 세렌디피티','스노우 화이트 : 헤비암즈','디젤 : 윈터 스위츠']
-          squad=compile_moris_squad(spec.build_squad(names))
-          for e in squad.effects:
-              if e.name=='기억 흡수':
-                  print('NAYUTA_CAP',e.capability.disposition.value,e.capability.blockers)
-                  print('NAYUTA_PERIODIC_ONLY',TriggerDispatcher._periodic_timing_is_only_blocker(e))
+          names=['미란다','헬름 : 아쿠아마린','스노우 화이트','브리드 : 사일런트 트랙','미하라 : 본딩 체인']
+          raw=spec.build_squad(names)
+          squad=compile_moris_squad(raw)
+          sw=names.index('스노우 화이트')
+          target=next(e for e in squad.effects if e.actor==sw and e.name=='세븐스 드워프 : V&VI 2')
+          original_exec=TriggerDispatcher.is_executable_effect
+
+          def snow_periodic(e):
+              return (
+                  e.effect_type=='buff'
+                  and (e.stat or '')=='crit_rate'
+                  and e.target_spec.mode.value=='self'
+                  and e.duration is not None and float(e.duration)>0.0
+                  and e.max_stack in (None,1,1.0)
+                  and not e.parameters
+                  and len(e.triggers)==1
+                  and e.triggers[0].mode is TriggerMode.PERIODIC
+                  and e.triggers[0].interval is not None and float(e.triggers[0].interval)>0.0
+                  and len(e.condition_rules)==1
+                  and e.condition_rules[0].mode.value=='during_full_burst'
+              )
+          def patched_exec(e):
+              return snow_periodic(e) or original_exec(e)
+
+          # Fast trace: periodic scheduler plus live full-burst condition.
+          fast_rows=[]
+          original_periodic=TriggerDispatcher.dispatch_periodic
+          def traced_periodic(dispatcher,effect_id,rule_index,*,time,context):
+              effect=dispatcher._effect_table[effect_id]
+              before=dispatcher.effects.has_named_state(effect.actor,effect.name,now=time)
+              result=original_periodic(dispatcher,effect_id,rule_index,time=time,context=context)
+              after=dispatcher.effects.has_named_state(effect.actor,effect.name,now=time)
+              if effect.effect_id==target.effect_id:
+                  fast_rows.append((round(time,9),dispatcher.burst.phase,before,after,result.activated_effect_ids,result.skipped_unsupported))
+              return result
+
+          config={'duration':70.0,'first_burst_time':3.0,'rng_mode':'expected'}
+          policy=compile_burst_policy(raw,squad,config)
+          with patch.object(TriggerDispatcher,'is_executable_effect',new=staticmethod(patched_exec)), patch.object(TriggerDispatcher,'dispatch_periodic',new=traced_periodic):
+              fast_runtime=BurstRuntime(squad,policy,EnemyStaticProfile(defense=0.0,duration=70.0))
+              fast_result=fast_runtime.run(duration=70.0)
+          print('FAST_FB',fast_result.full_burst_starts,fast_result.full_burst_ends)
+          print('FAST_PERIODIC',fast_rows)
+
+          # Moris trace: detect target effect entering/leaving active set around tick().
+          moris_rows=[]
+          orig_tick=BuffManager.tick
+          def snapshot(bm):
+              rows=[]
+              for ab in bm._active:
+                  eff=ab.effect
+                  if eff.get('name')=='세븐스 드워프 : V&VI 2':
+                      rows.append((ab.activated_at,ab.expires_at,getattr(ab,'stacks',None),eff.get('value')))
+              return tuple(rows)
+          def traced_tick(bm,t):
+              before=snapshot(bm)
+              out=orig_tick(bm,t)
+              after=snapshot(bm)
+              if before!=after:
+                  moris_rows.append((round(float(t),9),before,after,bool(bm.battle_state.get('full_burst'))))
+              return out
+          with patch.object(BuffManager,'tick',new=traced_tick):
+              moris=simulate(raw,config=config,verbose=True)
+          moris_fb=[row.t for row in moris.log.burst_log if row.event=='full_burst 시작']
+          moris_end=[row.t for row in moris.log.burst_log if row.event=='full_burst 종료']
+          print('MORIS_FB',moris_fb,moris_end)
+          print('MORIS_STATE_CHANGES',moris_rows)
           PY
