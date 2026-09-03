@@ -13,32 +13,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Quick post-clamp actor totals
+      - name: Inspect certified charge controls
         shell: bash
         run: |
           python - <<'PY'
-          from calculator.timeline import DEFAULT_ENEMY, simulate
           from context import spec
-          from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import score_static_squad, static_score_blockers
-
           TEAMS={
             'MM':("미란다","브리드 : 사일런트 트랙","헬름","루주","미하라 : 본딩 체인"),
             'RHQ':("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸"),
           }
-          DURATION=180.0; CONFIG={"duration":DURATION,"first_burst_time":3.0,"rng_mode":"expected"}
-          enemy=dict(DEFAULT_ENEMY); enemy['def']=55000.0; enemy['code']='작열'; enemy['core_px']=10.0
-          profile=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=DURATION)
-          for label,members in TEAMS.items():
-              squad=spec.build_squad(list(members)); config=spec.build_config(squad,dict(CONFIG)); compiled=compile_moris_squad(squad)
-              blockers=static_score_blockers(compiled)
-              if blockers: raise RuntimeError((label,blockers))
-              policy=compile_burst_policy(squad,compiled,dict(CONFIG)); moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=False); fast=score_static_squad(compiled,policy,profile)
-              mt=sum(float(moris.char_total[n]) for n in members); ft=sum(float(v) for v in fast.char_total)
-              print(f'TEAM|{label}|m={mt:.3f}|f={ft:.3f}|err={ft/mt-1:.8f}|delta={ft-mt:.3f}')
-              for i,name in enumerate(members):
-                  m=float(moris.char_total[name]); f=float(fast.char_total[i])
-                  print(f'ACTOR|team={label}|name={name}|m={m:.3f}|f={f:.3f}|err={f/m-1:.8f}|delta={f-m:.3f}|share_of_team_delta={(f-m)/(ft-mt) if abs(ft-mt)>1e-9 else 0.0:.8f}')
+          for label,names in TEAMS.items():
+              squad=spec.build_squad(list(names)); compiled=compile_moris_squad(squad)
+              for raw,c in zip(squad,compiled.members):
+                  w=c.weapon
+                  if str(w.get('fire_mode'))=='charge' or w.get('charge_time') is not None:
+                      print(f'CHARGE|team={label}|name={c.name}|control={raw.get("control")}|weapon={w}')
+                      for e in c.effects:
+                          if (e.stat or '') in {'charge_speed_pct','charge_time_flat','post_fire_delay','reload_speed_pct','max_ammo_pct','max_ammo_flat'}:
+                              print(f'EFFECT|name={c.name}|source={e.source}|ename={e.name}|stat={e.stat}|value={e.value}|duration={e.duration}|triggers={[r.event_key for r in e.triggers]}')
           PY
