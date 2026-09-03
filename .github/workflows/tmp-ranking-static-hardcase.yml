@@ -13,14 +13,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Trial paired rapid reload frame latching
+      - name: Trace Quency third-magazine ammo divergence
         shell: bash
         run: |
           python - <<'PY'
           from bisect import bisect_left
-          from collections import defaultdict
           from calculator.timeline import DEFAULT_ENEMY, DT, simulate
-          from calculator.sim_result import _is_normal
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.burst_runtime import BurstRuntime
@@ -31,7 +29,7 @@ jobs:
           from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
 
           MEMBERS=("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸")
-          TARGET="퀀시 : 이스케이프 퀸"; DURATION=180.0
+          TARGET="퀀시 : 이스케이프 퀸"; DURATION=45.0
           CONFIG={"duration":DURATION,"first_burst_time":3.0,"rng_mode":"expected"}
           squad=spec.build_squad(list(MEMBERS)); config=spec.build_config(squad,dict(CONFIG))
           compiled=compile_moris_squad(squad); blockers=static_score_blockers(compiled)
@@ -40,72 +38,47 @@ jobs:
           enemy=dict(DEFAULT_ENEMY); enemy["def"]=55000.0; enemy["code"]="작열"; enemy["core_px"]=10.0
           profile=EnemyStaticProfile(defense=55000.0,element="작열",core_uptime=1.0,core_px=10.0,duration=DURATION)
 
-          print("WEAPON|"+repr(compiled.members[idx].weapon))
+          print("RELEVANT_EFFECTS")
+          for e in compiled.members[idx].effects:
+              if (e.stat or '') in {'max_ammo_pct','max_ammo_flat','ammo_charge_pct','ammo_charge_flat','reload_speed_pct','trigger_count_reduce'} or '탄' in (e.name or ''):
+                  print("EFFECT|"+repr(e))
+
           ticks=[]; t=0.0
           while t <= DURATION + 1.0:
               ticks.append(t); t += DT
           def frame_at_or_after(deadline):
-              i=bisect_left(ticks,float(deadline))
-              return ticks[i] if i < len(ticks) else float(deadline)
+              i=bisect_left(ticks,float(deadline)); return ticks[i] if i < len(ticks) else float(deadline)
 
           moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=True)
-          for row in moris.log.reload_log[:20]:
+          for row in moris.log.reload_log:
               if getattr(row,'caster','')==TARGET:
                   print(f"M_RELOAD|t={float(row.t):.9f}|event={row.event}")
-          mstarts=[float(r.t) for r in moris.log.burst_log if r.event=="full_burst 시작"]
-          mends=[float(r.t) for r in moris.log.burst_log if r.event=="full_burst 종료"]
-          mcaster=[getattr(r,'caster','') for r in moris.log.burst_log if r.event=="stage:3 사용"]
-          mrows=defaultdict(lambda:[0,0.0]); by_time=defaultdict(float)
-          for h in moris.hits:
-              if h.caster==TARGET and _is_normal(h): by_time[round(float(h.t),9)]+=float(h.damage)
-          def classify(t,starts,ends,casters):
-              for i,(s,e) in enumerate(zip(starts,ends)):
-                  if s-1e-9 <= t < e-1e-9:
-                      return 'FB_Q' if i < len(casters) and casters[i]==TARGET else 'FB_OTHER'
-              return 'OUT'
-          for shot_t,d in by_time.items():
-              k=classify(shot_t,mstarts,mends,mcaster); mrows[k][0]+=1; mrows[k][1]+=d
-          m_normal=sum(v[1] for v in mrows.values())
+          for row in moris.log.ammo_log:
+              if getattr(row,'caster','')==TARGET and 20.0 <= float(row.t) <= 40.0:
+                  print(f"M_AMMO|t={float(row.t):.9f}|ammo={row.ammo}")
 
-          class O(StaticNormalAttackObserver):
-              def __init__(self,*a,**k): self.rows=[]; super().__init__(*a,**k)
-              def _score_shots(self,actor,count,*,eval_time):
-                  before=float(self.char_total[actor]); out=super()._score_shots(actor,count,eval_time=eval_time)
-                  if actor==idx: self.rows.append((float(eval_time),int(count),float(self.char_total[actor])-before))
-                  return out
-          def run_fast(label):
-              sink=SimpleDamageScoreSink(compiled,profile); runtime=BurstRuntime(compiled,policy,profile,damage_sink=sink)
-              obs=O(runtime,duration=DURATION); rr=runtime.run(duration=DURATION,score_observer=obs); res=obs.finish(events_processed=rr.events_processed)
-              fcaster=[compiled.names[a] for t,a,s in rr.casts if s=='3']; frows=defaultdict(lambda:[0,0.0])
-              for shot_t,c,d in obs.rows:
-                  k=classify(shot_t,rr.full_burst_starts,rr.full_burst_ends,fcaster); frows[k][0]+=c; frows[k][1]+=d
-              total=float(res.char_total[idx]); print(f"TOTAL|set={label}|f={total:.3f}|err={total/m_normal-1:.8f}")
-              for k in ('OUT','FB_OTHER','FB_Q'):
-                  mc,md=mrows[k]; fc,fd=frows[k]
-                  print(f"PART|set={label}|{k}|m_shots={mc}|f_shots={fc}|delta={fc-mc}|dmg_err={fd/md-1:.8f}")
-              return total
-
-          base=run_fast('base')
           orig_after=DynamicRapidCadenceRuntime._after_shot
           orig_finish=DynamicRapidCadenceRuntime._finish_nonshot_phase
-          actual_logs=[]
           def patched_after(self,st,shot_time):
               orig_after(self,st,shot_time)
               if st.phase=='reload_wait':
                   before=st.phase_end; st.phase_end=frame_at_or_after(before)
-                  if self._states.get(st.actor) is st and st.actor==idx and len(actual_logs)<20:
-                      actual_logs.append(('wait',shot_time,before,st.phase_end))
+                  if self._states.get(st.actor) is st and st.actor==idx:
+                      print(f"F_EMPTY|last_shot={shot_time:.9f}|reload_probe={st.phase_end:.9f}|hit_count={st.hit_count}")
           def patched_finish(self,st,transition_time):
               was=st.phase
+              if self._states.get(st.actor) is st and st.actor==idx and was=='reload_wait':
+                  print(f"F_RELOAD_START|t={transition_time:.9f}|full={self._full_ammo(st.actor,transition_time)}|ammo={st.ammo}|sig={self._signature(st.actor,transition_time)}")
               orig_finish(self,st,transition_time)
               if was=='reload_wait' and st.phase=='reloading':
-                  before=st.phase_end; st.phase_end=frame_at_or_after(before)
-                  if self._states.get(st.actor) is st and st.actor==idx and len(actual_logs)<20:
-                      actual_logs.append(('reload',transition_time,before,st.phase_end))
+                  st.phase_end=frame_at_or_after(st.phase_end)
+              elif was=='reloading' and self._states.get(st.actor) is st and st.actor==idx:
+                  print(f"F_RELOAD_COMPLETE|t={transition_time:.9f}|ammo={st.ammo}|full={self._full_ammo(st.actor,transition_time)}|sig={self._signature(st.actor,transition_time)}|next={st.phase_end:.9f}")
           DynamicRapidCadenceRuntime._after_shot=patched_after
           DynamicRapidCadenceRuntime._finish_nonshot_phase=patched_finish
-          paired=run_fast('reload_start_complete_frame')
-          print(f"DELTA|base_err={base/m_normal-1:.8f}|paired_err={paired/m_normal-1:.8f}")
-          for kind,anchor,before,after in actual_logs:
-              print(f"F_PHASE|kind={kind}|anchor={anchor:.9f}|deadline={before:.9f}|frame={after:.9f}|delay={after-before:.9f}")
+
+          sink=SimpleDamageScoreSink(compiled,profile); runtime=BurstRuntime(compiled,policy,profile,damage_sink=sink)
+          obs=StaticNormalAttackObserver(runtime,duration=DURATION)
+          rr=runtime.run(duration=DURATION,score_observer=obs); obs.finish(events_processed=rr.events_processed)
+          print("F_STARTS|"+",".join(f"{x:.9f}" for x in rr.full_burst_starts))
           PY
