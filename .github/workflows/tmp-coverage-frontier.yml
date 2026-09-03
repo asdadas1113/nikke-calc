@@ -20,4 +20,4 @@ jobs:
           python-version: '3.13'
       - name: Scan public blocker frontier
         run: |
-          python fast_engine/research/public_blocker_frontier.py
+          python -m fast_engine.research.public_blocker_frontier
