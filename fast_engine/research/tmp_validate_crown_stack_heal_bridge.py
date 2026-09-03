@@ -10,7 +10,7 @@ from fast_engine.engine.burst_runtime import BurstRuntime
 from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.dispatcher import TriggerDispatcher
 from fast_engine.engine.model import EnemyStaticProfile
-from fast_engine.engine.score import static_score_blockers
+from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
 from fast_engine.engine.target_scope import possible_ally_targets
 
 from .public_ranking_probe import COMMON_CONFIG, COMMON_ENEMY, _source_corpus
@@ -72,6 +72,7 @@ def _fast_events(members: tuple[str, ...]):
     compiled = compile_moris_squad(moris_squad)
     policy = compile_burst_policy(moris_squad, compiled, dict(COMMON_CONFIG))
     runtime = BurstRuntime(compiled, policy, _enemy(policy.duration))
+    observer = StaticNormalAttackObserver(runtime, duration=policy.duration)
     crown = compiled.names.index(CROWN)
     trace: dict[str, list[float]] = defaultdict(list)
     original = TriggerDispatcher.dispatch
@@ -85,7 +86,7 @@ def _fast_events(members: tuple[str, ...]):
 
     TriggerDispatcher.dispatch = traced
     try:
-        runtime.run(duration=policy.duration)
+        result = runtime.run(duration=policy.duration, score_observer=observer)
     finally:
         TriggerDispatcher.dispatch = original
     relevant = {
@@ -93,7 +94,12 @@ def _fast_events(members: tuple[str, ...]):
         for effect in compiled.members[crown].effects
         if effect.name in {"릴렉스", "로얄 에타이어", "로얄 에타이어 3", "로얄 에타이어 4"}
     }
-    return trace, relevant, runtime.dispatcher.effects.named_stack(crown, "릴렉스", now=policy.duration)
+    return (
+        trace,
+        relevant,
+        runtime.dispatcher.effects.named_stack(crown, "릴렉스", now=policy.duration),
+        result.events_processed,
+    )
 
 
 def _debug_delta_score(compiled) -> None:
@@ -168,14 +174,15 @@ def main() -> None:
 
     delta = rows["레이드_델타"]
     moris = _moris_heals(delta)
-    fast, activations, residual = _fast_events(delta)
+    fast, activations, residual, events_processed = _fast_events(delta)
     fast_stack = fast[STACK_EVENT]
     fast_heal = fast[HEAL_EVENT]
-    print("=== DELTA REAL-CORPUS TRACE ===")
+    print("=== DELTA REAL-CORPUS SCORE-RUNTIME TRACE ===")
     print("moris_heal", len(moris), moris)
     print("fast_stack", len(fast_stack), fast_stack)
     print("fast_heal", len(fast_heal), fast_heal)
     print("activations", activations, "residual_relax_stack", residual)
+    print("events_processed", events_processed)
 
     if fast_stack != fast_heal:
         raise AssertionError("stack reach and self heal must be same-edge one-for-one")
