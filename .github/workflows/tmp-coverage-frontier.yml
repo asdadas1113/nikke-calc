@@ -13,34 +13,94 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect statless named-state marker shapes
+      - name: Trial narrow statless marker certification
         run: |
           PYTHONPATH=. python - <<'PY'
-          from collections import defaultdict
+          from collections import Counter
           from context import spec
-          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.burst import BurstPolicy, BurstSignal
+          from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.capabilities import CapabilityDisposition
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+          from fast_engine.engine.model import EnemyStaticProfile
+          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.engine.triggers import TriggerMode
           from fast_engine.research.public_ranking_probe import _source_corpus
 
-          seen=set(); markers={}; marker_teams=defaultdict(set)
-          grave_printed=False
+          original = TriggerDispatcher.is_executable_effect
+
+          def narrow_marker(effect):
+              return (
+                  effect.capability.disposition is CapabilityDisposition.PLANNED
+                  and effect.effect_type == 'buff'
+                  and not (effect.stat or '')
+                  and bool(effect.name)
+                  and effect.value is None
+                  and effect.target_spec.mode.value == 'self'
+                  and effect.target_spec.runtime_supported
+                  and effect.duration is not None
+                  and float(effect.duration) > 0.0
+                  and effect.max_stack in (None, 1, 1.0)
+                  and not effect.condition_rules
+                  and set(effect.parameters).issubset({'note'})
+                  and len(effect.triggers) == 1
+                  and effect.triggers[0].mode is TriggerMode.EVENT
+                  and effect.triggers[0].event_key == 'burst_cast'
+              )
+
+          def patched(effect):
+              return narrow_marker(effect) or original(effect)
+
+          TriggerDispatcher.is_executable_effect = staticmethod(patched)
+
+          seen=set(); before=Counter(); after=Counter(); changed=[]
+          # Recover baseline by temporarily restoring the original predicate for blocker scan.
           for members, source_name in _source_corpus():
-              if members in seen: continue
+              if members in seen:
+                  continue
               seen.add(members)
               squad=compile_moris_squad(spec.build_squad(list(members)))
-              for e in squad.effects:
-                  if e.effect_type=='buff' and not (e.stat or '') and e.capability.disposition is CapabilityDisposition.PLANNED:
-                      key=(squad.members[e.actor].name,e.name,repr(e.target_spec),e.duration,e.max_stack,tuple(sorted(e.parameters)),tuple((r.event_key,r.mode.value) for r in e.triggers),tuple(r.mode.value for r in e.condition_rules))
-                      markers.setdefault(key,e); marker_teams[key].add(source_name)
-              if '그레이브' in members and not grave_printed:
-                  grave_printed=True
-                  print('GRAVE_TEAM', source_name, members)
-                  for e in squad.effects:
-                      if squad.members[e.actor].name=='그레이브':
-                          print('GRAVE_EFFECT',repr(e))
+              TriggerDispatcher.is_executable_effect = staticmethod(original)
+              b=static_score_blockers(squad)
+              TriggerDispatcher.is_executable_effect = staticmethod(patched)
+              a=static_score_blockers(squad)
+              if b != a:
+                  changed.append((source_name,members,b,a))
+              before.update(b); after.update(a)
 
-          print('MARKER_COUNT',len(markers))
-          for key,e in sorted(markers.items(),key=lambda kv:(-len(marker_teams[kv[0]]),kv[0][0],str(kv[0][1]))):
-              print('MARKER|teams=',len(marker_teams[key]),'sources=',sorted(marker_teams[key]))
-              print(' ',repr(e))
+          print('CHANGED_TEAMS',len(changed))
+          for row in changed:
+              print('TEAM',row[0],row[1])
+              print(' BEFORE',row[2])
+              print(' AFTER ',row[3])
+
+          # Real Grave activation/expiry smoke: fire only Grave's burst_cast signal.
+          names=['미란다','그레이브','에이다','미하라 : 본딩 체인','D : 킬러 와이프']
+          squad=compile_moris_squad(spec.build_squad(names))
+          grave=names.index('그레이브')
+          rt=BurstRuntime(
+              squad,
+              BurstPolicy(duration=20.0, first_burst_time=30.0),
+              EnemyStaticProfile(defense=0.0,duration=20.0),
+          )
+          marker=next(e for e in squad.effects if e.actor==grave and e.name=='미래 예지')
+          print('MARKER_SHAPE',narrow_marker(marker),repr(marker))
+          print('PRE',rt.dispatcher.effects.has_named_state(grave,'미래 예지',now=1.0))
+          result=rt.dispatcher.dispatch(BurstSignal(1.0,'burst_cast',grave,grave,'2'))
+          print('DISPATCH',result)
+          print('ACTIVE_1',rt.dispatcher.effects.has_named_state(grave,'미래 예지',now=1.0))
+          print('ACTIVE_10_999',rt.dispatcher.effects.has_named_state(grave,'미래 예지',now=10.999))
+          print('ACTIVE_11_LOGICAL',rt.dispatcher.effects.has_named_state(grave,'미래 예지',now=11.0))
+          # Process the scheduled expiry and any state-end notification at t=11.
+          while rt.scheduler and (rt.scheduler.peek_time() or 999.0) <= 11.0 + 1e-9:
+              ev=rt.scheduler.pop()
+              print('EVENT',ev.time,ev.kind,ev.payload)
+              if ev.kind.value == 'state_expire':
+                  rt.dispatcher.handle_expiry(ev)
+              elif ev.kind.value == 'state_end_notify':
+                  owner,name=ev.payload
+                  r=rt.dispatcher.dispatch(BurstSignal(ev.time,f'event:state_end:{name}',owner,owner))
+                  print('STATE_END_DISPATCH',r)
+          print('ACTIVE_AFTER_EXPIRY',rt.dispatcher.effects.has_named_state(grave,'미래 예지',now=11.0))
           PY
