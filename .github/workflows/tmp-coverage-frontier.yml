@@ -9,68 +9,45 @@ permissions:
   contents: read
 
 jobs:
-  damage-frontier:
+  inspect-brady:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Group remaining public skill-damage blockers by compiled shape
+      - name: Inspect Brady team, state producer, and DoT sink support
         run: |
           PYTHONPATH=. python - <<'PY'
-          from collections import defaultdict
           from context import snapshot, spec
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.score import static_score_blockers
+          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
+          from fast_engine.engine.model import EnemyStaticProfile
+          from fast_engine.engine.dispatcher import TriggerDispatcher
 
-          seen=set(); grouped=defaultdict(list)
-          for source_name, case in snapshot.SQUADS.items():
-              if str(source_name).startswith('지그_'): continue
-              members=tuple(str(x) for x in case.get('members',()))
-              if len(members)!=5 or members in seen: continue
-              seen.add(members)
-              squad=compile_moris_squad(spec.build_squad(list(members)))
-              blockers=static_score_blockers(squad)
-              for b in blockers:
-                  if not b.startswith('skill_damage:'): continue
-                  _,owner,name,stat=b.split(':',3)
-                  matches=[e for e in squad.effects
-                           if squad.members[e.actor].name==owner
-                           and e.name==name
-                           and (e.stat or '')==stat]
-                  if not matches:
-                      print('NO_MATCH',source_name,b); continue
-                  for e in matches:
-                      shape=(
-                          e.effect_type,e.stat,e.target_spec.mode.value,e.target,
-                          e.duration,e.tick_interval,e.max_stack,e.max_trigger,
-                          tuple(sorted((str(k),repr(v)) for k,v in e.parameters.items())),
-                          tuple((r.mode.value,r.event_key,r.threshold,r.interval,r.raw) for r in e.triggers),
-                          tuple((r.mode.value,r.key,r.value,r.raw) for r in e.condition_rules),
-                          e.capability.disposition.value,tuple(e.capability.blockers),
-                      )
-                      grouped[(owner,name,e.stat,shape)].append((str(source_name),members))
-
-          print('GROUP_COUNT',len(grouped))
-          ordered=sorted(grouped.items(),key=lambda kv:(-len(kv[1]),kv[0][0],kv[0][1]))
-          for (owner,name,stat,shape),teams in ordered:
-              print('\nGROUP',len(teams),owner,name,stat)
-              print('SHAPE',shape)
-              for source,members in teams: print(' TEAM',source,members)
-
-          print('\n=== SAFE-LOOKING TRIGGER SHAPES ===')
-          safe_event_keys={
-              'battle_start','burst_cast','full_burst_start','full_burst_end',
-              'last_bullet','on_attack','full_charge_hit','hit_count','pellet_hit',
-          }
-          for (owner,name,stat,shape),teams in ordered:
-              triggers=shape[9]; conds=shape[10]
-              trigger_keys={x[1] for x in triggers}
-              timing_simple=bool(triggers) and all(
-                  (k in safe_event_keys) or (isinstance(k,str) and (k.startswith('burst_enter:') or k.startswith('squad_burst_cast:')))
-                  for k in trigger_keys
-              )
-              if timing_simple:
-                  print('SAFEISH',len(teams),owner,name,stat,'triggers=',triggers,'conds=',conds,'params=',shape[8],'target=',shape[2:4])
+          name='레이드_앨리스브래디'
+          members=tuple(snapshot.SQUADS[name]['members'])
+          raw=spec.build_squad(list(members)); squad=compile_moris_squad(raw)
+          print('TEAM',members)
+          print('BLOCKERS',static_score_blockers(squad))
+          sink=SimpleDamageScoreSink(squad,EnemyStaticProfile(defense=0,duration=180))
+          print('\nBRADY EFFECTS')
+          actor=members.index('브래디')
+          for e in squad.effects:
+              if e.actor!=actor: continue
+              print({
+                  'id':e.effect_id,'name':e.name,'type':e.effect_type,'stat':e.stat,'value':e.value,
+                  'target':e.target,'target_mode':e.target_spec.mode.value,'duration':e.duration,
+                  'tick_interval':e.tick_interval,'max_stack':e.max_stack,'max_trigger':e.max_trigger,
+                  'parameters':dict(e.parameters),
+                  'triggers':[(r.mode.value,r.event_key,r.threshold,r.interval,r.raw,r.is_runtime_supported) for r in e.triggers],
+                  'conditions':[(r.mode.value,r.key,r.value,r.raw,r.is_runtime_supported) for r in e.condition_rules],
+                  'cap':e.capability.disposition.value,'cap_blockers':tuple(e.capability.blockers),
+                  'dispatcher_exec':TriggerDispatcher.is_executable_effect(e),
+                  'sink_support':sink.supports(e) if e.effect_type=='damage' else None,
+                  'sink_unsupported':e.effect_id in sink.unsupported_effect_ids,
+              })
+          print('DOT_SPECS',sink.dot_specs)
+          print('STATEFUL_DOT_SPECS',sink.stateful_dot_specs)
           PY
