@@ -13,12 +13,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Compare RHQ burst timeline
+      - name: Trace RHQ burst stage drift
         shell: bash
         run: |
           python - <<'PY'
           from calculator.timeline import DEFAULT_ENEMY, simulate
-          from calculator.sim_result import _is_normal
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.burst_runtime import BurstRuntime
@@ -28,32 +27,27 @@ jobs:
           from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
 
           MEMBERS=("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸")
-          TARGET="퀀시 : 이스케이프 퀸"; DURATION=60.0
+          DURATION=35.0
           CONFIG={"duration":DURATION,"first_burst_time":3.0,"rng_mode":"expected"}
           squad=spec.build_squad(list(MEMBERS)); config=spec.build_config(squad,dict(CONFIG))
           compiled=compile_moris_squad(squad); blockers=static_score_blockers(compiled)
           if blockers: raise RuntimeError(blockers)
-          policy=compile_burst_policy(squad,compiled,dict(CONFIG)); idx=MEMBERS.index(TARGET)
+          policy=compile_burst_policy(squad,compiled,dict(CONFIG))
           enemy=dict(DEFAULT_ENEMY); enemy["def"]=55000.0; enemy["code"]="작열"; enemy["core_px"]=10.0
           profile=EnemyStaticProfile(defense=55000.0,element="작열",core_uptime=1.0,core_px=10.0,duration=DURATION)
 
           moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=True)
-          m_starts=[float(r.t) for r in moris.log.burst_log if r.event=="full_burst 시작"]
-          m_ends=[float(r.t) for r in moris.log.burst_log if r.event=="full_burst 종료"]
-          m_normal=sum(float(h.damage) for h in moris.hits if h.caster==TARGET and _is_normal(h))
+          for r in moris.log.burst_log:
+              if float(r.t) <= DURATION:
+                  print(f"M_LOG|t={float(r.t):.6f}|event={r.event}|caster={getattr(r,'caster',None)}|stage={getattr(r,'stage',None)}")
 
           sink=SimpleDamageScoreSink(compiled,profile)
           runtime=BurstRuntime(compiled,policy,profile,damage_sink=sink)
           obs=StaticNormalAttackObserver(runtime,duration=DURATION)
           rr=runtime.run(duration=DURATION,score_observer=obs)
-          normal=obs.finish(events_processed=rr.events_processed)
-
-          print("M_STARTS|"+",".join(f"{x:.6f}" for x in m_starts))
+          obs.finish(events_processed=rr.events_processed)
+          for t,actor,stage in rr.casts:
+              print(f"F_CAST|t={t:.6f}|caster={compiled.names[actor]}|stage={stage}")
           print("F_STARTS|"+",".join(f"{x:.6f}" for x in rr.full_burst_starts))
-          print("M_ENDS|"+",".join(f"{x:.6f}" for x in m_ends))
           print("F_ENDS|"+",".join(f"{x:.6f}" for x in rr.full_burst_ends))
-          for i,(m,f) in enumerate(zip(m_starts,rr.full_burst_starts),1):
-              print(f"START_DELTA|n={i}|m={m:.6f}|f={f:.6f}|d={f-m:+.6f}")
-          print(f"NORMAL|m={m_normal:.3f}|f={float(normal.char_total[idx]):.3f}|err={float(normal.char_total[idx])/m_normal-1:.8f}")
-          print(f"SKILL_FAST|{float(sink.char_total[idx]):.3f}")
           PY
