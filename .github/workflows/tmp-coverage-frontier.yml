@@ -13,100 +13,46 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Compare squad-ammo threshold timestamps
+      - name: Rank generic blocker mechanics
         run: |
           PYTHONPATH=. python - <<'PY'
-          from calculator.buff_manager import BuffManager
-          from calculator.timeline import DEFAULT_ENEMY, simulate
-          from context import spec
-          from fast_engine.engine.burst import compile_burst_policy
-          from fast_engine.engine.burst_runtime import BurstRuntime
-          from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.dynamic_reload import DynamicRapidReloadRuntime
-          from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.weapon import DynamicChargeCadenceRuntime
-          import fast_engine.engine.score as score_mod
+          from collections import Counter, defaultdict
+          from fast_engine.research.public_blocker_frontier import scan_public_blockers, _conceptual_key
 
-          names = ['리틀 머메이드', '크라운', '라피 : 레드 후드', '미하라 : 본딩 체인', '헬름']
-          duration = 180.0
-          cfg = {'duration': duration, 'first_burst_time': 3.0, 'rng_mode': 'expected'}
+          def shape(item: str) -> str:
+              parts = item.split(':')
+              family = parts[0]
+              if family in {'damage_delivery', 'normal_delivery', 'skill_state_delivery', 'cadence'}:
+                  return f'{family}:{parts[-1]}'
+              if family == 'skill_damage':
+                  # sequential_damage:N variants share one mechanic family.
+                  stat = ':'.join(parts[3:]) if len(parts) > 3 else parts[-1]
+                  if stat.startswith('sequential_damage:'):
+                      stat = 'sequential_damage'
+                  return f'skill_damage:{stat}'
+              if family in {'weapon_change', 'control', 'normal_state'}:
+                  return family
+              return family
 
-          # Moris: record the true team-global 500-shot crossings.
-          moris_count = 0
-          moris_cross = []
-          orig_notify = BuffManager._notify
-          def traced_notify(self, event, t, caster):
-              global moris_count
-              if event == 'squad_ammo_consume':
-                  moris_count += 1
-                  if moris_count % 500 == 0:
-                      moris_cross.append((moris_count, float(t), str(caster)))
-              return orig_notify(self, event, t, caster)
-          BuffManager._notify = traced_notify
-          try:
-              moris_squad = spec.build_squad(names)
-              simulate(
-                  moris_squad,
-                  config=spec.build_config(moris_squad, dict(cfg)),
-                  enemy=dict(DEFAULT_ENEMY),
-                  seed=42,
-                  verbose=False,
-              )
-          finally:
-              BuffManager._notify = orig_notify
+          report = scan_public_blockers()
+          unique = {}
+          for row in report['rows']:
+              unique.setdefault(tuple(row['members']), row)
 
-          # Fast: collect only real actor-state shots, excluding copy-only predictions.
-          fast_shots = []
-          orig_rapid_after = DynamicRapidReloadRuntime._after_shot
-          def traced_rapid_after(self, st, shot_time):
-              actual = st is self._states.get(st.actor)
-              result = orig_rapid_after(self, st, shot_time)
-              if actual:
-                  fast_shots.append((float(shot_time), int(st.actor)))
-              return result
-          DynamicRapidReloadRuntime._after_shot = traced_rapid_after
+          teams_by_shape = defaultdict(set)
+          concepts_by_shape = defaultdict(set)
+          for members, row in unique.items():
+              raw = tuple(row['blockers']) + tuple('unsupported:' + x for x in row['unsupported'])
+              concepts = tuple(dict.fromkeys(_conceptual_key(x) for x in raw))
+              for concept in concepts:
+                  s = shape(concept)
+                  teams_by_shape[s].add(row['source_name'])
+                  concepts_by_shape[s].add(concept)
 
-          orig_charge_after = DynamicChargeCadenceRuntime._after_shot
-          def traced_charge_after(self, st, shot_time):
-              actual = st is self._states.get(st.actor)
-              result = orig_charge_after(self, st, shot_time)
-              if actual:
-                  fast_shots.append((float(shot_time), int(st.actor)))
-              return result
-          DynamicChargeCadenceRuntime._after_shot = traced_charge_after
-
-          old_blockers = score_mod.static_normal_score_blockers
-          score_mod.static_normal_score_blockers = lambda _squad: ()
-          try:
-              fast_moris = spec.build_squad(names)
-              compiled = compile_moris_squad(fast_moris)
-              policy = compile_burst_policy(fast_moris, compiled, dict(cfg))
-              enemy = EnemyStaticProfile(
-                  defense=float(DEFAULT_ENEMY.get('def', 31784.0)),
-                  element=DEFAULT_ENEMY.get('code'),
-                  core_uptime=1.0 if float(DEFAULT_ENEMY.get('core_px', 0.0) or 0.0) > 0 else 0.0,
-                  core_px=float(DEFAULT_ENEMY.get('core_px', 0.0) or 0.0),
-                  duration=duration,
-              )
-              runtime = BurstRuntime(compiled, policy, enemy)
-              observer = score_mod.StaticNormalAttackObserver(runtime, duration=duration)
-              runtime.run(duration=duration, score_observer=observer)
-              observer.finish(events_processed=0)
-          finally:
-              score_mod.static_normal_score_blockers = old_blockers
-              DynamicRapidReloadRuntime._after_shot = orig_rapid_after
-              DynamicChargeCadenceRuntime._after_shot = orig_charge_after
-
-          fast_shots.sort(key=lambda row: (row[0], row[1]))
-          fast_cross = []
-          for absolute in range(500, len(fast_shots) + 1, 500):
-              t, actor = fast_shots[absolute - 1]
-              fast_cross.append((absolute, t, names[actor]))
-
-          print('MORIS_TOTAL', moris_count)
-          print('FAST_TOTAL', len(fast_shots))
-          print('MORIS_CROSS', moris_cross)
-          print('FAST_CROSS', fast_cross)
-          for m, f in zip(moris_cross, fast_cross):
-              print(f'DIFF|count={m[0]}|m={m[1]:.12f}|f={f[1]:.12f}|dt={f[1]-m[1]:+.12f}|m_actor={m[2]}|f_actor={f[2]}')
+          ranking = sorted(teams_by_shape, key=lambda s: (-len(teams_by_shape[s]), s))
+          for s in ranking:
+              print(f'SHAPE|teams={len(teams_by_shape[s])}|concepts={len(concepts_by_shape[s])}|{s}')
+              print('  teams=', sorted(teams_by_shape[s]))
+              for c in sorted(concepts_by_shape[s]):
+                  print('  concept=', c)
           PY
