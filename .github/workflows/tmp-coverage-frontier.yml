@@ -13,36 +13,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Compare coverage priority candidates
+      - name: Inspect alternate coverage candidates
         run: |
-          echo '=== MORIS SQUAD AMMO SOURCE ==='
-          grep -R -n -C 5 'squad_ammo_consume' calculator fast_engine 2>/dev/null || true
           PYTHONPATH=. python - <<'PY'
-          from collections import Counter
           from context import spec
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.score import (
               _is_dynamic_reload_score_supported,
               _is_dynamic_max_ammo_score_supported,
               _temporary_self_charge_weapon_change_score_supported,
+              static_score_blockers,
           )
-          from fast_engine.research.public_ranking_probe import _source_corpus
-
-          print('=== PUBLIC SQUAD_AMMO USERS ===')
-          seen = set()
-          for source_name, names in _source_corpus():
-              key = tuple(names)
-              if key in seen:
-                  continue
-              seen.add(key)
-              compiled = compile_moris_squad(spec.build_squad(list(names)))
-              rows = []
-              for effect in compiled.effects:
-                  for rule in effect.triggers:
-                      if rule.event_key == 'squad_ammo_consume':
-                          rows.append((compiled.members[effect.actor].name, effect.name, effect.stat, repr(rule)))
-              if rows:
-                  print('TEAM', source_name, rows)
 
           candidates = {
               'MOTAN': ['목단', '마스트 : 로망틱 메이드', '홍련 : 흑영', '리버렐리오', '앵커 : 이노센트 메이드'],
@@ -51,12 +32,18 @@ jobs:
           for tag, names in candidates.items():
               print('===', tag, '===')
               compiled = compile_moris_squad(spec.build_squad(names))
+              print('BLOCKERS', static_score_blockers(compiled))
               for effect in compiled.effects:
                   owner = compiled.members[effect.actor].name
                   if owner == '목단' and effect.effect_type == 'weapon_change':
-                      print('MOTAN_WC', effect.name, repr(effect), 'temp_charge_safe=', _temporary_self_charge_weapon_change_score_supported(compiled, effect))
+                      print('MOTAN_WC|name=', effect.name)
+                      print('  effect=', repr(effect))
+                      print('  member_weapon=', repr(compiled.members[effect.actor].weapon))
+                      print('  temp_charge_safe=', _temporary_self_charge_weapon_change_score_supported(compiled, effect))
                   if owner == '프리바티' and (effect.stat or '') in {'reload_speed_pct', 'max_ammo_pct'}:
-                      print('PRIVATY_CADENCE', effect.name, effect.stat, repr(effect))
+                      print('PRIVATY_CADENCE|name=', effect.name, '|stat=', effect.stat)
+                      print('  effect=', repr(effect))
+                      print('  member_weapon=', repr(compiled.members[effect.actor].weapon))
                       if effect.stat == 'reload_speed_pct':
                           print('  reload_supported=', _is_dynamic_reload_score_supported(compiled, effect))
                       if effect.stat == 'max_ammo_pct':
