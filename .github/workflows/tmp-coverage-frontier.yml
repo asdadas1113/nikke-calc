@@ -13,46 +13,37 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Rank generic blocker mechanics
+      - name: Inspect public bonus-damage blocker shapes
         run: |
           PYTHONPATH=. python - <<'PY'
-          from collections import Counter, defaultdict
-          from fast_engine.research.public_blocker_frontier import scan_public_blockers, _conceptual_key
+          from context import spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.damage_events import compile_simple_damage_event, compile_pending_b3_bonus_damage_event
+          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
+          from fast_engine.engine.model import EnemyStaticProfile
+          from fast_engine.research.public_ranking_probe import _source_corpus
 
-          def shape(item: str) -> str:
-              parts = item.split(':')
-              family = parts[0]
-              if family in {'damage_delivery', 'normal_delivery', 'skill_state_delivery', 'cadence'}:
-                  return f'{family}:{parts[-1]}'
-              if family == 'skill_damage':
-                  # sequential_damage:N variants share one mechanic family.
-                  stat = ':'.join(parts[3:]) if len(parts) > 3 else parts[-1]
-                  if stat.startswith('sequential_damage:'):
-                      stat = 'sequential_damage'
-                  return f'skill_damage:{stat}'
-              if family in {'weapon_change', 'control', 'normal_state'}:
-                  return family
-              return family
-
-          report = scan_public_blockers()
-          unique = {}
-          for row in report['rows']:
-              unique.setdefault(tuple(row['members']), row)
-
-          teams_by_shape = defaultdict(set)
-          concepts_by_shape = defaultdict(set)
-          for members, row in unique.items():
-              raw = tuple(row['blockers']) + tuple('unsupported:' + x for x in row['unsupported'])
-              concepts = tuple(dict.fromkeys(_conceptual_key(x) for x in raw))
-              for concept in concepts:
-                  s = shape(concept)
-                  teams_by_shape[s].add(row['source_name'])
-                  concepts_by_shape[s].add(concept)
-
-          ranking = sorted(teams_by_shape, key=lambda s: (-len(teams_by_shape[s]), s))
-          for s in ranking:
-              print(f'SHAPE|teams={len(teams_by_shape[s])}|concepts={len(concepts_by_shape[s])}|{s}')
-              print('  teams=', sorted(teams_by_shape[s]))
-              for c in sorted(concepts_by_shape[s]):
-                  print('  concept=', c)
+          seen_members = set()
+          seen_effects = set()
+          for members, source_name in _source_corpus():
+              if members in seen_members:
+                  continue
+              seen_members.add(members)
+              compiled = compile_moris_squad(spec.build_squad(list(members)))
+              sink = SimpleDamageScoreSink(compiled, EnemyStaticProfile(defense=0.0, duration=180.0))
+              for effect in compiled.effects:
+                  if effect.effect_type != 'damage' or (effect.stat or '') != 'bonus_damage':
+                      continue
+                  key = (compiled.members[effect.actor].name, effect.name)
+                  if key in seen_effects:
+                      continue
+                  seen_effects.add(key)
+                  print('EFFECT|owner=', key[0], '|name=', key[1])
+                  print('  source=', effect.source, 'value=', effect.value, 'target=', effect.target)
+                  print('  triggers=', [repr(r) for r in effect.triggers])
+                  print('  conditions=', [repr(r) for r in effect.condition_rules])
+                  print('  params=', repr(effect.parameters), 'duration=', effect.duration)
+                  print('  simple=', repr(compile_simple_damage_event(effect, compiled.members[effect.actor])))
+                  print('  pending_b3=', repr(compile_pending_b3_bonus_damage_event(effect, compiled.members[effect.actor])))
+                  print('  sink_supports=', sink.supports(effect))
           PY
