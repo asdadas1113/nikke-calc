@@ -1,0 +1,67 @@
+name: tmp-mg-v2-release-gate
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+
+permissions:
+  contents: write
+
+jobs:
+  release-gate:
+    if: ${{ !contains(github.event.head_commit.message, '[skip-mg-gate]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install
+        run: python -m pip install -e '.[dev]'
+      - name: Capture certified baseline before v2
+        run: PYTHONPATH=. python fast_engine/research/tmp_certified_baseline.py --write /tmp/certified-pre.json
+      - name: Apply MG timing v2
+        run: |
+          PYTHONPATH=. python fast_engine/research/tmp_apply_mg_v2.py
+          python -m py_compile fast_engine/engine/dynamic_reload.py fast_engine/engine/dynamic_rapid.py
+          git diff --check
+      - name: Asuka 180s 30-seed parity
+        run: |
+          set -o pipefail
+          PYTHONPATH=. python fast_engine/research/tmp_validate_asuka_mg_v2.py | tee fast_engine/research/tmp_mg_v2_release_gate_report.txt
+      - name: Certified baseline unchanged
+        run: |
+          set -o pipefail
+          PYTHONPATH=. python fast_engine/research/tmp_certified_baseline.py --compare /tmp/certified-pre.json | tee -a fast_engine/research/tmp_mg_v2_release_gate_report.txt
+      - name: Focused rapid reload regressions
+        run: |
+          set -o pipefail
+          python -m pytest -q \
+            fast_engine/tests/test_damage_dynamic_reload_scoring.py \
+            fast_engine/tests/test_damage_dynamic_mg_warmup.py \
+            fast_engine/tests/test_damage_moris_frame_timing.py \
+            fast_engine/tests/test_damage_rapid_cover_control.py \
+            | tee -a fast_engine/research/tmp_mg_v2_release_gate_report.txt
+      - name: Public blocker accounting
+        run: |
+          set -o pipefail
+          PYTHONPATH=. python - <<'PY' | tee -a fast_engine/research/tmp_mg_v2_release_gate_report.txt
+          from fast_engine.research.public_blocker_frontier import scan_public_blockers
+          report = scan_public_blockers()
+          print(f"PUBLIC_ACCOUNTING teams={report['team_count']} certified={report['certified_team_count']} gaps={report['coverage_gap_count']}")
+          assert report['team_count'] == 24, report
+          assert report['certified_team_count'] == 2, report
+          assert report['coverage_gap_count'] == 22, report
+          PY
+      - name: Full test suite
+        run: |
+          set -o pipefail
+          python -m pytest -q | tee -a fast_engine/research/tmp_mg_v2_release_gate_report.txt
+      - name: Record release-gate report
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add fast_engine/research/tmp_mg_v2_release_gate_report.txt
+          git commit -m 'tmp: record MG v2 release gate [skip-mg-gate]'
+          git push
