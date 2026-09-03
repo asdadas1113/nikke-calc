@@ -1,0 +1,113 @@
+name: tmp-expiry-ab
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+
+permissions:
+  contents: write
+
+jobs:
+  expiry-ab:
+    if: ${{ !contains(github.event.head_commit.message, '[skip-expiry-ab]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Run four-way A/B matrix
+        run: |
+          set -u
+          REPORT=fast_engine/research/tmp_expiry_ab_report.txt
+          : > "$REPORT"
+
+          reset_runtime() {
+            git checkout "$GITHUB_SHA" -- \
+              fast_engine/engine/effects.py \
+              fast_engine/engine/dynamic_reload.py \
+              fast_engine/engine/dynamic_rapid.py
+          }
+
+          run_variant() {
+            name="$1"
+            echo "===== VARIANT: $name =====" | tee -a "$REPORT"
+
+            set +e
+            PYTHONPATH=. python fast_engine/research/tmp_validate_asuka_mg_v2.py >> "$REPORT" 2>&1
+            asuka_rc=$?
+            python -m unittest \
+              fast_engine.tests.test_damage_dynamic_reload_scoring \
+              fast_engine.tests.test_damage_dynamic_mg_warmup \
+              fast_engine.tests.test_damage_moris_frame_timing \
+              fast_engine.tests.test_damage_rapid_cover_control \
+              >> "$REPORT" 2>&1
+            focused_rc=$?
+            PYTHONPATH=. python - <<'PY' >> "$REPORT" 2>&1
+          import json
+          from fast_engine.research.public_ranking_probe import run_public_probe
+          r = run_public_probe()
+          print("PUBLIC_METRICS=" + json.dumps({
+              "team_count": r["team_count"],
+              "certified_team_count": r["certified_team_count"],
+              "coverage_gap_count": r["coverage_gap_count"],
+              "clean_relative_error": r["clean_relative_error"],
+              "clean_ranking": r["clean_ranking"],
+          }, ensure_ascii=False, sort_keys=True))
+          for row in r["rows"]:
+              if row["certified_fast_score"] is not None:
+                  print("CERTIFIED_ROW=" + json.dumps({
+                      "source_name": row["source_name"],
+                      "members": row["members"],
+                      "moris_score": row["moris_score"],
+                      "fast_score": row["certified_fast_score"],
+                      "relative_error": row["relative_error"],
+                      "groups": row["groups"],
+                  }, ensure_ascii=False, sort_keys=True))
+          PY
+            public_rc=$?
+            set -e
+
+            echo "RESULT variant=$name asuka_rc=$asuka_rc focused_rc=$focused_rc public_rc=$public_rc" | tee -a "$REPORT"
+            echo | tee -a "$REPORT"
+          }
+
+          reset_runtime
+          run_variant baseline
+
+          reset_runtime
+          PYTHONPATH=. python fast_engine/research/tmp_apply_mg_v2.py
+          python -m py_compile fast_engine/engine/dynamic_reload.py fast_engine/engine/dynamic_rapid.py
+          run_variant mg_v2_only
+
+          reset_runtime
+          PYTHONPATH=. python fast_engine/research/tmp_apply_frame_expiry.py
+          python -m py_compile fast_engine/engine/effects.py
+          run_variant expiry_only
+
+          reset_runtime
+          PYTHONPATH=. python fast_engine/research/tmp_apply_frame_expiry.py
+          PYTHONPATH=. python fast_engine/research/tmp_apply_mg_v2.py
+          python -m py_compile \
+            fast_engine/engine/effects.py \
+            fast_engine/engine/dynamic_reload.py \
+            fast_engine/engine/dynamic_rapid.py
+          run_variant mg_v2_plus_expiry
+
+          reset_runtime
+          git diff --check
+
+      - name: Record A/B report only
+        if: always()
+        run: |
+          git checkout "$GITHUB_SHA" -- \
+            fast_engine/engine/effects.py \
+            fast_engine/engine/dynamic_reload.py \
+            fast_engine/engine/dynamic_rapid.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add fast_engine/research/tmp_expiry_ab_report.txt
+          git commit -m 'tmp: record finite expiry A/B [skip-expiry-ab] [skip-mg-gate]'
+          git push
