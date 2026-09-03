@@ -13,15 +13,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Compare selective charge per-shot damage 180s
+      - name: Inspect 128s same-tick damage state
         shell: bash
         run: |
           python - <<'PY'
           from bisect import bisect_left, bisect_right
-          from collections import defaultdict
           from dataclasses import replace
-          from calculator.timeline import DEFAULT_ENEMY, DT, simulate
-          from calculator.sim_result import _is_normal
+          from calculator.timeline import DEFAULT_ENEMY, DT, CharState, simulate
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.burst_runtime import BurstRuntime
@@ -32,27 +30,31 @@ jobs:
           from fast_engine.engine.weapon import DynamicChargeCadenceRuntime
 
           NAMES=("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸")
-          TARGETS=("프리카","민트")
-          D=180.0; CFG={'duration':D,'first_burst_time':3.0,'rng_mode':'expected'}
+          TARGETS={'프리카','민트'}; WATCH=128.3666666667
+          D=130.0; CFG={'duration':D,'first_burst_time':3.0,'rng_mode':'expected'}
           squad=spec.build_squad(list(NAMES)); config=spec.build_config(squad,dict(CFG)); cp=compile_moris_squad(squad)
           if static_score_blockers(cp): raise RuntimeError(static_score_blockers(cp))
           policy=compile_burst_policy(squad,cp,dict(CFG))
           profile=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=D)
           enemy=dict(DEFAULT_ENEMY); enemy['def']=55000.0; enemy['code']='작열'; enemy['core_px']=10.0
 
-          moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=False)
-          mdmg={n:defaultdict(float) for n in TARGETS}
-          for h in moris.hits:
-              if h.caster in mdmg and _is_normal(h): mdmg[h.caster][round(float(h.t),9)]+=float(h.damage)
-          mts={n:sorted(mdmg[n]) for n in TARGETS}
+          om=CharState._charge_fire
+          def mf(self,t,bm,enemy,cfg,is_full):
+              if self.name in TARGETS and abs(float(t)-WATCH)<1e-5:
+                  b=bm.get_buffs(self.name,'__enemy__',t)
+                  print('MORIS',self.name,round(t,9),{k:v for k,v in b.items() if not str(k).startswith('__') and v not in (None,0,0.0,False,[])})
+                  print('MORIS_FB',self.name,bm.state.get('full_burst'))
+              return om(self,t,bm,enemy,cfg,is_full)
+          CharState._charge_fire=mf
+          simulate(squad,config=config,enemy=enemy,seed=42,verbose=False)
+          CharState._charge_fire=om
 
           ticks=[]; t=0.0
-          while t<=181.0: ticks.append(t); t+=DT
+          while t<=131.0: ticks.append(t); t+=DT
           def snap(x):
               i=bisect_left(ticks,float(x)); return ticks[i] if i<len(ticks) else float(x)
           def next_tick(x):
               i=bisect_right(ticks,float(x)); return ticks[i] if i<len(ticks) else float(x)+DT
-
           oe=DynamicChargeCadenceRuntime._enter_charge; oa=DynamicChargeCadenceRuntime._after_shot
           of=DynamicChargeCadenceRuntime._finish_nonshot_phase; op=DynamicChargeCadenceRuntime._predict_next_boundary; os=DynamicChargeCadenceRuntime.sync
           pending={}
@@ -104,35 +106,27 @@ jobs:
                       st.signature=new
                       if not wc_changed:
                           self._invalidate(st)
-                          if st.phase=='charging' and (new[4],new[5])!=(old[4],old[5]):
-                              st.phase_end=snap(st.charge_start+self._effective_charge_time(a,now))
+                          if st.phase=='charging' and (new[4],new[5])!=(old[4],old[5]): st.phase_end=snap(st.charge_start+self._effective_charge_time(a,now))
                   if st.scheduled_time is None: self._plan(a,now)
                   self.state.set_ammo(a,st.ammo)
           DynamicChargeCadenceRuntime._enter_charge=pe; DynamicChargeCadenceRuntime._after_shot=pa
           DynamicChargeCadenceRuntime._finish_nonshot_phase=pf; DynamicChargeCadenceRuntime._predict_next_boundary=pp; DynamicChargeCadenceRuntime.sync=psy
 
-          sink=SimpleDamageScoreSink(cp,profile); rt=BurstRuntime(cp,policy,profile,damage_sink=sink)
-          idx={cp.names.index(n):n for n in TARGETS}
+          sink=SimpleDamageScoreSink(cp,profile); rt=BurstRuntime(cp,policy,profile,damage_sink=sink); idx={cp.names.index(n):n for n in TARGETS}
           class O(StaticNormalAttackObserver):
-              def __init__(self,*a,**k): self.fdmg={n:[] for n in TARGETS}; super().__init__(*a,**k)
               def _score_shots(self,a,count,*,eval_time):
-                  before=self.char_total[a]
-                  out=super()._score_shots(a,count,eval_time=eval_time)
-                  if a in idx:
-                      self.fdmg[idx[a]].append((float(eval_time),self.char_total[a]-before,self.runtime.machine.phase))
-                  return out
-          obs=O(rt,duration=D); rr=rt.run(duration=D,score_observer=obs); normal=obs.finish(events_processed=rr.events_processed)
-
-          for n in TARGETS:
-              fs=obs.fdmg[n]; ms=mts[n]
-              print(f'TOTAL|name={n}|mshots={len(ms)}|fshots={len(fs)}|mnormal={sum(mdmg[n].values()):.3f}|fnormal={normal.char_total[cp.names.index(n)]:.3f}|fskill={sink.char_total[cp.names.index(n)]:.3f}')
-              shown=0
-              for i,(mt,(ft,fd,phase)) in enumerate(zip(ms,fs)):
-                  md=mdmg[n][mt]
-                  if abs(mt-round(ft,9))>1e-7 or abs(fd-md)>0.5:
-                      print(f'SHOT|name={n}|i={i}|mt={mt:.9f}|ft={ft:.9f}|td={ft-mt:+.9f}|md={md:.3f}|fd={fd:.3f}|dd={fd-md:+.3f}|rel={(fd/md-1 if md else 0):+.8f}|phase={phase}')
-                      shown+=1
-                      if shown>=30: break
+                  if a in idx and abs(float(eval_time)-WATCH)<1e-5:
+                      print('FAST',idx[a],round(float(eval_time),9),self.resolver.resolve(a,now=float(eval_time)))
+                      print('FAST_FB',idx[a],self.runtime.machine.phase,self.runtime.machine.full_burst_end_at)
+                      rows=[]
+                      store=self.runtime.dispatcher.effects
+                      for key,ae in store._active.items():
+                          if ae.target!=a or not ae.active(float(eval_time)): continue
+                          e=self.runtime.squad.effects[ae.effect_id]
+                          rows.append((e.name,e.stat,e.value,ae.stacks,round(ae.expires_at,9)))
+                      print('FAST_ACTIVE',idx[a],sorted(rows,key=lambda x:str(x)))
+                  return super()._score_shots(a,count,eval_time=eval_time)
+          obs=O(rt,duration=D); rr=rt.run(duration=D,score_observer=obs); obs.finish(events_processed=rr.events_processed)
 
           DynamicChargeCadenceRuntime._enter_charge=oe; DynamicChargeCadenceRuntime._after_shot=oa
           DynamicChargeCadenceRuntime._finish_nonshot_phase=of; DynamicChargeCadenceRuntime._predict_next_boundary=op; DynamicChargeCadenceRuntime.sync=os
