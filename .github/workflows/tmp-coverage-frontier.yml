@@ -9,73 +9,70 @@ permissions:
   contents: read
 
 jobs:
-  inspect-near-certified:
+  trace-crown-mermaid:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect Crown and Little Mermaid blocker shapes
+      - name: Trace Moris Crown chain
         run: |
           PYTHONPATH=. python - <<'PY'
+          from unittest.mock import patch
+          from calculator.buff_manager import BuffManager
+          from calculator.timeline import simulate
           from context import snapshot, spec
-          from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.score import static_score_blockers
-          from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_supported
 
-          members=tuple(snapshot.SQUADS['스쿼드1']['members'])
-          raw=spec.build_squad(list(members))
-          squad=compile_moris_squad(raw)
+          members=list(snapshot.SQUADS['스쿼드1']['members'])
+          raw=spec.build_squad(members)
+          events=[]
+          activations=[]
+          orig_notify=BuffManager.notify
+          orig_activate=BuffManager._activate
+
+          def traced_notify(bm,event,t,caster,**ctx):
+              if caster=='크라운' and (
+                  event.startswith('stack_reach:릴렉스:')
+                  or event=='event:heal_received'
+                  or event=='event:state_end:릴렉스'
+              ):
+                  events.append((round(float(t),9),event))
+              return orig_notify(bm,event,t,caster,**ctx)
+
+          def traced_activate(bm,eff,caster,t,*args,**kwargs):
+              if caster=='크라운' and eff.get('name') in {
+                  '릴렉스','로얄 에타이어','로얄 에타이어 3','로얄 에타이어 4'
+              }:
+                  before=next((ab.stack for ab in bm._active
+                               if ab.caster==caster and ab.effect.get('name')=='릴렉스'),None)
+                  out=orig_activate(bm,eff,caster,t,*args,**kwargs)
+                  after=next((ab.stack for ab in bm._active
+                              if ab.caster==caster and ab.effect.get('name')=='릴렉스'),None)
+                  activations.append((round(float(t),9),eff.get('name'),before,after))
+                  return out
+              return orig_activate(bm,eff,caster,t,*args,**kwargs)
+
+          cfg={'duration':180.0,'first_burst_time':3.0,'rng_mode':'expected'}
+          with patch.object(BuffManager,'notify',new=traced_notify), patch.object(BuffManager,'_activate',new=traced_activate):
+              result=simulate(raw,config=cfg,verbose=True)
+
           print('MEMBERS',members)
-          print('BLOCKERS',static_score_blockers(squad))
-
-          wanted={
-              ('크라운','로얄 에타이어 4'),
-              ('리틀 머메이드','거품 난사'),
-          }
-          for effect in squad.effects:
-              owner=squad.members[effect.actor].name
-              if (owner,effect.name) not in wanted:
-                  continue
-              print('\nEFFECT',owner)
-              print({
-                  'id':effect.effect_id,
-                  'name':effect.name,
-                  'type':effect.effect_type,
-                  'stat':effect.stat,
-                  'value':effect.value,
-                  'target':effect.target,
-                  'target_mode':effect.target_spec.mode.value,
-                  'duration':effect.duration,
-                  'tick_interval':effect.tick_interval,
-                  'max_stack':effect.max_stack,
-                  'max_trigger':effect.max_trigger,
-                  'polarity':effect.polarity,
-                  'parameters':dict(effect.parameters),
-                  'conditions':[(r.mode.value,r.key,r.value,r.raw) for r in effect.condition_rules],
-                  'triggers':[(r.mode.value,r.event_key,r.threshold,r.interval,r.raw) for r in effect.triggers],
-                  'capability':effect.capability.disposition.value,
-                  'capability_blockers':tuple(effect.capability.blockers),
-                  'direct_damage_runtime':is_direct_damage_buff_runtime_supported(effect),
-                  'dispatcher_executable':TriggerDispatcher.is_executable_effect(effect),
-              })
-
-          print('\nCROWN_ALL')
-          for effect in squad.effects:
-              if squad.members[effect.actor].name!='크라운': continue
-              print(effect.effect_id,effect.name,effect.effect_type,effect.stat,effect.target,
-                    [(r.mode.value,r.event_key,r.raw) for r in effect.triggers],
-                    [(r.mode.value,r.key,r.value,r.raw) for r in effect.condition_rules],
-                    dict(effect.parameters),effect.duration,effect.max_stack,
-                    effect.capability.disposition.value,tuple(effect.capability.blockers))
-
-          print('\nMERMAID_ALL_DAMAGE')
-          for effect in squad.effects:
-              if squad.members[effect.actor].name!='리틀 머메이드' or effect.effect_type!='damage': continue
-              print(effect.effect_id,effect.name,effect.stat,effect.value,effect.target,
-                    [(r.mode.value,r.event_key,r.raw) for r in effect.triggers],
-                    [(r.mode.value,r.key,r.value,r.raw) for r in effect.condition_rules],
-                    dict(effect.parameters),effect.capability.disposition.value,tuple(effect.capability.blockers))
+          print('CHAIN_EVENTS')
+          for row in events: print(row)
+          print('CHAIN_ACTIVATIONS')
+          for row in activations: print(row)
+          print('CROWN_BUFF_WINDOWS')
+          for ev in result.log.buff_events:
+              if getattr(ev,'name',None)=='로얄 에타이어 4': print(ev)
           PY
+      - name: Locate existing Fast ammo and sequential primitives
+        run: |
+          echo '=== squad_ammo_consume ==='
+          grep -RIn --exclude-dir=__pycache__ 'squad_ammo_consume' fast_engine || true
+          echo '=== sequential_damage ==='
+          grep -RIn --exclude-dir=__pycache__ 'sequential_damage' fast_engine || true
+          echo '=== sequential_dmg ==='
+          grep -RIn --exclude-dir=__pycache__ 'sequential_dmg' fast_engine || true
+          echo '=== stack_reach / remove_named_buff / heal_received ==='
+          grep -RIn --exclude-dir=__pycache__ -E 'stack_reach|remove_named_buff|heal_received' fast_engine || true
