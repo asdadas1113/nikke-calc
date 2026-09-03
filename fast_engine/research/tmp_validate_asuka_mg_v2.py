@@ -11,7 +11,7 @@ from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
 from fast_engine.engine.dispatcher import TriggerDispatcher
 from fast_engine.engine.model import EnemyStaticProfile
 from fast_engine.engine.score import score_static_squad, static_score_blockers
-from fast_engine.engine.state import ENEMY
+from fast_engine.engine.state import ENEMY as ENEMY_TARGET
 from fast_engine.engine.targets import TargetMode
 from fast_engine.engine.triggers import TriggerMode
 
@@ -19,8 +19,8 @@ NAMES = ["미란다", "아스카 : WILLE", "브리드 : 사일런트 트랙", "�
 ASUKA = 1
 DURATION = 180.0
 CONFIG = {"duration": DURATION, "first_burst_time": 3.0, "rng_mode": "expected"}
-ENEMY = dict(DEFAULT_ENEMY)
-ENEMY.update({"def": 55000.0, "code": "작열", "core_px": 10.0})
+ENEMY_CONFIG = dict(DEFAULT_ENEMY)
+ENEMY_CONFIG.update({"def": 55000.0, "code": "작열", "core_px": 10.0})
 PROFILE = EnemyStaticProfile(
     defense=55000.0,
     element="작열",
@@ -154,7 +154,9 @@ def main() -> None:
 
     def traced_score(sink, effect_id, *, now, full_burst):
         ref = (
-            sink.runtime.dispatcher.effects.named_stack(ENEMY, "안티 AT 필드", now=now)
+            sink.runtime.dispatcher.effects.named_stack(
+                ENEMY_TARGET, "안티 AT 필드", now=now
+            )
             if effect_id == annihilate.effect_id and sink.runtime is not None
             else None
         )
@@ -210,7 +212,7 @@ def main() -> None:
             moris = simulate(
                 raw_m,
                 config=spec.build_config(raw_m, CONFIG),
-                enemy=dict(ENEMY),
+                enemy=dict(ENEMY_CONFIG),
                 seed=seed,
                 verbose=False,
             )
