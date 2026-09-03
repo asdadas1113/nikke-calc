@@ -13,10 +13,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect Crown and Little Mermaid blockers
+      - name: Inspect exact blocker shape
         run: |
           PYTHONPATH=. python - <<'PY'
-          from dataclasses import asdict
           from context import spec
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.damage_events import compile_simple_damage_event
@@ -31,20 +30,18 @@ jobs:
           )
 
           names = ['리틀 머메이드', '크라운', '라피 : 레드 후드', '미하라 : 본딩 체인', '헬름']
-          squad = spec.build_squad(names)
-          compiled = compile_moris_squad(squad)
+          compiled = compile_moris_squad(spec.build_squad(names))
           sink = SimpleDamageScoreSink(compiled, EnemyStaticProfile(defense=0.0, duration=180.0))
-
           for effect in compiled.effects:
               if effect.name not in {'로얄 에타이어 4', '거품 난사'}:
                   continue
               owner = compiled.members[effect.actor].name
-              print(f'EFFECT|owner={owner}|name={effect.name}|type={effect.effect_type}|stat={effect.stat}|value={effect.value}|duration={effect.duration}|target={effect.target}')
-              print('  parameters=', effect.parameters)
-              print('  triggers=', [(r.raw, r.event_key, r.mode.value, r.threshold, r.is_runtime_supported) for r in effect.triggers])
-              print('  conditions=', [(r.raw, r.mode.value, r.is_runtime_supported) for r in effect.condition_rules])
-              print('  target_spec=', effect.target_spec)
-              print('  capability=', effect.capability)
+              print(f'EFFECT|id={effect.effect_id}|owner={owner}|name={effect.name}|type={effect.effect_type}|stat={effect.stat}|value={effect.value}|duration={effect.duration}|target={effect.target}')
+              print('  target_spec=', repr(effect.target_spec))
+              print('  parameters=', repr(effect.parameters))
+              print('  triggers=', [repr(r) for r in effect.triggers])
+              print('  conditions=', [repr(r) for r in effect.condition_rules])
+              print('  capability=', repr(effect.capability))
               if effect.name == '로얄 에타이어 4':
                   print('  direct_runtime=', is_direct_damage_buff_runtime_supported(effect))
                   print('  uses_shield=', _uses_shield_runtime_semantics(effect))
@@ -52,7 +49,7 @@ jobs:
                   print('  named_event_safe=', _named_buff_event_dependency_score_safe(compiled, effect))
                   print('  score_supported=', _direct_damage_buff_score_supported(compiled, effect))
               else:
-                  print('  simple_spec=', compile_simple_damage_event(effect, compiled.members[effect.actor]))
+                  print('  simple_spec=', repr(compile_simple_damage_event(effect, compiled.members[effect.actor])))
                   print('  delivery_supported=', sink._delivery_supported(effect))
                   print('  sink_supports=', sink.supports(effect))
                   print('  unsupported_id=', effect.effect_id in sink.unsupported_effect_ids)
