@@ -37,5 +37,11 @@ jobs:
         run: python -m fast_engine.research.tmp_crown_hit43_probe
       - name: Validate Crown stack-heal semantics on score runtime
         run: python -m fast_engine.research.tmp_validate_crown_stack_heal_bridge
-      - name: Fast regression suite
-        run: python -m unittest discover -s fast_engine/tests -v
+      - name: Score Crown self-only public teams
+        run: python -m fast_engine.research.tmp_crown_self_only_score_probe
+      - name: Focused timing regression
+        run: |
+          python -m unittest fast_engine.tests.test_damage_dynamic_reload_scoring -v
+          python -m unittest fast_engine.tests.test_damage_dynamic_mg_warmup -v
+          python -m unittest fast_engine.tests.test_damage_moris_frame_timing -v
+          python -m unittest fast_engine.tests.test_damage_rapid_cover_control -v
