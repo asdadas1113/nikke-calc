@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Compare selective charge per-shot damage
+      - name: Compare selective charge per-shot damage 180s
         shell: bash
         run: |
           python - <<'PY'
@@ -33,7 +33,7 @@ jobs:
 
           NAMES=("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸")
           TARGETS=("프리카","민트")
-          D=60.0; CFG={'duration':D,'first_burst_time':3.0,'rng_mode':'expected'}
+          D=180.0; CFG={'duration':D,'first_burst_time':3.0,'rng_mode':'expected'}
           squad=spec.build_squad(list(NAMES)); config=spec.build_config(squad,dict(CFG)); cp=compile_moris_squad(squad)
           if static_score_blockers(cp): raise RuntimeError(static_score_blockers(cp))
           policy=compile_burst_policy(squad,cp,dict(CFG))
@@ -47,7 +47,7 @@ jobs:
           mts={n:sorted(mdmg[n]) for n in TARGETS}
 
           ticks=[]; t=0.0
-          while t<=61.0: ticks.append(t); t+=DT
+          while t<=181.0: ticks.append(t); t+=DT
           def snap(x):
               i=bisect_left(ticks,float(x)); return ticks[i] if i<len(ticks) else float(x)
           def next_tick(x):
@@ -132,7 +132,7 @@ jobs:
                   if abs(mt-round(ft,9))>1e-7 or abs(fd-md)>0.5:
                       print(f'SHOT|name={n}|i={i}|mt={mt:.9f}|ft={ft:.9f}|td={ft-mt:+.9f}|md={md:.3f}|fd={fd:.3f}|dd={fd-md:+.3f}|rel={(fd/md-1 if md else 0):+.8f}|phase={phase}')
                       shown+=1
-                      if shown>=20: break
+                      if shown>=30: break
 
           DynamicChargeCadenceRuntime._enter_charge=oe; DynamicChargeCadenceRuntime._after_shot=oa
           DynamicChargeCadenceRuntime._finish_nonshot_phase=of; DynamicChargeCadenceRuntime._predict_next_boundary=op; DynamicChargeCadenceRuntime.sync=os
