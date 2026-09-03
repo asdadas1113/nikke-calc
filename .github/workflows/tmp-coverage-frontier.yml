@@ -13,39 +13,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect squad ammo runtime ownership
+      - name: Inspect squad ammo consumer semantics
         run: |
           PYTHONPATH=. python - <<'PY'
           from context import spec
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.score import _dynamic_charge_score_actors, _dynamic_rapid_reload_score_actors
-          from fast_engine.research.public_ranking_probe import _source_corpus
+          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
+          from fast_engine.engine.model import EnemyStaticProfile
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+          from fast_engine.engine.score import static_score_blockers
 
-          seen = set()
-          for members, source_name in _source_corpus():
-              if members in seen:
+          names = ['리틀 머메이드', '크라운', '라피 : 레드 후드', '미하라 : 본딩 체인', '헬름']
+          compiled = compile_moris_squad(spec.build_squad(names))
+          sink = SimpleDamageScoreSink(compiled, EnemyStaticProfile(defense=0.0, duration=180.0))
+          print('BLOCKERS', static_score_blockers(compiled))
+          for effect in compiled.effects:
+              if not any(rule.event_key == 'squad_ammo_consume' for rule in effect.triggers):
                   continue
-              seen.add(members)
-              compiled = compile_moris_squad(spec.build_squad(list(members)))
-              consumers = []
-              for effect in compiled.effects:
-                  if any(rule.event_key == 'squad_ammo_consume' for rule in effect.triggers):
-                      consumers.append((compiled.members[effect.actor].name, effect.name, effect.stat))
-              if not consumers:
-                  continue
-              charge = set(_dynamic_charge_score_actors(compiled))
-              rapid = set(_dynamic_rapid_reload_score_actors(compiled))
-              dynamic = charge | rapid
-              specials = [
-                  (compiled.members[e.actor].name, e.name, e.stat)
-                  for e in compiled.effects
-                  if (e.stat or '') in {'squad_ammo_consume_as', 'gauge_consume_as_ammo', 'max_ammo_infinite'}
-              ]
-              print('TEAM|', source_name)
-              print('  members=', members)
-              print('  consumers=', consumers)
-              print('  dynamic_charge=', [(i, compiled.members[i].name) for i in sorted(charge)])
-              print('  dynamic_rapid=', [(i, compiled.members[i].name) for i in sorted(rapid)])
-              print('  static=', [(i, compiled.members[i].name, compiled.members[i].weapon.get('fire_mode')) for i in range(5) if i not in dynamic])
-              print('  special_ammo=', specials)
+              print('EFFECT', compiled.members[effect.actor].name, repr(effect))
+              print('  dispatcher_static_executable=', TriggerDispatcher.is_executable_effect(effect))
+              print('  damage_sink_supports=', sink.supports(effect))
+              print('  damage_state_supports=', sink.supports_state_operation(effect))
           PY
