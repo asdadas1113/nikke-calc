@@ -8,6 +8,7 @@ from fast_engine.engine.burst_runtime import BurstRuntime
 from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.dispatcher import TriggerDispatcher
 from fast_engine.engine.model import EnemyStaticProfile
+from fast_engine.engine.score import StaticNormalAttackObserver
 
 from .public_ranking_probe import COMMON_CONFIG, COMMON_ENEMY, _source_corpus
 
@@ -59,6 +60,7 @@ def fast_trace(members: tuple[str, ...]):
     compiled = compile_moris_squad(squad)
     policy = compile_burst_policy(squad, compiled, dict(COMMON_CONFIG))
     runtime = BurstRuntime(compiled, policy, _enemy(policy.duration))
+    observer = StaticNormalAttackObserver(runtime, duration=policy.duration)
     crown = compiled.names.index(CROWN)
     hit_signals: list[float] = []
     stack_reach: list[float] = []
@@ -76,16 +78,16 @@ def fast_trace(members: tuple[str, ...]):
 
     TriggerDispatcher.dispatch = traced
     try:
-        runtime.run(duration=policy.duration)
+        result = runtime.run(duration=policy.duration, score_observer=observer)
     finally:
         TriggerDispatcher.dispatch = original
-    return compiled.members[crown].weapon, hit_signals, stack_reach
+    return compiled.members[crown].weapon, hit_signals, stack_reach, result.events_processed
 
 
 def main() -> None:
     members = _delta()
     mh, heals = moris_trace(members)
-    weapon, fh, stack = fast_trace(members)
+    weapon, fh, stack, events = fast_trace(members)
     print("members", members)
     print("weapon", weapon)
     print("moris_hit43_count", len(mh))
@@ -94,6 +96,7 @@ def main() -> None:
     print("fast_hit_signal_count", len(fh))
     print("fast_hit_signals_first30", fh[:30])
     print("fast_stack_reach", stack)
+    print("events_processed", events)
     if fh and mh:
         print("first_threshold_diff", fh[0] - mh[0])
 
