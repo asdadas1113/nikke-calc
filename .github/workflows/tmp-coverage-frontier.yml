@@ -9,54 +9,32 @@ permissions:
   contents: read
 
 jobs:
-  inspect-asuka:
+  find-asuka-control:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect Asuka state-end and enemy-stack dependency chain
+      - name: Find a low-blocker Asuka control squad
         run: |
           PYTHONPATH=. python - <<'PY'
-          from context import snapshot, spec
+          from context import spec
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
-          from fast_engine.engine.damage_events import compile_stack_count_damage_event
-          from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.engine.model import EnemyStaticProfile
+          from fast_engine.engine.score import static_score_blockers
 
-          members=tuple(snapshot.SQUADS['레이드_델타']['members'])
-          squad=compile_moris_squad(spec.build_squad(list(members)))
-          actor=members.index('아스카 : WILLE')
-          sink=SimpleDamageScoreSink(squad,EnemyStaticProfile(defense=0,duration=180))
-          print('MEMBERS',members)
-          print('ASUKA_EFFECTS')
-          for e in squad.effects:
-              if e.actor!=actor: continue
-              print({
-                  'id':e.effect_id,'name':e.name,'type':e.effect_type,'stat':e.stat,
-                  'value':e.value,'target':e.target,'mode':e.target_spec.mode.value,
-                  'duration':e.duration,'max_stack':e.max_stack,'params':dict(e.parameters),
-                  'triggers':[(r.mode.value,r.event_key,r.threshold,r.interval,r.raw) for r in e.triggers],
-                  'conditions':[(r.mode.value,r.key,r.value,r.raw) for r in e.condition_rules],
-                  'cap':e.capability.disposition.value,'blockers':tuple(e.capability.blockers),
-                  'dispatcher_can':TriggerDispatcher.is_executable_effect(e),
-                  'sink_support':sink.supports(e) if e.effect_type=='damage' else None,
-                  'stack_spec':repr(compile_stack_count_damage_event(e,squad.members[e.actor])) if e.effect_type=='damage' else None,
-              })
-
-          target=next(e for e in squad.effects if e.actor==actor and e.name=='섬멸' and e.effect_type=='damage')
-          ref=target.parameters.get('scaling_ref')
-          print('TARGET_REF',ref)
-          providers=[e for e in squad.effects if e.actor==actor and e.name==ref]
-          print('REF_PROVIDERS',[(e.effect_id,e.name,e.effect_type,e.stat,e.target,e.duration,e.max_stack,
-                                  [(r.mode.value,r.event_key,r.raw) for r in e.triggers],
-                                  TriggerDispatcher.is_executable_effect(e),
-                                  sink._enemy_named_stack_marker_shape_supported(e)) for e in providers])
-          state_name='섬멸 태세'
-          sources=[e for e in squad.effects if e.actor==actor and e.name==state_name]
-          print('STATE_END_SOURCES',[(e.effect_id,e.name,e.effect_type,e.stat,e.target,e.duration,e.max_stack,
-                                     [(r.mode.value,r.event_key,r.raw) for r in e.triggers],
-                                     TriggerDispatcher.is_executable_effect(e)) for e in sources])
+          candidates=[
+            ['라피 : 레드 후드','레드 후드','프리카','민트','아스카 : WILLE'],
+            ['미란다','브리드 : 사일런트 트랙','헬름','루주','아스카 : WILLE'],
+            ['미란다','브리드 : 사일런트 트랙','헬름','미하라 : 본딩 체인','아스카 : WILLE'],
+            ['라피 : 레드 후드','프리카','민트','퀀시 : 이스케이프 퀸','아스카 : WILLE'],
+          ]
+          for names in candidates:
+              try:
+                  squad=compile_moris_squad(spec.build_squad(names))
+                  blockers=static_score_blockers(squad)
+                  print('\nTEAM',tuple(names),'N',len(blockers))
+                  for b in blockers: print(' ',b)
+              except Exception as exc:
+                  print('\nTEAM_FAIL',tuple(names),type(exc).__name__,str(exc))
           PY
