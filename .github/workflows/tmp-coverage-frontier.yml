@@ -6,82 +6,54 @@ on:
       - fast-engine-phase2-20260901
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply-periodic-timing:
+  inspect-snow-periodic:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Apply periodic Moris timing fix
+      - name: Inspect Snow White periodic direct-state shape and blockers
         run: |
-          python - <<'PY'
-          from pathlib import Path
+          PYTHONPATH=. python - <<'PY'
+          from context import snapshot, spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
 
-          path = Path('fast_engine/engine/burst_runtime.py')
-          text = path.read_text(encoding='utf-8')
-          if 'from .frame_lattice import moris_observed_tick\n' not in text:
-              text = text.replace(
-                  'from .dispatcher import TriggerDispatcher\n',
-                  'from .dispatcher import TriggerDispatcher\nfrom .frame_lattice import moris_observed_tick\n',
-                  1,
-              )
-          old = 'class PeriodicTickToken:\n    effect_id: int\n    rule_index: int\n    interval: float\n'
-          new = 'class PeriodicTickToken:\n    effect_id: int\n    rule_index: int\n    interval: float\n    nominal_time: float\n'
-          if old in text:
-              text = text.replace(old, new, 1)
-          elif new not in text:
-              raise SystemExit('PeriodicTickToken anchor missing')
-
-          old = '''            self.scheduler.schedule(\n                interval,\n                EventKind.PERIODIC_TICK,\n                actor=effect.actor,\n                payload=PeriodicTickToken(\n                    effect.effect_id, indexed.rule_index, interval\n                ),\n            )\n'''
-          new = '''            observed = moris_observed_tick(interval, horizon=horizon)\n            if observed >= horizon:\n                continue\n            self.scheduler.schedule(\n                observed,\n                EventKind.PERIODIC_TICK,\n                actor=effect.actor,\n                payload=PeriodicTickToken(\n                    effect.effect_id, indexed.rule_index, interval, interval\n                ),\n            )\n'''
-          if old in text:
-              text = text.replace(old, new, 1)
-          elif new not in text:
-              raise SystemExit('initial periodic scheduling anchor missing')
-
-          old = '''                next_t = event.time + token.interval\n                if next_t < horizon:\n                    self.scheduler.schedule(\n                        next_t,\n                        EventKind.PERIODIC_TICK,\n                        actor=event.actor,\n                        payload=token,\n                    )\n'''
-          new = '''                next_nominal = token.nominal_time + token.interval\n                if next_nominal < horizon:\n                    next_t = moris_observed_tick(next_nominal, horizon=horizon)\n                    if next_t < horizon:\n                        self.scheduler.schedule(\n                            next_t,\n                            EventKind.PERIODIC_TICK,\n                            actor=event.actor,\n                            payload=PeriodicTickToken(\n                                token.effect_id, token.rule_index, token.interval, next_nominal\n                            ),\n                        )\n'''
-          if old in text:
-              text = text.replace(old, new, 1)
-          elif new not in text:
-              raise SystemExit('recurring periodic scheduling anchor missing')
-          path.write_text(text, encoding='utf-8')
-
-          test = Path('fast_engine/tests/test_periodic_runtime.py')
-          t = test.read_text(encoding='utf-8')
-          if 'from fast_engine.engine.frame_lattice import moris_observed_tick\n' not in t:
-              t = t.replace(
-                  'from fast_engine.engine.dispatcher import TriggerDispatcher\n',
-                  'from fast_engine.engine.dispatcher import TriggerDispatcher\nfrom fast_engine.engine.frame_lattice import moris_observed_tick\n',
-                  1,
-              )
-          marker = '    def test_auxiliary_periodic_atk_does_not_overclaim_fast_capability(self):\n'
-          method = '''    def test_periodic_deadlines_use_nominal_moris_outer_ticks_without_drift(self):\n        duration = 70.0\n        moris_squad, compiled = self._compiled(favorite_stage=3)\n        policy = compile_burst_policy(moris_squad, compiled, {"duration": duration})\n        target = self._milk_periodic(compiled)\n        seen: list[float] = []\n        original = TriggerDispatcher.dispatch_periodic\n\n        def traced(dispatcher, effect_id, rule_index, *, time, context):\n            if effect_id == target.effect_id:\n                seen.append(time)\n            return original(\n                dispatcher, effect_id, rule_index, time=time, context=context\n            )\n\n        with patch.object(TriggerDispatcher, "dispatch_periodic", new=traced):\n            BurstRuntime(compiled, policy).run(duration=duration)\n\n        expected = [\n            moris_observed_tick(nominal, horizon=duration)\n            for nominal in (20.0, 40.0, 60.0)\n        ]\n        self.assertEqual(seen, expected)\n\n'''
-          if 'def test_periodic_deadlines_use_nominal_moris_outer_ticks_without_drift' not in t:
-              if marker not in t:
-                  raise SystemExit('periodic test insertion anchor missing')
-              t = t.replace(marker, method + marker, 1)
-          test.write_text(t, encoding='utf-8')
+          seen_members=set()
+          for source_name, case in snapshot.SQUADS.items():
+              members=tuple(str(x) for x in case.get('members', ()))
+              if len(members)!=5 or '스노우 화이트' not in members or str(source_name).startswith('지그_'):
+                  continue
+              if members in seen_members:
+                  continue
+              seen_members.add(members)
+              raw=spec.build_squad(list(members))
+              squad=compile_moris_squad(raw)
+              actor=members.index('스노우 화이트')
+              print('\nTEAM', source_name, members)
+              for effect in squad.effects:
+                  if effect.actor != actor:
+                      continue
+                  if any(rule.is_periodic for rule in effect.triggers):
+                      print('PERIODIC_EFFECT', {
+                          'id':effect.effect_id,
+                          'name':effect.name,
+                          'type':effect.effect_type,
+                          'stat':effect.stat,
+                          'value':effect.value,
+                          'target':effect.target,
+                          'target_mode':effect.target_spec.mode.value,
+                          'duration':effect.duration,
+                          'max_stack':effect.max_stack,
+                          'parameters':dict(effect.parameters),
+                          'conditions':[(r.mode.value,r.key,r.value) for r in effect.condition_rules],
+                          'triggers':[(r.mode.value,r.event_key,r.interval,r.raw) for r in effect.triggers],
+                          'capability':effect.capability.disposition.value,
+                          'blockers':tuple(effect.capability.blockers),
+                      })
+              print('TEAM_BLOCKERS', static_score_blockers(squad))
           PY
-      - name: Run focused regressions
-        run: |
-          PYTHONPATH=. python -m unittest fast_engine.tests.test_periodic_runtime fast_engine.tests.test_damage_moris_frame_timing -v
-          python -m py_compile fast_engine/engine/burst_runtime.py fast_engine/tests/test_periodic_runtime.py
-          git diff --check
-      - name: Commit verified periodic timing fix
-        run: |
-          if git diff --quiet -- fast_engine/engine/burst_runtime.py fast_engine/tests/test_periodic_runtime.py; then
-            echo 'No production diff to commit.'
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add fast_engine/engine/burst_runtime.py fast_engine/tests/test_periodic_runtime.py
-          git commit -m 'fix: observe periodic deadlines on Moris outer ticks'
-          git push origin HEAD:fast-engine-phase2-20260901
