@@ -9,51 +9,51 @@ permissions:
   contents: read
 
 jobs:
-  inspect-snow-periodic:
+  blocker-frontier:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect Snow White periodic direct-state shape and blockers
+      - name: Rank current public blocker frontier
         run: |
           PYTHONPATH=. python - <<'PY'
+          from collections import Counter, defaultdict
           from context import snapshot, spec
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.score import static_score_blockers
 
-          seen_members=set()
+          rows=[]
+          seen=set()
           for source_name, case in snapshot.SQUADS.items():
+              if str(source_name).startswith('지그_'):
+                  continue
               members=tuple(str(x) for x in case.get('members', ()))
-              if len(members)!=5 or '스노우 화이트' not in members or str(source_name).startswith('지그_'):
+              if len(members)!=5 or any(x.startswith('test_') for x in members):
                   continue
-              if members in seen_members:
+              if members in seen:
                   continue
-              seen_members.add(members)
-              raw=spec.build_squad(list(members))
-              squad=compile_moris_squad(raw)
-              actor=members.index('스노우 화이트')
-              print('\nTEAM', source_name, members)
-              for effect in squad.effects:
-                  if effect.actor != actor:
-                      continue
-                  if any(rule.is_periodic for rule in effect.triggers):
-                      print('PERIODIC_EFFECT', {
-                          'id':effect.effect_id,
-                          'name':effect.name,
-                          'type':effect.effect_type,
-                          'stat':effect.stat,
-                          'value':effect.value,
-                          'target':effect.target,
-                          'target_mode':effect.target_spec.mode.value,
-                          'duration':effect.duration,
-                          'max_stack':effect.max_stack,
-                          'parameters':dict(effect.parameters),
-                          'conditions':[(r.mode.value,r.key,r.value) for r in effect.condition_rules],
-                          'triggers':[(r.mode.value,r.event_key,r.interval,r.raw) for r in effect.triggers],
-                          'capability':effect.capability.disposition.value,
-                          'blockers':tuple(effect.capability.blockers),
-                      })
-              print('TEAM_BLOCKERS', static_score_blockers(squad))
+              seen.add(members)
+              squad=compile_moris_squad(spec.build_squad(list(members)))
+              blockers=static_score_blockers(squad)
+              rows.append((len(blockers),str(source_name),members,blockers))
+
+          print('UNIQUE',len(rows),'ZERO',sum(n==0 for n,*_ in rows))
+          for n,name,members,blockers in sorted(rows,key=lambda x:(x[0],x[1])):
+              print('TEAM',n,name,members)
+              for b in blockers:
+                  print('  ',b)
+
+          exact=Counter(b for _,_,_,bs in rows for b in bs)
+          family=Counter(b.split(':',1)[0] for _,_,_,bs in rows for b in bs)
+          print('\nFAMILY_COUNTS')
+          for k,v in family.most_common(): print(v,k)
+          print('\nEXACT_COUNTS_TOP')
+          for k,v in exact.most_common(40): print(v,k)
+
+          near=[r for r in rows if 0 < r[0] <= 4]
+          print('\nNEAR_CERTIFIED',len(near))
+          for n,name,members,blockers in sorted(near,key=lambda x:(x[0],x[1])):
+              print(n,name,blockers)
           PY
