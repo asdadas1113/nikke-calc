@@ -1,0 +1,90 @@
+name: tmp-coverage-frontier
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Cluster unsupported direct-damage delivery roots
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          from collections import defaultdict
+          from context import spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.damage_policy import (
+              DIRECT_DAMAGE_STATE_STATS,
+              _one_shot_lifetime_supported,
+              _target_supported,
+              _timing_supported,
+              _SAFE_CONDITIONS,
+              is_direct_damage_buff_runtime_supported,
+          )
+          from fast_engine.engine.score import (
+              _direct_damage_buff_score_supported,
+              _direct_normal_effect_needs_score_support,
+              _direct_skill_state_needs_score_support,
+              _is_patternless_unreachable,
+              _uses_shield_runtime_semantics,
+              _shield_runtime_dependency_score_safe,
+              _named_buff_event_dependency_score_safe,
+          )
+          from fast_engine.research.public_ranking_probe import _source_corpus
+
+          def reasons(squad, e):
+              out=[]
+              if not _one_shot_lifetime_supported(e):
+                  out.append('bullet_lifetime_shape')
+              if not _target_supported(e.target_spec):
+                  out.append('target:'+e.target_spec.mode.value)
+              unsafe_cond=sorted({r.mode.value for r in e.condition_rules if r.mode not in _SAFE_CONDITIONS})
+              if unsafe_cond:
+                  out.append('conditions:'+','.join(unsafe_cond))
+              unsafe_timing=sorted({(r.event_key or '?')+':'+r.mode.value for r in e.triggers if not _timing_supported(r)})
+              if not e.triggers:
+                  out.append('no_trigger')
+              elif unsafe_timing:
+                  out.append('timing:'+','.join(unsafe_timing))
+              if is_direct_damage_buff_runtime_supported(e):
+                  if _uses_shield_runtime_semantics(e) and not _shield_runtime_dependency_score_safe(squad,e):
+                      out.append('shield_dependency')
+                  if not _named_buff_event_dependency_score_safe(squad,e):
+                      out.append('named_event_dependency')
+                  if not out:
+                      out.append('score_runtime_dependency')
+              return tuple(out) or ('unknown',)
+
+          seen=set(); groups=defaultdict(lambda:{'teams':set(),'effects':set(),'rows':[]})
+          for members, source_name in _source_corpus():
+              if members in seen: continue
+              seen.add(members)
+              squad=compile_moris_squad(spec.build_squad(list(members)))
+              for e in squad.effects:
+                  if e.effect_type!='buff' or (e.stat or '') not in DIRECT_DAMAGE_STATE_STATS or _is_patternless_unreachable(e):
+                      continue
+                  need_normal=_direct_normal_effect_needs_score_support(e)
+                  need_skill=_direct_skill_state_needs_score_support(e)
+                  if not (need_normal or need_skill): continue
+                  if _direct_damage_buff_score_supported(squad,e): continue
+                  rs=reasons(squad,e)
+                  g=groups[rs]
+                  g['teams'].add(source_name)
+                  label=f"{squad.members[e.actor].name}|{e.name}|{e.stat}"
+                  g['effects'].add(label)
+                  g['rows'].append((source_name,label,e))
+
+          for rs,g in sorted(groups.items(), key=lambda kv:(-len(kv[1]['teams']),kv[0])):
+              print(f"GROUP|teams={len(g['teams'])}|effects={len(g['effects'])}|reasons={rs}")
+              print(' teams=',sorted(g['teams']))
+              for label in sorted(g['effects']): print(' effect=',label)
+              # print one representative compiled shape for root-cause inspection
+              e=g['rows'][0][2]
+              print(' repr=',repr(e))
+          PY
