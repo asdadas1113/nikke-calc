@@ -13,26 +13,31 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Trace Moris stage buff activations
+      - name: Trace Moris stage buff activation path
         shell: bash
         run: |
           python - <<'PY'
           from calculator.timeline import DEFAULT_ENEMY, simulate
+          from calculator.buff_manager import BuffManager
           from context import spec
 
           names=["라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸"]
           squad=spec.build_squad(names)
           cfg=spec.build_config(squad,{'duration':130.0,'first_burst_time':3.0,'rng_mode':'expected'})
           enemy=dict(DEFAULT_ENEMY); enemy['def']=55000.0; enemy['code']='작열'; enemy['core_px']=10.0
-          r=simulate(squad,config=cfg,enemy=enemy,seed=42,verbose=False)
-          print('RESULT_ATTRS',sorted(k for k in vars(r) if not k.startswith('_')))
-          for attr in ('buff_events','events','buffs'):
-              rows=getattr(r,attr,None)
-              if rows is None: continue
-              print('ATTR',attr,'len',len(rows))
-              for row in rows:
-                  s=str(row)
-                  t=getattr(row,'t',getattr(row,'time',None))
-                  if t is not None and 120.0<=float(t)<=130.0 and ('무대, 시작할게. 3' in s or '무대, 시작할게.' in s):
-                      print('ROW',row)
+
+          orig=BuffManager._activate
+          def wrapped(self,eff,caster,t,suppress_event=False):
+              watch=eff.get('name')=='무대, 시작할게. 3' and 120.0<=float(t)<=130.0
+              if watch:
+                  before=[(ab.caster,ab.target_chars,ab.activated_at,ab.expires_at,ab.stack) for ab in self._active if ab.effect is eff]
+                  print('ACTIVATE_BEFORE',round(float(t),9),'caster',caster,'before',before)
+              out=orig(self,eff,caster,t,suppress_event=suppress_event)
+              if watch:
+                  after=[(ab.caster,ab.target_chars,ab.activated_at,ab.expires_at,ab.stack) for ab in self._active if ab.effect is eff]
+                  print('ACTIVATE_AFTER',round(float(t),9),'after',after)
+              return out
+          BuffManager._activate=wrapped
+          simulate(squad,config=cfg,enemy=enemy,seed=42,verbose=False)
+          BuffManager._activate=orig
           PY
