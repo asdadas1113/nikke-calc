@@ -13,11 +13,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Rerun ranking stress grid after ammo clamp
+      - name: Fast-only post-clamp ranking grid
         shell: bash
         run: |
           python - <<'PY'
-          from calculator.timeline import DEFAULT_ENEMY, simulate
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.compiler import compile_moris_squad
@@ -30,40 +29,30 @@ jobs:
           CONFIG={"duration":DURATION,"first_burst_time":3.0,"rng_mode":"expected"}
 
           def prepare(members):
-              squad=spec.build_squad(list(members))
-              config=spec.build_config(squad,dict(CONFIG))
-              compiled=compile_moris_squad(squad)
+              squad=spec.build_squad(list(members)); compiled=compile_moris_squad(squad)
               blockers=static_score_blockers(compiled)
               if blockers: raise RuntimeError((members,blockers))
-              policy=compile_burst_policy(squad,compiled,dict(CONFIG))
-              return squad,config,compiled,policy
-
+              return compiled,compile_burst_policy(squad,compiled,dict(CONFIG))
           prepared={"MM":prepare(MM),"RHQ":prepare(RHQ)}
-          cache={}
-          def score(team,defense,core):
-              key=(team,float(defense),float(core))
-              if key in cache: return cache[key]
-              squad,config,compiled,policy=prepared[team]
-              enemy=dict(DEFAULT_ENEMY); enemy["def"]=float(defense); enemy["code"]="작열"; enemy["core_px"]=float(core)
+
+          def total(team,defense,core):
+              compiled,policy=prepared[team]
               profile=EnemyStaticProfile(defense=float(defense),element="작열",core_uptime=1.0 if core>0 else 0.0,core_px=float(core),duration=DURATION)
-              moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=False)
-              m_total=sum(float(v) for v in moris.char_total.values())
-              fast=score_static_squad(compiled,policy,profile)
-              f_total=sum(float(v) for v in fast.char_total)
-              cache[key]=(m_total,f_total)
-              return cache[key]
+              result=score_static_squad(compiled,policy,profile)
+              return sum(float(v) for v in result.char_total)
 
-          def row(axis,value,defense,core):
-              mm_m,mm_f=score("MM",defense,core)
-              rh_m,rh_f=score("RHQ",defense,core)
-              m_margin=(mm_m-rh_m)/max(mm_m,rh_m)
-              f_margin=(mm_f-rh_f)/max(mm_f,rh_f)
-              m_order="MM" if m_margin>0 else "RHQ" if m_margin<0 else "TIE"
-              f_order="MM" if f_margin>0 else "RHQ" if f_margin<0 else "TIE"
-              print(f"GRID|axis={axis}|value={value}|def={defense}|core={core}|m_mm={mm_m:.3f}|m_rhq={rh_m:.3f}|f_mm={mm_f:.3f}|f_rhq={rh_f:.3f}|m_margin={m_margin:.8f}|f_margin={f_margin:.8f}|m_order={m_order}|f_order={f_order}|agree={m_order==f_order}")
+          mismatches=[]
+          def row(axis,value,defense,core,expected):
+              mm=total("MM",defense,core); rhq=total("RHQ",defense,core)
+              margin=(mm-rhq)/max(mm,rhq)
+              order="MM" if margin>0 else "RHQ" if margin<0 else "TIE"
+              agree=order==expected
+              if not agree: mismatches.append((axis,value,expected,order,margin))
+              print(f"FASTGRID|axis={axis}|value={value}|def={defense}|core={core}|mm={mm:.3f}|rhq={rhq:.3f}|margin={margin:.8f}|expected_moris={expected}|fast_order={order}|agree={agree}")
 
-          for defense in (0,20000,31784,40000,50000,55000,60000,65000,70000,80000,90000):
-              row("def",defense,defense,10)
-          for core in (0,10,20,30,40,52):
-              row("core",core,60000,core)
+          for defense,expected in ((0,"MM"),(20000,"MM"),(31784,"MM"),(40000,"MM"),(50000,"MM"),(55000,"MM"),(60000,"RHQ"),(65000,"RHQ"),(70000,"RHQ"),(80000,"RHQ"),(90000,"RHQ")):
+              row("def",defense,defense,10,expected)
+          for core,expected in ((0,"MM"),(10,"RHQ"),(20,"RHQ"),(30,"RHQ"),(40,"RHQ"),(52,"RHQ")):
+              row("core",core,60000,core,expected)
+          print(f"SUMMARY|points=17|mismatches={len(mismatches)}|rows={mismatches}")
           PY
