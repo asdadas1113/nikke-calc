@@ -13,15 +13,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Measure 180s burst-frame impact
+      - name: Partition Quency normal damage by burst state
         shell: bash
         run: |
           python - <<'PY'
-          from math import ceil
-          from calculator.timeline import DEFAULT_ENEMY, DT, simulate
+          from collections import defaultdict
+          from calculator.timeline import DEFAULT_ENEMY, simulate
           from calculator.sim_result import _is_normal
           from context import spec
-          from fast_engine.engine.burst import BurstMachine, compile_burst_policy
+          from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
@@ -38,28 +38,46 @@ jobs:
           enemy=dict(DEFAULT_ENEMY); enemy["def"]=55000.0; enemy["code"]="작열"; enemy["core_px"]=10.0
           profile=EnemyStaticProfile(defense=55000.0,element="작열",core_uptime=1.0,core_px=10.0,duration=DURATION)
 
-          moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=False)
-          m_normal=sum(float(h.damage) for h in moris.hits if h.caster==TARGET and _is_normal(h))
-          print(f"M_NORMAL|{m_normal:.3f}")
+          moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=True)
+          mstarts=[float(r.t) for r in moris.log.burst_log if r.event=="full_burst 시작"]
+          mends=[float(r.t) for r in moris.log.burst_log if r.event=="full_burst 종료"]
+          mcaster=[]
+          stage3=[r for r in moris.log.burst_log if r.event=="stage:3 사용"]
+          for r in stage3: mcaster.append(getattr(r,'caster',''))
 
-          def run_fast(label):
-              sink=SimpleDamageScoreSink(compiled,profile)
-              runtime=BurstRuntime(compiled,policy,profile,damage_sink=sink)
-              obs=StaticNormalAttackObserver(runtime,duration=DURATION)
-              rr=runtime.run(duration=DURATION,score_observer=obs)
-              res=obs.finish(events_processed=rr.events_processed)
-              val=float(res.char_total[idx])
-              print(f"RESULT|set={label}|normal={val:.3f}|err={val/m_normal-1:.8f}|shots={res.shot_blocks[idx].shots if hasattr(res,'shot_blocks') else 'na'}")
-              print(f"STARTS|set={label}|"+",".join(f"{x:.6f}" for x in rr.full_burst_starts))
-              return val
+          sink=SimpleDamageScoreSink(compiled,profile)
+          runtime=BurstRuntime(compiled,policy,profile,damage_sink=sink)
+          class O(StaticNormalAttackObserver):
+              def __init__(self,*a,**k): self.rows=[]; super().__init__(*a,**k)
+              def _score_shots(self,actor,count,*,eval_time):
+                  before=float(self.char_total[actor])
+                  out=super()._score_shots(actor,count,eval_time=eval_time)
+                  if actor==idx:
+                      self.rows.append((float(eval_time),int(count),float(self.char_total[actor])-before))
+                  return out
+          obs=O(runtime,duration=DURATION); rr=runtime.run(duration=DURATION,score_observer=obs); obs.finish(events_processed=rr.events_processed)
+          fcaster=[compiled.names[a] for t,a,s in rr.casts if s=='3']
 
-          base=run_fast("base")
-          orig=BurstMachine._schedule
-          def framed_schedule(self,scheduler,time,kind,*,stage=None):
-              t=float(time)
-              framed=ceil((t-1e-9)/DT)*DT
-              return orig(self,scheduler,framed,kind,stage=stage)
-          BurstMachine._schedule=framed_schedule
-          framed=run_fast("burst_frame")
-          print(f"DELTA|base_err={base/m_normal-1:.8f}|frame_err={framed/m_normal-1:.8f}")
+          def classify(t,starts,ends,casters):
+              for i,(s,e) in enumerate(zip(starts,ends)):
+                  if s-1e-9 <= t < e-1e-9:
+                      return 'FB_Q' if i < len(casters) and casters[i]==TARGET else 'FB_OTHER'
+              return 'OUT'
+
+          mrows=defaultdict(lambda:[0,0.0])
+          by_time=defaultdict(float)
+          for h in moris.hits:
+              if h.caster==TARGET and _is_normal(h): by_time[round(float(h.t),9)]+=float(h.damage)
+          for t,d in by_time.items():
+              k=classify(t,mstarts,mends,mcaster); mrows[k][0]+=1; mrows[k][1]+=d
+
+          frows=defaultdict(lambda:[0,0.0])
+          for t,c,d in obs.rows:
+              k=classify(t,rr.full_burst_starts,rr.full_burst_ends,fcaster); frows[k][0]+=c; frows[k][1]+=d
+
+          for k in ('OUT','FB_OTHER','FB_Q'):
+              mc,md=mrows[k]; fc,fd=frows[k]
+              print(f"PART|{k}|m_shots={mc}|f_shots={fc}|delta={fc-mc}|m_dmg={md:.3f}|f_dmg={fd:.3f}|dmg_err={fd/md-1:.8f}|m_avg={md/mc:.3f}|f_avg={fd/fc:.3f}|avg_err={(fd/fc)/(md/mc)-1:.8f}")
+          print("M_CASTERS|"+"|".join(mcaster))
+          print("F_CASTERS|"+"|".join(fcaster))
           PY
