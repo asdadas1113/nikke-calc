@@ -24,13 +24,13 @@ def main() -> None:
     runtime = ROOT / "fast_engine" / "engine" / "burst_runtime.py"
     _replace_once(
         runtime,
-        '''        self.squad = squad\n        self.enemy = enemy or EnemyStaticProfile(duration=policy.duration)\n        self.policy = policy\n''',
-        '''        self.squad = squad\n        self.enemy = enemy or EnemyStaticProfile(duration=policy.duration)\n        # `core_hit` as a condition on raw full_charge_hit is a target-core\n        # presence predicate in Moris. The historical aggregate Fast enemy\n        # profile (core_uptime/rate without core_px) cannot reconstruct that\n        # per-shot boolean, so do not silently guess.\n        if self.enemy.core_px is None and any(\n            any(rule.mode is ConditionMode.CORE_HIT for rule in effect.condition_rules)\n            and any(rule.event_key == "full_charge_hit" for rule in effect.triggers)\n            and self.dispatcher_safe_core_presence_shape(effect)\n            for effect in squad.effects\n        ):\n            raise NotImplementedError(\n                "Fast full_charge_hit core-presence condition requires explicit enemy.core_px"\n            )\n        self.policy = policy\n''',
+        '''from .damage_state import DamageTermResolver\nfrom .dispatcher import TriggerDispatcher\n''',
+        '''from .damage_policy import is_direct_damage_buff_runtime_supported\nfrom .damage_state import DamageTermResolver\nfrom .dispatcher import TriggerDispatcher\n''',
     )
     _replace_once(
         runtime,
-        '''    def _broadcast(self, time: float, event_key: str) -> None:\n''',
-        '''    @staticmethod\n    def dispatcher_safe_core_presence_shape(effect) -> bool:\n        # Keep this guard in lockstep with damage_policy's narrow executable\n        # shape without importing the dispatcher before runtime construction.\n        return (\n            effect.effect_type == "buff"\n            and effect.target_spec.mode.value == "self"\n            and not effect.parameters\n            and len(effect.condition_rules) == 1\n            and effect.condition_rules[0].mode is ConditionMode.CORE_HIT\n            and len(effect.triggers) == 1\n            and effect.triggers[0].mode is TriggerMode.EVENT\n            and effect.triggers[0].event_key == "full_charge_hit"\n        )\n\n    def _broadcast(self, time: float, event_key: str) -> None:\n''',
+        '''        self.squad = squad\n        self.enemy = enemy or EnemyStaticProfile(duration=policy.duration)\n        self.policy = policy\n''',
+        '''        self.squad = squad\n        self.enemy = enemy or EnemyStaticProfile(duration=policy.duration)\n        # `core_hit` as a condition on raw full_charge_hit is a target-core\n        # presence predicate in Moris. The historical aggregate Fast enemy\n        # profile (core_uptime/rate without core_px) cannot reconstruct that\n        # per-shot boolean, so do not silently guess.\n        if self.enemy.core_px is None and any(\n            is_direct_damage_buff_runtime_supported(effect)\n            and any(rule.mode is ConditionMode.CORE_HIT for rule in effect.condition_rules)\n            for effect in squad.effects\n        ):\n            raise NotImplementedError(\n                "Fast full_charge_hit core-presence condition requires explicit enemy.core_px"\n            )\n        self.policy = policy\n''',
     )
     _replace_once(
         runtime,
