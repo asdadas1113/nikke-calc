@@ -13,14 +13,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Combine burst and charge cadence trials
+      - name: Decompose MM residual under combined cadence trial
         shell: bash
         run: |
           python - <<'PY'
-          from bisect import bisect_left, bisect_right
-          from collections import defaultdict
-          from dataclasses import replace
-
+          from bisect import bisect_left
           from calculator.timeline import DEFAULT_ENEMY, DT, simulate
           from calculator.sim_result import _is_normal
           from context import spec
@@ -29,189 +26,73 @@ jobs:
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import StaticNormalAttackObserver, score_static_squad, static_score_blockers
+          from fast_engine.engine.score import StaticNormalAttackObserver, _dynamic_charge_score_actors, static_score_blockers
           from fast_engine.engine.weapon import DynamicChargeCadenceRuntime
 
-          MM=("미란다","브리드 : 사일런트 트랙","헬름","루주","미하라 : 본딩 체인")
-          RHQ=("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸")
-          TARGETS=("레드 후드","프리카","민트")
-          D=180.0
-          CFG={'duration':D,'first_burst_time':3.0,'rng_mode':'expected'}
-          profile=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=D)
+          NAMES=("미란다","브리드 : 사일런트 트랙","헬름","루주","미하라 : 본딩 체인")
+          D=180.0; CFG={'duration':D,'first_burst_time':3.0,'rng_mode':'expected'}
           enemy=dict(DEFAULT_ENEMY); enemy['def']=55000.0; enemy['code']='작열'; enemy['core_px']=10.0
+          profile=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=D)
+          squad=spec.build_squad(list(NAMES)); cp=compile_moris_squad(squad)
+          if static_score_blockers(cp): raise RuntimeError(static_score_blockers(cp))
+          policy=compile_burst_policy(squad,cp,dict(CFG))
+          print('DYNAMIC_CHARGE',[(a,cp.names[a],cp.members[a].weapon.get('weapon_type')) for a in _dynamic_charge_score_actors(cp)])
+          print('WEAPON_CHANGES',[(e.actor,cp.names[e.actor],e.name) for e in cp.effects if e.effect_type=='weapon_change'])
 
-          # Moris repeated-add outer-frame lattice.
+          moris=simulate(squad,config=spec.build_config(squad,dict(CFG)),enemy=enemy,seed=42,verbose=False)
+          mnormal={n:0.0 for n in NAMES}
+          for h in moris.hits:
+              if h.caster in mnormal and _is_normal(h): mnormal[h.caster]+=float(h.damage)
+
           ticks=[]; t=0.0
-          while t<=D+1.0:
-              ticks.append(t); t+=DT
-          def charge_tick(deadline):
-              i=bisect_left(ticks,float(deadline))
-              return ticks[i] if i<len(ticks) else float(deadline)
-          def next_tick(x):
-              i=bisect_right(ticks,float(x))
-              return ticks[i] if i<len(ticks) else float(x)+DT
-          def burst_tick(deadline):
-              # BurstController tests all deadlines as t >= deadline - 1e-9.
-              i=bisect_left(ticks,float(deadline)-1e-9)
-              return ticks[i] if i<len(ticks) else float(deadline)
+          while t<=D+1.0: ticks.append(t); t+=DT
+          def ct(x):
+              i=bisect_left(ticks,float(x)); return ticks[i] if i<len(ticks) else float(x)
+          def bt(x):
+              i=bisect_left(ticks,float(x)-1e-9); return ticks[i] if i<len(ticks) else float(x)
 
-          # Burst event boundaries: same tick observation semantics as Moris BurstController.
-          orig_burst_schedule=BurstMachine._schedule
-          def burst_schedule(self,scheduler,time,kind,*,stage=None):
-              return orig_burst_schedule(self,scheduler,burst_tick(time),kind,stage=stage)
-          BurstMachine._schedule=burst_schedule
+          obsched=BurstMachine._schedule
+          def bs(self,scheduler,time,kind,*,stage=None): return obsched(self,scheduler,bt(time),kind,stage=stage)
+          BurstMachine._schedule=bs
 
-          # Dynamic charge trial: repeated-add phase boundaries + inherited weapon-change ammo,
-          # with charge deadline recalculation only when charge-speed/time actually changes.
-          oe=DynamicChargeCadenceRuntime._enter_charge
-          oa=DynamicChargeCadenceRuntime._after_shot
-          of=DynamicChargeCadenceRuntime._finish_nonshot_phase
-          op=DynamicChargeCadenceRuntime._predict_next_boundary
-          os=DynamicChargeCadenceRuntime.sync
-          pending={}
-          def key(self,a): return (id(self),int(a))
-          def pe(self,st,at,now):
-              oe(self,st,at,now)
-              st.phase_end=charge_tick(st.phase_end)
-          def pa(self,st,shot):
-              oa(self,st,shot)
-              if pending.get(key(self,st.actor),False) and st.ammo<=0 and st.phase=='post_fire_reload':
-                  st.phase='post_fire'
-              st.phase_end=charge_tick(st.phase_end)
-          def pf(self,st,when,now):
-              k=key(self,st.actor)
-              if st.phase=='post_fire' and pending.get(k,False) and st.ammo<=0:
-                  st.phase='post_reload'; st.phase_end=next_tick(when); return
-              if st.phase=='post_reload' and pending.get(k,False):
-                  st.ammo=self._full_ammo(st.actor,now); pending[k]=False
-                  pe(self,st,when,now); return
-              before=st.phase
-              of(self,st,when,now)
-              if before=='post_fire_reload' and st.phase=='reloading':
-                  st.phase_end=charge_tick(st.phase_end)
-              elif st.phase in {'charging','post_reload'}:
-                  st.phase_end=charge_tick(st.phase_end)
-          def pp(self,a,now):
-              st=replace(self._states[a]); pend=bool(pending.get(key(self,a),False))
-              while st.phase_end<=self.duration+1e-9:
-                  when=st.phase_end
-                  if st.phase=='charging':
-                      n=st.full_charge_count+1
-                      if self._shot_is_boundary(a,n): return when,n
-                      oa(self,st,when)
-                      if pend and st.ammo<=0 and st.phase=='post_fire_reload': st.phase='post_fire'
-                      st.phase_end=charge_tick(st.phase_end); continue
-                  if st.phase=='post_fire' and pend and st.ammo<=0:
-                      st.phase='post_reload'; st.phase_end=next_tick(when); continue
-                  if st.phase=='post_reload' and pend:
-                      st.ammo=self._full_ammo(a,now); pend=False
-                      oe(self,st,when,now); st.phase_end=charge_tick(st.phase_end); continue
-                  before=st.phase
-                  of(self,st,when,now)
-                  if before=='post_fire_reload' and st.phase=='reloading':
-                      st.phase_end=charge_tick(st.phase_end)
-                  elif st.phase=='charging':
-                      st.phase_end=charge_tick(st.phase_end)
-              return None
-          def psy(self,now):
+          oe=DynamicChargeCadenceRuntime._enter_charge; oa=DynamicChargeCadenceRuntime._after_shot
+          of=DynamicChargeCadenceRuntime._finish_nonshot_phase; os=DynamicChargeCadenceRuntime.sync
+          def pe(self,st,at,now): oe(self,st,at,now); st.phase_end=ct(st.phase_end)
+          def pa(self,st,shot): oa(self,st,shot); st.phase_end=ct(st.phase_end)
+          def pf(self,st,when,now): of(self,st,when,now); st.phase_end=ct(st.phase_end)
+          def ps(self,now):
               for a in self.actors:
-                  st=self._states[a]; k=key(self,a)
-                  while st.phase!='charging' and st.phase_end<=now+1e-9:
-                      pf(self,st,st.phase_end,now)
+                  st=self._states[a]
+                  while st.phase!='charging' and st.phase_end<=now+1e-9: pf(self,st,st.phase_end,now)
                   wc=self._weapon_change_id(a,now); wc_changed=wc!=st.weapon_change_id
                   if wc_changed:
-                      entering=wc is not None
-                      inherited=entering and st.phase in {'charging','post_fire'} and st.ammo>0
-                      st.weapon_change_id=wc; self._invalidate(st)
-                      if inherited:
-                          pending[k]=True
-                      else:
-                          pending[k]=False; st.ammo=self._full_ammo(a,now)
+                      entering=wc is not None; st.weapon_change_id=wc; self._invalidate(st); st.ammo=self._full_ammo(a,now)
                       if entering and st.phase=='charging':
-                          st.charge_start=float(now)
-                          st.phase_end=charge_tick(float(now)+self._effective_charge_time(a,now))
-                      elif st.phase in {'post_fire_reload','reloading','post_reload'}:
-                          pe(self,st,float(now),float(now))
-                      elif not entering and st.phase=='charging':
-                          st.phase_end=charge_tick(st.charge_start+self._effective_charge_time(a,now))
+                          st.charge_start=float(now); st.phase_end=ct(float(now)+self._effective_charge_time(a,now))
+                      elif st.phase in {'post_fire_reload','reloading','post_reload'}: pe(self,st,float(now),float(now))
+                      elif not entering and st.phase=='charging': st.phase_end=ct(st.charge_start+self._effective_charge_time(a,now))
                   old=st.signature; new=self._signature(a,now)
                   if new!=old:
                       st.signature=new
                       if not wc_changed:
                           self._invalidate(st)
                           if st.phase=='charging' and (new[4],new[5])!=(old[4],old[5]):
-                              st.phase_end=charge_tick(st.charge_start+self._effective_charge_time(a,now))
+                              st.phase_end=ct(st.charge_start+self._effective_charge_time(a,now))
                   if st.scheduled_time is None: self._plan(a,now)
                   self.state.set_ammo(a,st.ammo)
-          DynamicChargeCadenceRuntime._enter_charge=pe
-          DynamicChargeCadenceRuntime._after_shot=pa
-          DynamicChargeCadenceRuntime._finish_nonshot_phase=pf
-          DynamicChargeCadenceRuntime._predict_next_boundary=pp
-          DynamicChargeCadenceRuntime.sync=psy
+          DynamicChargeCadenceRuntime._enter_charge=pe; DynamicChargeCadenceRuntime._after_shot=pa
+          DynamicChargeCadenceRuntime._finish_nonshot_phase=pf; DynamicChargeCadenceRuntime.sync=ps
 
-          def build(names):
-              squad=spec.build_squad(list(names)); cp=compile_moris_squad(squad)
-              if static_score_blockers(cp): raise RuntimeError(static_score_blockers(cp))
-              policy=compile_burst_policy(squad,cp,dict(CFG))
-              return squad,cp,policy
-
-          def moris_score(names):
-              squad,cp,policy=build(names)
-              r=simulate(squad,config=spec.build_config(squad,dict(CFG)),enemy=enemy,seed=42,verbose=False)
-              return r,cp
-
-          def fast_score(names):
-              squad,cp,policy=build(names)
-              return score_static_squad(cp,policy,profile,duration=D),cp
-
-          mr_mm,cp_mm=moris_score(MM); fr_mm,_=fast_score(MM)
-          mr_rhq,cp_rhq=moris_score(RHQ); fr_rhq,_=fast_score(RHQ)
-          mm_m=float(mr_mm.squad_total); rhq_m=float(mr_rhq.squad_total)
-          mm_f=float(fr_mm.squad_total); rhq_f=float(fr_rhq.squad_total)
-          print('TEAM|MM|moris=%.3f|fast=%.3f|err=%+.8f' % (mm_m,mm_f,mm_f/mm_m-1))
-          print('TEAM|RHQ|moris=%.3f|fast=%.3f|err=%+.8f' % (rhq_m,rhq_f,rhq_f/rhq_m-1))
-          print('MARGIN|moris=%+.8f|fast=%+.8f' % ((mm_m-rhq_m)/max(mm_m,rhq_m),(mm_f-rhq_f)/max(mm_f,rhq_f)))
-          print('CHAR_RHQ')
-          for i,n in enumerate(RHQ):
-              m=float(mr_rhq.char_total[n]); f=float(fr_rhq.char_total[i])
-              print('%s|m=%.3f|f=%.3f|err=%+.8f' % (n,m,f,f/m-1 if m else 0.0))
-
-          # One explicit RHQ run to compare physical dynamic-charge shot timings/damage.
-          squad,cp,policy=build(RHQ)
-          mdmg={n:defaultdict(float) for n in TARGETS}
-          for h in mr_rhq.hits:
-              if h.caster in mdmg and _is_normal(h): mdmg[h.caster][round(float(h.t),9)]+=float(h.damage)
           sink=SimpleDamageScoreSink(cp,profile); rt=BurstRuntime(cp,policy,profile,damage_sink=sink)
-          idx={cp.names.index(n):n for n in TARGETS}
-          class O(StaticNormalAttackObserver):
-              def __init__(self,*a,**k):
-                  self.fdmg={n:[] for n in TARGETS}; super().__init__(*a,**k)
-              def _score_shots(self,a,count,*,eval_time):
-                  before=self.char_total[a]
-                  out=super()._score_shots(a,count,eval_time=eval_time)
-                  if a in idx:
-                      # Dynamic charge path sends one physical shot per call.
-                      self.fdmg[idx[a]].append((float(eval_time),self.char_total[a]-before,int(count)))
-                  return out
-          obs=O(rt,duration=D); rr=rt.run(duration=D,score_observer=obs); normal=obs.finish(events_processed=rr.events_processed)
-          for n in TARGETS:
-              mts=sorted(mdmg[n]); fs=obs.fdmg[n]
-              print('NORMAL|%s|mshots=%d|fshots=%d|m=%.3f|f=%.3f|err=%+.8f' % (
-                  n,len(mts),sum(c for _,_,c in fs),sum(mdmg[n].values()),normal.char_total[cp.names.index(n)],
-                  normal.char_total[cp.names.index(n)]/sum(mdmg[n].values())-1))
-              shown=0
-              for i,(mt,(ft,fd,c)) in enumerate(zip(mts,fs)):
-                  md=mdmg[n][mt]
-                  if abs(mt-round(ft,9))>1e-7 or abs(fd-md)>0.5:
-                      print('DIFF|%s|i=%d|mt=%.9f|ft=%.9f|td=%+.9f|md=%.3f|fd=%.3f|dd=%+.3f' % (n,i,mt,ft,ft-mt,md,fd,fd-md))
-                      shown+=1
-                      if shown>=12: break
+          obs=StaticNormalAttackObserver(rt,duration=D); rr=rt.run(duration=D,score_observer=obs); fnormal=obs.finish(events_processed=rr.events_processed)
+          print('TEAM|m=%.3f|f=%.3f|err=%+.8f' % (float(moris.squad_total),sum(fnormal.char_total)+sum(sink.char_total),(sum(fnormal.char_total)+sum(sink.char_total))/float(moris.squad_total)-1))
+          for i,n in enumerate(NAMES):
+              mt=float(moris.char_total[n]); mn=mnormal[n]; ms=mt-mn
+              fn=float(fnormal.char_total[i]); fs=float(sink.char_total[i]); ft=fn+fs
+              print('ACTOR|%s|total_m=%.3f|total_f=%.3f|terr=%+.8f|normal_m=%.3f|normal_f=%.3f|nerr=%+.8f|skill_m=%.3f|skill_f=%.3f|serr=%+.8f' % (
+                  n,mt,ft,ft/mt-1 if mt else 0,mn,fn,fn/mn-1 if mn else 0,ms,fs,fs/ms-1 if ms else 0))
 
-          # Restore monkey patches (workflow process ends anyway; keeps probe self-contained).
-          BurstMachine._schedule=orig_burst_schedule
-          DynamicChargeCadenceRuntime._enter_charge=oe
-          DynamicChargeCadenceRuntime._after_shot=oa
-          DynamicChargeCadenceRuntime._finish_nonshot_phase=of
-          DynamicChargeCadenceRuntime._predict_next_boundary=op
-          DynamicChargeCadenceRuntime.sync=os
+          BurstMachine._schedule=obsched
+          DynamicChargeCadenceRuntime._enter_charge=oe; DynamicChargeCadenceRuntime._after_shot=oa
+          DynamicChargeCadenceRuntime._finish_nonshot_phase=of; DynamicChargeCadenceRuntime.sync=os
           PY
