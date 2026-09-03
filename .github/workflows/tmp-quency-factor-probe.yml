@@ -1,0 +1,116 @@
+name: tmp-quency-factor-probe
+
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fast-engine-phase2-20260901
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compare one Quency burst hit factor by factor
+        run: |
+          mkdir -p fast_engine/research
+          python - <<'PY' > fast_engine/research/tmp_quency_factor_probe.txt
+          from calculator.timeline import DEFAULT_ENEMY, simulate
+          from context import spec
+          from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.burst_runtime import BurstRuntime
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
+          from fast_engine.engine.model import EnemyStaticProfile
+
+          members = ['라피 : 레드 후드','레드 후드','프리카','민트','퀀시 : 이스케이프 퀸']
+          target = '퀀시 : 이스케이프 퀸'
+          qi = members.index(target)
+          duration = 30.0
+          base_cfg = {'duration': duration, 'first_burst_time': 3.0, 'rng_mode': 'expected'}
+          enemy = dict(DEFAULT_ENEMY)
+
+          print('=== MORIS LOCATE HIT ===')
+          squad = spec.build_squad(members)
+          first = simulate(squad, config=spec.build_config(squad, dict(base_cfg)), enemy=dict(enemy), seed=42, verbose=True)
+          hits = [h for h in first.hits if h.caster == target and h.skill_name == '위대한 도둑 3']
+          print('MORIS_HITS', [(h.t, h.damage, h.hit_tag) for h in hits])
+          if not hits:
+              raise SystemExit('no Moris 위대한 도둑 3 hit')
+          ht = hits[0].t
+
+          print('\n=== MORIS FACTORS AT FIRST HIT ===')
+          debug_cfg = dict(base_cfg)
+          debug_cfg.update({'_debug_char': target, '_debug_t0': ht - 1e-7, '_debug_t1': ht + 1e-7})
+          squad2 = spec.build_squad(members)
+          simulate(squad2, config=spec.build_config(squad2, debug_cfg), enemy=dict(enemy), seed=42, verbose=True)
+
+          print('\n=== FAST COMPILED QUENCY BURST EFFECTS ===')
+          squad3 = spec.build_squad(members)
+          compiled = compile_moris_squad(squad3)
+          for eff in compiled.members[qi].effects:
+              if any(r.raw == 'burst_cast' for r in eff.triggers):
+                  print(eff.actor_effect_index, eff.effect_id, eff.effect_type, eff.name, eff.stat, eff.value,
+                        eff.duration, eff.max_stack, eff.parameters, [r.raw for r in eff.triggers])
+
+          class TraceSink(SimpleDamageScoreSink):
+              def __init__(self, squad, enemy):
+                  super().__init__(squad, enemy)
+                  self.traced = False
+
+              def _score_spec(self, effect_id, *, now, full_burst):
+                  eff = self.squad.effects[effect_id]
+                  if eff.name == '위대한 도둑 3' and not self.traced:
+                      self.traced = True
+                      terms = self.resolver.resolve(eff.actor, now=now)
+                      print('\n=== FAST FACTORS AT FIRST HIT ===')
+                      print('FAST_HIT_TIME', now)
+                      print('FAST_MACHINE_PHASE', self.runtime.machine.phase if self.runtime else None)
+                      print('FAST_FULL_BURST_ARG', full_burst)
+                      print('FAST_TERMS', terms)
+                      for stat in (
+                          'atk_pct','atk_flat','atk_caster_based_pct','atk_dmg_pct',
+                          'crit_rate','normal_atk_crit_rate','crit_dmg','normal_atk_crit_dmg',
+                          'core_dmg_pct','received_dmg_pct','personal_received_dmg_pct',
+                          'split_dmg_pct','element_bonus','element_bonus_pct'
+                      ):
+                          rows = []
+                          for src, active in self.runtime.dispatcher.effects.iter_stat(stat, now=now):
+                              if active.target == eff.actor:
+                                  rows.append((self.squad.members[src.actor].name, src.name, src.stat,
+                                               src.value, active.stacks, active.expires_at))
+                          if rows:
+                              print('FAST_ACTIVE', stat, rows)
+                  return super()._score_spec(effect_id, now=now, full_burst=full_burst)
+
+          ep = EnemyStaticProfile(
+              defense=float(enemy.get('def', 31784.0)),
+              element=enemy.get('code'),
+              core_uptime=0.0,
+              core_px=0.0,
+              duration=duration,
+          )
+          policy = compile_burst_policy(squad3, compiled, dict(base_cfg))
+          sink = TraceSink(compiled, ep)
+          runtime = BurstRuntime(compiled, policy, ep, damage_sink=sink)
+          result = runtime.run(duration=duration)
+          print('FAST_CASTS', result.casts)
+          print('FAST_QUENCY_SKILL_TOTAL', sink.char_total[qi])
+          PY
+      - name: Commit probe output
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fast_engine/research/tmp_quency_factor_probe.txt
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "chore: persist temporary Quency factor probe"
+          git push origin HEAD:fast-engine-phase2-20260901
