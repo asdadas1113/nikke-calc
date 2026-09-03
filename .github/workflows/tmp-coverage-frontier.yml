@@ -13,53 +13,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Cluster unsupported direct-damage delivery roots
+      - name: Split named-event dependency roots
         run: |
           PYTHONPATH=. python - <<'PY'
           from collections import defaultdict
           from context import spec
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.damage_policy import (
-              DIRECT_DAMAGE_STATE_STATS,
-              _one_shot_lifetime_supported,
-              _target_supported,
-              _timing_supported,
-              _SAFE_CONDITIONS,
-              is_direct_damage_buff_runtime_supported,
-          )
+          from fast_engine.engine.damage_policy import DIRECT_DAMAGE_STATE_STATS, is_direct_damage_buff_runtime_supported
+          from fast_engine.engine.dispatcher import TriggerDispatcher
           from fast_engine.engine.score import (
               _direct_damage_buff_score_supported,
               _direct_normal_effect_needs_score_support,
               _direct_skill_state_needs_score_support,
               _is_patternless_unreachable,
-              _uses_shield_runtime_semantics,
-              _shield_runtime_dependency_score_safe,
               _named_buff_event_dependency_score_safe,
           )
           from fast_engine.research.public_ranking_probe import _source_corpus
-
-          def reasons(squad, e):
-              out=[]
-              if not _one_shot_lifetime_supported(e):
-                  out.append('bullet_lifetime_shape')
-              if not _target_supported(e.target_spec):
-                  out.append('target:'+e.target_spec.mode.value)
-              unsafe_cond=sorted({r.mode.value for r in e.condition_rules if r.mode not in _SAFE_CONDITIONS})
-              if unsafe_cond:
-                  out.append('conditions:'+','.join(unsafe_cond))
-              unsafe_timing=sorted({(r.event_key or '?')+':'+r.mode.value for r in e.triggers if not _timing_supported(r)})
-              if not e.triggers:
-                  out.append('no_trigger')
-              elif unsafe_timing:
-                  out.append('timing:'+','.join(unsafe_timing))
-              if is_direct_damage_buff_runtime_supported(e):
-                  if _uses_shield_runtime_semantics(e) and not _shield_runtime_dependency_score_safe(squad,e):
-                      out.append('shield_dependency')
-                  if not _named_buff_event_dependency_score_safe(squad,e):
-                      out.append('named_event_dependency')
-                  if not out:
-                      out.append('score_runtime_dependency')
-              return tuple(out) or ('unknown',)
 
           seen=set(); groups=defaultdict(lambda:{'teams':set(),'effects':set(),'rows':[]})
           for members, source_name in _source_corpus():
@@ -67,24 +36,42 @@ jobs:
               seen.add(members)
               squad=compile_moris_squad(spec.build_squad(list(members)))
               for e in squad.effects:
-                  if e.effect_type!='buff' or (e.stat or '') not in DIRECT_DAMAGE_STATE_STATS or _is_patternless_unreachable(e):
-                      continue
-                  need_normal=_direct_normal_effect_needs_score_support(e)
-                  need_skill=_direct_skill_state_needs_score_support(e)
-                  if not (need_normal or need_skill): continue
+                  if e.effect_type!='buff' or (e.stat or '') not in DIRECT_DAMAGE_STATE_STATS or _is_patternless_unreachable(e): continue
+                  if not (_direct_normal_effect_needs_score_support(e) or _direct_skill_state_needs_score_support(e)): continue
+                  if not is_direct_damage_buff_runtime_supported(e): continue
                   if _direct_damage_buff_score_supported(squad,e): continue
-                  rs=reasons(squad,e)
-                  g=groups[rs]
-                  g['teams'].add(source_name)
+                  if _named_buff_event_dependency_score_safe(squad,e): continue
+                  keys=TriggerDispatcher._named_event_keys(e)
+                  if not keys: continue
+                  statuses=[]
+                  provider_rows=[]
+                  for key in keys:
+                      name=key[len('event:'):]
+                      providers=[p for p in squad.effects if p.effect_id!=e.effect_id and p.effect_type=='buff' and p.name==name]
+                      if not providers:
+                          statuses.append((key,'no_provider'))
+                          continue
+                      for p in providers:
+                          if TriggerDispatcher._named_event_keys(p): reason='provider_has_named_event'
+                          elif p.parameters.get('event_scope') not in (None,'','squad','recipients'): reason='bad_event_scope'
+                          elif not p.target_spec.runtime_supported: reason='provider_target_unsupported'
+                          elif TriggerDispatcher.is_executable_effect(p): reason='provider_executable'
+                          elif TriggerDispatcher._named_event_marker_nop_shape_supported(p): reason='provider_moris_nop_marker'
+                          elif TriggerDispatcher._is_state_dependency(p): reason='provider_state_dependency'
+                          else: reason='provider_not_executable'
+                          statuses.append((key,reason))
+                          provider_rows.append((key,reason,p))
+                  sig=tuple(sorted(statuses))
+                  g=groups[sig]; g['teams'].add(source_name)
                   label=f"{squad.members[e.actor].name}|{e.name}|{e.stat}"
-                  g['effects'].add(label)
-                  g['rows'].append((source_name,label,e))
+                  g['effects'].add(label); g['rows'].append((source_name,label,e,provider_rows))
 
-          for rs,g in sorted(groups.items(), key=lambda kv:(-len(kv[1]['teams']),kv[0])):
-              print(f"GROUP|teams={len(g['teams'])}|effects={len(g['effects'])}|reasons={rs}")
+          for sig,g in sorted(groups.items(), key=lambda kv:(-len(kv[1]['teams']),kv[0])):
+              print(f'GROUP|teams={len(g["teams"])}|effects={len(g["effects"])}|sig={sig}')
               print(' teams=',sorted(g['teams']))
               for label in sorted(g['effects']): print(' effect=',label)
-              # print one representative compiled shape for root-cause inspection
-              e=g['rows'][0][2]
-              print(' repr=',repr(e))
+              for source,label,e,providers in g['rows'][:8]:
+                  print(' ROW',source,label,'consumer=',repr(e))
+                  for key,reason,p in providers:
+                      print('   PROVIDER',key,reason,repr(p))
           PY
