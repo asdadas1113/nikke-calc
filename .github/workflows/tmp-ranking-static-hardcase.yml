@@ -13,85 +13,148 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Trace weapon change activation ordering
+      - name: Trial inherited ammo weapon-change semantics
         shell: bash
         run: |
           python - <<'PY'
-          from bisect import bisect_left
-          from calculator.timeline import DEFAULT_ENEMY, DT, CharState, simulate
+          from bisect import bisect_left, bisect_right
+          from dataclasses import replace
+          from calculator.timeline import DT
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
+          from fast_engine.engine.score import StaticNormalAttackObserver, score_static_squad, static_score_blockers
           from fast_engine.engine.weapon import DynamicChargeCadenceRuntime
 
-          RHQ=("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸")
+          TEAMS={
+            'MM':("미란다","브리드 : 사일런트 트랙","헬름","루주","미하라 : 본딩 체인"),
+            'RHQ':("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸"),
+          }
+          MORIS_COUNTS={'헬름':111,'루주':119,'레드 후드':333,'프리카':122,'민트':122}
+          MORIS_ACTOR={'헬름':1365843066.0,'루주':136122279.0,'레드 후드':924584568.0,'프리카':454595046.0,'민트':205844576.0}
+          MORIS_TEAM={'MM':3532610672.0,'RHQ':3528909503.0}
+          TARGETS=set(MORIS_COUNTS)
           D=180.0; CFG={'duration':D,'first_burst_time':3.0,'rng_mode':'expected'}
-          enemy=dict(DEFAULT_ENEMY); enemy['def']=55000.0; enemy['code']='작열'; enemy['core_px']=10.0
           profile=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=D)
           ticks=[]; t=0.0
           while t<=181.0: ticks.append(t); t+=DT
           def snap(x):
               i=bisect_left(ticks,float(x)); return ticks[i] if i<len(ticks) else float(x)
+          def next_tick(x):
+              i=bisect_right(ticks,float(x)); return ticks[i] if i<len(ticks) else float(x)+DT
 
-          squad=spec.build_squad(list(RHQ)); config=spec.build_config(squad,dict(CFG)); cp=compile_moris_squad(squad)
-          bl=static_score_blockers(cp)
-          if bl: raise RuntimeError(bl)
-          po=compile_burst_policy(squad,cp,dict(CFG))
+          built={}
+          for label,names in TEAMS.items():
+              sq=spec.build_squad(list(names)); cp=compile_moris_squad(sq); bl=static_score_blockers(cp)
+              if bl: raise RuntimeError((label,bl))
+              built[label]=(names,cp,compile_burst_policy(sq,cp,dict(CFG)))
 
-          # Moris: trace wrapper entry itself, so we see whether weapon_change is already active.
-          owc=CharState._tick_weapon_change
-          def mwc(self,t,bm,enemy,cfg,wc_eff):
-              if self.name=='레드 후드' and 6.78<=t<=7.22:
-                  print('M_WC_PRE|t='+repr(t)+f'|phase={self._charge_phase}|ammo={self.ammo}|new_session={self._wc_new_session}|in_wc={self._in_weapon_change}|wc_max={wc_eff.get("max_ammo")}|wc_mode={wc_eff.get("fire_mode")}|wc_charge={wc_eff.get("charge_time")}|wc_post={wc_eff.get("post_fire_delay")}')
-              out=owc(self,t,bm,enemy,cfg,wc_eff)
-              if self.name=='레드 후드' and 6.78<=t<=7.22:
-                  print('M_WC_POST|t='+repr(t)+f'|phase={self._charge_phase}|ammo={self.ammo}|new_session={self._wc_new_session}|in_wc={self._in_weapon_change}|events={len(out)}')
-              return out
-          CharState._tick_weapon_change=mwc
-          m=simulate(squad,config=config,enemy=enemy,seed=42,verbose=False)
-          CharState._tick_weapon_change=owc
-          print('M_SHOTS|'+','.join(repr(float(h.t)) for h in m.hits if h.caster=='레드 후드' and 6.78<=float(h.t)<=7.22))
-
-          # Fast with already validated EA + reload-end lattice; trace sync before/after.
           oe=DynamicChargeCadenceRuntime._enter_charge
           oa=DynamicChargeCadenceRuntime._after_shot
           of=DynamicChargeCadenceRuntime._finish_nonshot_phase
           os=DynamicChargeCadenceRuntime.sync
+
+          actor_pending={}
+          copy_pending={}
+          def is_actual(self,st): return self._states.get(st.actor) is st
+          def get_pending(self,st):
+              if is_actual(self,st): return actor_pending.get(st.actor,False)
+              return copy_pending.setdefault(id(st),actor_pending.get(st.actor,False))
+          def set_pending(self,st,value):
+              if is_actual(self,st): actor_pending[st.actor]=bool(value)
+              else: copy_pending[id(st)]=bool(value)
+
           def pe(self,st,at,now_for_mods):
               oe(self,st,at,now_for_mods); st.phase_end=snap(st.phase_end)
           def pa(self,st,shot_time):
-              oa(self,st,shot_time); st.phase_end=snap(st.phase_end)
+              oa(self,st,shot_time)
+              if get_pending(self,st) and st.ammo<=0 and st.phase=='post_fire_reload':
+                  # Moris weapon-change charge mode carries the inherited magazine through
+                  # post-delay; it does not start the base weapon reload here.
+                  st.phase='post_fire'
+              st.phase_end=snap(st.phase_end)
           def pf(self,st,transition_time,now_for_mods):
-              before=st.phase; of(self,st,transition_time,now_for_mods)
+              pending=get_pending(self,st)
+              if st.phase=='post_fire' and pending and st.ammo<=0:
+                  # Moris reaches ready on this frame, then the weapon-change wrapper
+                  # installs mode ammo only on the next outer tick.
+                  st.phase='post_reload'
+                  st.phase_end=next_tick(transition_time)
+                  return
+              if st.phase=='post_reload' and pending:
+                  st.ammo=self._full_ammo(st.actor,now_for_mods)
+                  set_pending(self,st,False)
+                  pe(self,st,transition_time,now_for_mods)
+                  return
+              before=st.phase
+              of(self,st,transition_time,now_for_mods)
               if before=='post_fire_reload' and st.phase=='reloading': st.phase_end=snap(st.phase_end)
+
           def psy(self,now):
-              ridx=cp.names.index('레드 후드'); st=self._states.get(ridx)
-              if st is not None and 6.78<=now<=7.22:
-                  row=self._active_weapon_change(ridx,now)
-                  print('F_SYNC_PRE|t='+repr(now)+f'|phase={st.phase}|end={st.phase_end!r}|ammo={st.ammo}|stored_wc={st.weapon_change_id}|active_wc={None if row is None else row[0].effect_id}|eff_max={self.effective_weapon(ridx,now).get("max_ammo")}|eff_charge={self._effective_charge_time(ridx,now)!r}|scheduled={st.scheduled_time!r}')
-              os(self,now)
-              st=self._states.get(ridx)
-              if st is not None and 6.78<=now<=7.22:
-                  row=self._active_weapon_change(ridx,now)
-                  print('F_SYNC_POST|t='+repr(now)+f'|phase={st.phase}|end={st.phase_end!r}|ammo={st.ammo}|stored_wc={st.weapon_change_id}|active_wc={None if row is None else row[0].effect_id}|eff_max={self.effective_weapon(ridx,now).get("max_ammo")}|eff_charge={self._effective_charge_time(ridx,now)!r}|scheduled={st.scheduled_time!r}')
-          DynamicChargeCadenceRuntime._enter_charge=pe
-          DynamicChargeCadenceRuntime._after_shot=pa
-          DynamicChargeCadenceRuntime._finish_nonshot_phase=pf
-          DynamicChargeCadenceRuntime.sync=psy
-          sink=SimpleDamageScoreSink(cp,profile); runtime=BurstRuntime(cp,po,profile,damage_sink=sink)
-          class O(StaticNormalAttackObserver):
-              def __init__(self,*a,**k): self.ts=[]; super().__init__(*a,**k)
-              def _score_shots(self,actor,count,*,eval_time):
-                  if cp.names[actor]=='레드 후드' and 6.78<=float(eval_time)<=7.22: self.ts.extend([float(eval_time)]*int(count))
-                  return super()._score_shots(actor,count,eval_time=eval_time)
-          obs=O(runtime,duration=D); rr=runtime.run(duration=D,score_observer=obs); obs.finish(events_processed=rr.events_processed)
-          print('F_SHOTS|'+','.join(repr(x) for x in obs.ts))
-          DynamicChargeCadenceRuntime._enter_charge=oe
-          DynamicChargeCadenceRuntime._after_shot=oa
-          DynamicChargeCadenceRuntime._finish_nonshot_phase=of
-          DynamicChargeCadenceRuntime.sync=os
+              for actor in self.actors:
+                  st=self._states[actor]
+                  while st.phase!='charging' and st.phase_end<=now+1e-9:
+                      pf(self,st,st.phase_end,now)
+                  current_wc_id=self._weapon_change_id(actor,now)
+                  wc_changed=current_wc_id!=st.weapon_change_id
+                  if wc_changed:
+                      entering=current_wc_id is not None
+                      inherited=entering and st.phase in {'charging','post_fire'}
+                      st.weapon_change_id=current_wc_id
+                      self._invalidate(st)
+                      if inherited:
+                          actor_pending[actor]=True
+                      else:
+                          actor_pending[actor]=False
+                          st.ammo=self._full_ammo(actor,now)
+                      if entering and st.phase=='charging':
+                          st.charge_start=float(now)
+                          st.phase_end=snap(float(now)+self._effective_charge_time(actor,now))
+                      elif st.phase in {'post_fire_reload','reloading','post_reload'} and not inherited:
+                          pe(self,st,float(now),float(now))
+                      elif not entering and st.phase=='charging':
+                          st.phase_end=snap(st.charge_start+self._effective_charge_time(actor,now))
+                  signature=self._signature(actor,now)
+                  changed=signature!=st.signature
+                  if changed:
+                      st.signature=signature
+                      if not wc_changed:
+                          self._invalidate(st)
+                          if st.phase=='charging':
+                              st.phase_end=st.charge_start+self._effective_charge_time(actor,now)
+                  if st.scheduled_time is None: self._plan(actor,now)
+                  self.state.set_ammo(actor,st.ammo)
+
+          def install_trial():
+              actor_pending.clear(); copy_pending.clear()
+              DynamicChargeCadenceRuntime._enter_charge=pe
+              DynamicChargeCadenceRuntime._after_shot=pa
+              DynamicChargeCadenceRuntime._finish_nonshot_phase=pf
+              DynamicChargeCadenceRuntime.sync=psy
+          def reset():
+              DynamicChargeCadenceRuntime._enter_charge=oe
+              DynamicChargeCadenceRuntime._after_shot=oa
+              DynamicChargeCadenceRuntime._finish_nonshot_phase=of
+              DynamicChargeCadenceRuntime.sync=os
+
+          install_trial()
+          totals={}
+          for label,(names,cp,po) in built.items():
+              r=score_static_squad(cp,po,profile); totals[label]=sum(float(v) for v in r.char_total)
+              sink=SimpleDamageScoreSink(cp,profile); runtime=BurstRuntime(cp,po,profile,damage_sink=sink)
+              class O(StaticNormalAttackObserver):
+                  def __init__(self,*a,**k): self.counts=[0]*len(cp.members); super().__init__(*a,**k)
+                  def _score_shots(self,actor,count,*,eval_time): self.counts[actor]+=int(count); return super()._score_shots(actor,count,eval_time=eval_time)
+              obs=O(runtime,duration=D); rr=runtime.run(duration=D,score_observer=obs); obs.finish(events_processed=rr.events_processed)
+              print(f'TEAM|team={label}|m={MORIS_TEAM[label]:.3f}|f={totals[label]:.3f}|err={totals[label]/MORIS_TEAM[label]-1:.8f}')
+              for i,name in enumerate(names):
+                  if name not in TARGETS: continue
+                  f=float(r.char_total[i]); m=MORIS_ACTOR[name]
+                  print(f'ACTOR|team={label}|name={name}|count={obs.counts[i]}|count_delta={obs.counts[i]-MORIS_COUNTS[name]}|m={m:.3f}|f={f:.3f}|err={f/m-1:.8f}|delta={f-m:.3f}')
+          margin=(totals['MM']-totals['RHQ'])/max(totals.values()); mm=(MORIS_TEAM['MM']-MORIS_TEAM['RHQ'])/max(MORIS_TEAM.values())
+          print(f'SCORE|fast_margin={margin:.8f}|moris_margin={mm:.8f}|delta={margin-mm:+.8f}')
+          reset()
           PY
