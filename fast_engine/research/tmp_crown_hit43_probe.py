@@ -60,14 +60,14 @@ def fast_trace(members: tuple[str, ...]):
     policy = compile_burst_policy(squad, compiled, dict(COMMON_CONFIG))
     runtime = BurstRuntime(compiled, policy, _enemy(policy.duration))
     crown = compiled.names.index(CROWN)
-    hit_signals: list[tuple[float, int | None]] = []
+    hit_signals: list[float] = []
     stack_reach: list[float] = []
     original = TriggerDispatcher.dispatch
 
     def traced(self, signal: BurstSignal, *, context=None):
         if self is runtime.dispatcher and signal.owner_actor == crown:
             if signal.event_key == "hit_count":
-                hit_signals.append((float(signal.time), signal.count))
+                hit_signals.append(float(signal.time))
             elif signal.event_key == "stack_reach:릴렉스:20":
                 stack_reach.append(float(signal.time))
         if context is None:
@@ -94,8 +94,8 @@ def main() -> None:
     print("fast_hit_signal_count", len(fh))
     print("fast_hit_signals_first30", fh[:30])
     print("fast_stack_reach", stack)
-    if fh:
-        print("first_threshold_diff", fh[0][0] - mh[0])
+    if fh and mh:
+        print("first_threshold_diff", fh[0] - mh[0])
 
 
 if __name__ == "__main__":
