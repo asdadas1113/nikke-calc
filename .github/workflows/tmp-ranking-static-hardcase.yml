@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Run static ranking hardcase probe
+      - name: Run DEF actor decomposition probe
         shell: bash
         run: |
           python - <<'PY'
@@ -29,6 +29,9 @@ jobs:
               "RHQ": ("라피 : 레드 후드", "레드 후드", "프리카", "민트", "퀀시 : 이스케이프 퀸"),
           }
           CONFIG = {"duration": 180.0, "first_burst_time": 3.0, "rng_mode": "expected"}
+          DEF_POINTS = (31784, 40000, 55000, 60000)
+          CODE = "작열"
+          CORE_PX = 10.0
 
           built = {}
           for key, members in TEAMS.items():
@@ -39,46 +42,45 @@ jobs:
               if blockers:
                   raise RuntimeError(f"{key} blockers={blockers}")
               policy = compile_burst_policy(squad, compiled, dict(CONFIG))
-              built[key] = (squad, config, compiled, policy)
+              built[key] = (members, squad, config, compiled, policy)
 
-          def score_one(key, defense, code, core_px):
-              squad, config, compiled, policy = built[key]
-              enemy = dict(DEFAULT_ENEMY)
-              enemy["def"] = float(defense)
-              enemy["code"] = code
-              enemy["core_px"] = float(core_px)
-              moris = float(simulate(squad, config=config, enemy=enemy, seed=42, verbose=False).squad_total)
-              fast = score_static_squad(
-                  compiled,
-                  policy,
-                  EnemyStaticProfile(
-                      defense=float(defense),
-                      element=code,
-                      core_uptime=1.0 if core_px > 0 else 0.0,
-                      core_px=float(core_px),
-                      duration=policy.duration,
-                  ),
-              )
-              if fast.unsupported:
-                  raise RuntimeError(f"{key} unsupported={fast.unsupported}")
-              return moris, float(fast.squad_total)
-
-          def row(axis, value, defense, code, core_px):
-              mm_m, mm_f = score_one("MM", defense, code, core_px)
-              rh_m, rh_f = score_one("RHQ", defense, code, core_px)
-              moris_margin = (mm_m - rh_m) / max(mm_m, rh_m)
-              fast_margin = (mm_f - rh_f) / max(mm_f, rh_f)
-              agree = (moris_margin == 0.0) or (fast_margin == 0.0) or ((moris_margin > 0) == (fast_margin > 0))
-              print(
-                  "ROW|"
-                  f"axis={axis}|value={value}|def={defense}|code={code}|core_px={core_px}|"
-                  f"moris_mm={mm_m:.3f}|moris_rhq={rh_m:.3f}|fast_mm={mm_f:.3f}|fast_rhq={rh_f:.3f}|"
-                  f"moris_margin={moris_margin:.8f}|fast_margin={fast_margin:.8f}|agree={agree}"
-              )
-
-          for defense in (0, 20000, 31784, 40000, 50000, 55000, 60000, 65000, 70000, 80000, 90000):
-              row("def", defense, defense, "작열", 10.0)
-
-          for code in ("작열", "수냉", "전격", "철갑", "풍압"):
-              row("code", code, 60000, code, 10.0)
+          previous = {}
+          for defense in DEF_POINTS:
+              for key in ("MM", "RHQ"):
+                  members, squad, config, compiled, policy = built[key]
+                  enemy = dict(DEFAULT_ENEMY)
+                  enemy["def"] = float(defense)
+                  enemy["code"] = CODE
+                  enemy["core_px"] = CORE_PX
+                  moris = simulate(squad, config=config, enemy=enemy, seed=42, verbose=False)
+                  fast = score_static_squad(
+                      compiled,
+                      policy,
+                      EnemyStaticProfile(
+                          defense=float(defense),
+                          element=CODE,
+                          core_uptime=1.0,
+                          core_px=CORE_PX,
+                          duration=policy.duration,
+                      ),
+                  )
+                  if fast.unsupported:
+                      raise RuntimeError(f"{key} unsupported={fast.unsupported}")
+                  print(f"TEAM|def={defense}|team={key}|moris={float(moris.squad_total):.3f}|fast={float(fast.squad_total):.3f}")
+                  for idx, name in enumerate(members):
+                      m = float(moris.char_total.get(name, 0.0))
+                      f = float(fast.char_total[idx])
+                      err = f / m - 1.0 if m else 0.0
+                      prev = previous.get((key, name))
+                      if prev is None:
+                          m_resp = f_resp = 1.0
+                      else:
+                          pm, pf = prev
+                          m_resp = m / pm if pm else 0.0
+                          f_resp = f / pf if pf else 0.0
+                      print(
+                          f"ACTOR|def={defense}|team={key}|name={name}|moris={m:.3f}|fast={f:.3f}|"
+                          f"err={err:.8f}|moris_resp={m_resp:.8f}|fast_resp={f_resp:.8f}"
+                      )
+                      previous[(key, name)] = (m, f)
           PY
