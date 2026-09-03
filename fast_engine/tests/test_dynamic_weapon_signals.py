@@ -5,6 +5,7 @@ from dataclasses import replace
 
 from fast_engine.engine.dynamic_weapon import MultiSignalChargeCadenceRuntime
 from fast_engine.engine.effects import ActiveEffectStore
+from fast_engine.engine.frame_lattice import moris_observed_tick
 from fast_engine.engine.model import CompiledCharacter, CompiledEffect, CompiledSquad
 from fast_engine.engine.scheduler import EventKind, EventScheduler
 from fast_engine.engine.state import StateStore
@@ -95,6 +96,16 @@ def _squad() -> CompiledSquad:
     )
 
 
+def _first_magazine_shot_times(count: int, *, horizon: float = 10.0) -> tuple[float, ...]:
+    """Synthetic 1s charge cadence observed on Moris' repeated-add outer ticks."""
+    out: list[float] = []
+    previous = 0.0
+    for _ in range(count):
+        previous = moris_observed_tick(previous + 1.0, horizon=horizon)
+        out.append(previous)
+    return tuple(out)
+
+
 class DynamicMultiSignalTests(unittest.TestCase):
     def test_union_of_count_thresholds_uses_one_physical_boundary(self):
         squad = _squad()
@@ -110,10 +121,11 @@ class DynamicMultiSignalTests(unittest.TestCase):
             effect_filter=lambda _effect: True,
         )
         runtime.start(0.0)
+        expected = _first_magazine_shot_times(4)
 
         # hit_count:3 is the first observable threshold. Shots 1 and 2 are
         # fast-forwarded inside the cadence runtime and never enter the scheduler.
-        self.assertAlmostEqual(scheduler.peek_time(), 3.0)
+        self.assertAlmostEqual(scheduler.peek_time(), expected[2])
         first_event = scheduler.pop()
         self.assertEqual(first_event.kind, EventKind.WEAPON_BOUNDARY)
         first = runtime.handle_boundary(first_event)
@@ -124,7 +136,7 @@ class DynamicMultiSignalTests(unittest.TestCase):
         )
 
         runtime.sync(first_event.time)
-        self.assertAlmostEqual(scheduler.peek_time(), 4.0)
+        self.assertAlmostEqual(scheduler.peek_time(), expected[3])
         second_event = scheduler.pop()
         second = runtime.handle_boundary(second_event)
         self.assertIsNotNone(second)
@@ -156,8 +168,8 @@ class DynamicMultiSignalTests(unittest.TestCase):
         runtime.start(0.0)
 
         flags: list[bool] = []
-        for shot_time in range(1, 7):
-            self.assertAlmostEqual(scheduler.peek_time(), float(shot_time))
+        for shot_time in _first_magazine_shot_times(6):
+            self.assertAlmostEqual(scheduler.peek_time(), shot_time)
             event = scheduler.pop()
             boundary = runtime.handle_boundary(event)
             self.assertEqual(
@@ -165,7 +177,7 @@ class DynamicMultiSignalTests(unittest.TestCase):
                 [("full_charge_hit", 1)],
             )
             flags.append(boundary.is_last_bullet)
-            runtime.sync(float(shot_time))
+            runtime.sync(event.time)
 
         # Magazine size is six: only the sixth post-shot boundary is last_bullet.
         self.assertEqual(flags, [False, False, False, False, False, True])
@@ -207,7 +219,7 @@ class DynamicMultiSignalTests(unittest.TestCase):
         self.assertEqual(runtime.actors, (0,))
         self.assertFalse(runtime.emits_every_charge_shot(0))
         runtime.start(0.0)
-        self.assertAlmostEqual(scheduler.peek_time(), 3.0)
+        self.assertAlmostEqual(scheduler.peek_time(), _first_magazine_shot_times(3)[2])
         event = scheduler.pop()
         boundary = runtime.handle_boundary(event)
         self.assertEqual(
@@ -238,7 +250,7 @@ class DynamicMultiSignalTests(unittest.TestCase):
         runtime.start(0.0)
         # Two muzzles do not double Moris hit_count; the third charge attack is
         # still the first hit_count:3 boundary.
-        self.assertAlmostEqual(scheduler.peek_time(), 3.0)
+        self.assertAlmostEqual(scheduler.peek_time(), _first_magazine_shot_times(3)[2])
         boundary = runtime.handle_boundary(scheduler.pop())
         self.assertEqual(
             [(row.event_key, row.count_increment) for row in boundary.signals],
