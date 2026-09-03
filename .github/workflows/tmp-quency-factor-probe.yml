@@ -1,4 +1,4 @@
-name: tmp-self-state-passive-fix
+name: tmp-self-state-parity-verify
 
 on:
   push:
@@ -8,7 +8,7 @@ permissions:
   contents: write
 
 jobs:
-  patch:
+  verify:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
@@ -18,59 +18,88 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Apply generic self-state passive synchronization
+      - name: Targeted regression tests
+        run: python -m unittest fast_engine.tests.test_conditional_passive_self_stack
+      - name: Verify Frika parity and certified crossover
         run: |
-          python - <<'PY'
-          from pathlib import Path
+          mkdir -p fast_engine/research
+          python - <<'PY' > fast_engine/research/tmp_self_state_parity_probe.txt
+          from calculator.timeline import DEFAULT_ENEMY, simulate
+          from context import spec
+          from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.model import EnemyStaticProfile
+          from fast_engine.engine.score import score_static_squad, static_score_blockers
 
-          p = Path('fast_engine/engine/dispatcher.py')
-          s = p.read_text()
-          def rep(old,new):
-              global s
-              if old not in s:
-                  raise SystemExit('missing dispatcher patch anchor:\n'+old)
-              s=s.replace(old,new,1)
+          teams = {
+              'MIRANDA_MIHARA': ['미란다','브리드 : 사일런트 트랙','헬름','루주','미하라 : 본딩 체인'],
+              'RH_QUENCY': ['라피 : 레드 후드','레드 후드','프리카','민트','퀀시 : 이스케이프 퀸'],
+          }
+          cfg = {'duration':180.0,'first_burst_time':3.0,'rng_mode':'expected'}
+          results = {}
+          for core_px in (0.0,10.0,20.0,30.0,40.0,52.0):
+              print('=== CORE', core_px, '===')
+              results[core_px] = {}
+              for label, members in teams.items():
+                  enemy = dict(DEFAULT_ENEMY)
+                  enemy['def'] = 60000
+                  enemy['code'] = '작열'
+                  enemy['core_px'] = core_px
+                  squad = spec.build_squad(members)
+                  moris = simulate(
+                      squad,
+                      config=spec.build_config(squad, dict(cfg)),
+                      enemy=dict(enemy),
+                      seed=42,
+                      verbose=False,
+                  )
+                  compiled = compile_moris_squad(squad)
+                  policy = compile_burst_policy(squad, compiled, dict(cfg))
+                  fast = score_static_squad(
+                      compiled,
+                      policy,
+                      EnemyStaticProfile(
+                          defense=60000.0,
+                          element='작열',
+                          core_uptime=1.0 if core_px > 0 else 0.0,
+                          core_px=core_px,
+                          duration=180.0,
+                      ),
+                  )
+                  mchars = [float(moris.char_total[n]) for n in members]
+                  fchars = [float(v) for v in fast.char_total]
+                  results[core_px][label] = (
+                      members, float(moris.squad_total), float(fast.squad_total), mchars, fchars
+                  )
+                  print(label, 'M_TOTAL', moris.squad_total, 'F_TOTAL', fast.squad_total,
+                        'ERR', fast.squad_total/moris.squad_total-1.0,
+                        'BLOCKERS', static_score_blockers(compiled), 'UNSUPPORTED', fast.unsupported)
+                  for n,mv,fv in zip(members,mchars,fchars):
+                      print('ACTOR', n, 'M', mv, 'F', fv, 'ERR', fv/mv-1.0 if mv else None)
+              ma = results[core_px]['MIRANDA_MIHARA'][1]
+              mb = results[core_px]['RH_QUENCY'][1]
+              fa = results[core_px]['MIRANDA_MIHARA'][2]
+              fb = results[core_px]['RH_QUENCY'][2]
+              print('PAIR_M_MARGIN', (ma-mb)/max(ma,mb))
+              print('PAIR_F_MARGIN', (fa-fb)/max(fa,fb))
+              print('ORDER_AGREES', (ma >= mb) == (fa >= fb))
 
-          rep(
-          '        "_activation_counts", "_state_dependency_names", "_self_stack_passive_ids",\n        "_self_stack_dependency_names", "_gauge_maxima",',
-          '        "_activation_counts", "_state_dependency_names", "_self_stack_passive_ids",\n        "_self_stack_dependency_names", "_self_state_passive_ids",\n        "_self_state_dependency_names", "_gauge_maxima",')
-
-          anchor = '''        self._self_stack_dependency_names = frozenset(\n            rule.key\n            for effect_id in self._self_stack_passive_ids\n            for rule in self._effect_table[effect_id].condition_rules\n            if rule.key\n        )\n'''
-          rep(anchor, anchor + '''        self._self_state_passive_ids = tuple(\n            effect.effect_id\n            for effect in self._effect_table\n            if self._self_state_conditional_passive_shape_supported(effect)\n            and self.is_runtime_executable_effect(effect)\n        )\n        self._self_state_dependency_names = frozenset(\n            rule.key\n            for effect_id in self._self_state_passive_ids\n            for rule in self._effect_table[effect_id].condition_rules\n            if rule.key\n        )\n''')
-
-          marker='    def _sync_self_stack_conditional_passives(self, *, now: float) -> None:\n'
-          insert='''    @staticmethod\n    def _self_state_conditional_passive_shape_supported(effect: "CompiledEffect") -> bool:\n        """Certify permanent passives gated only by a named self-state edge."""\n        return (\n            effect.effect_type == "buff"\n            and effect.duration in (None, -1.0)\n            and effect.max_stack in (None, 1, 1.0)\n            and target_scope_is_static(effect.target_spec)\n            and effect.target_spec.runtime_supported\n            and len(effect.triggers) == 1\n            and effect.triggers[0].mode is TriggerMode.EVENT\n            and effect.triggers[0].raw == "passive"\n            and bool(effect.condition_rules)\n            and all(\n                rule.mode in {ConditionMode.SELF_STATE, ConditionMode.NOT_SELF_STATE}\n                and bool(rule.key)\n                for rule in effect.condition_rules\n            )\n        )\n\n'''
-          rep(marker,insert+marker)
-
-          marker2='    def can_activate_effect(self, effect: "CompiledEffect") -> bool:\n'
-          insert2='''    def _sync_self_state_conditional_passives(self, *, now: float) -> None:\n        """Materialize/de-materialize certified permanent passives on self-state edges."""\n        for effect_id in self._self_state_passive_ids:\n            effect = self._effect_table[effect_id]\n            targets = self.targets.resolve(\n                effect.target_spec,\n                owner_actor=effect.actor,\n                now=now,\n            )\n            should_be_active = self.conditions.evaluate_all(\n                effect.condition_rules,\n                effect_id=effect.effect_id,\n                owner_actor=effect.actor,\n                target_actor=None,\n                now=now,\n                context=SignalContext(),\n            )\n            is_active = self.effects.group_active(effect.effect_id, targets, now=now)\n            if should_be_active and not is_active:\n                self.effects.activate_group(effect, targets, now, self.scheduler)\n            elif not should_be_active and is_active:\n                self.effects.deactivate_group(effect.effect_id, targets, now=now)\n\n'''
-          rep(marker2,insert2+marker2)
-
-          old='''            if (\n                activated_group\n                and effect.name\n                and effect.name in self._self_stack_dependency_names\n            ):\n                self._sync_self_stack_conditional_passives(now=now)\n'''
-          new=old+'''            if (\n                activated_group\n                and effect.name\n                and effect.name in self._self_state_dependency_names\n            ):\n                self._sync_self_state_conditional_passives(now=now)\n'''
-          rep(old,new)
-
-          old='''            if any(\n                self._effect_table[effect_id].name in self._self_stack_dependency_names\n                for effect_id in removed\n            ):\n                self._sync_self_stack_conditional_passives(now=signal.time)\n'''
-          new='''            if any(\n                self._effect_table[effect_id].name in self._self_stack_dependency_names\n                for effect_id in removed\n            ):\n                self._sync_self_stack_conditional_passives(now=signal.time)\n            if any(\n                self._effect_table[effect_id].name in self._self_state_dependency_names\n                for effect_id in removed\n            ):\n                self._sync_self_state_conditional_passives(now=signal.time)\n'''
-          rep(old,new)
-
-          old='''        if expired.name and expired.name in self._self_stack_dependency_names:\n            self._sync_self_stack_conditional_passives(now=event.time)\n'''
-          new=old+'''        if expired.name and expired.name in self._self_state_dependency_names:\n            self._sync_self_state_conditional_passives(now=event.time)\n'''
-          rep(old,new)
-          p.write_text(s)
-
-          t=Path('fast_engine/tests/test_conditional_passive_self_stack.py')
-          ts=t.read_text()
-          test='''\n    def test_frika_performance_materializes_self_state_pierce_passive(self) -> None:\n        members = [\n            "라피 : 레드 후드",\n            "레드 후드",\n            "프리카",\n            "민트",\n            "퀀시 : 이스케이프 퀸",\n        ]\n        squad = spec.build_squad(members)\n        compiled = compile_moris_squad(squad)\n        fi = members.index("프리카")\n        config = {"duration": 5.0, "first_burst_time": 3.0, "rng_mode": "expected"}\n        enemy = EnemyStaticProfile(\n            defense=float(DEFAULT_ENEMY.get("def", 31784.0)),\n            element=DEFAULT_ENEMY.get("code"),\n            core_uptime=0.0,\n            core_px=0.0,\n            duration=5.0,\n        )\n        policy = compile_burst_policy(squad, compiled, config)\n        sink = SimpleDamageScoreSink(compiled, enemy)\n        runtime = BurstRuntime(compiled, policy, enemy, damage_sink=sink)\n        runtime.run(duration=5.0)\n\n        effects = runtime.dispatcher.effects\n        now = 4.0\n        self.assertTrue(effects.has_named_state(fi, "퍼포먼스", now=now))\n        self.assertTrue(effects.has_stat(fi, "pierce_enabled", now=now))\n'''
-          anchor='\n\nif __name__ == "__main__":\n'
-          if anchor not in ts: raise SystemExit('missing test anchor')
-          t.write_text(ts.replace(anchor,test+anchor,1))
+          print('\n=== CORE 0 -> 10 ACTOR GAINS ===')
+          for label in teams:
+              members,m0,f0,mc0,fc0 = results[0.0][label]
+              _,m10,f10,mc10,fc10 = results[10.0][label]
+              print(label, 'TOTAL_M_GAIN', m10-m0, 'TOTAL_F_GAIN', f10-f0,
+                    'GAIN_RATIO', (f10-f0)/(m10-m0) if m10 != m0 else None)
+              for n,a,b,c,d in zip(members,mc0,mc10,fc0,fc10):
+                  mg = b-a
+                  fg = d-c
+                  print('GAIN', n, 'M', mg, 'F', fg, 'RATIO', fg/mg if mg else None)
           PY
-          python -m unittest fast_engine.tests.test_conditional_passive_self_stack
-      - name: Commit generic fix
+      - name: Persist probe output
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add fast_engine/engine/dispatcher.py fast_engine/tests/test_conditional_passive_self_stack.py
-          git commit -m "fix: sync self-state conditional passives"
+          git add fast_engine/research/tmp_self_state_parity_probe.txt
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "chore: persist self-state parity verification"
           git push origin HEAD:fast-engine-phase2-20260901
