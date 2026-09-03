@@ -54,7 +54,6 @@ jobs:
           def patched_exec(e):
               return snow_periodic(e) or original_exec(e)
 
-          # Fast trace: periodic scheduler plus live full-burst condition.
           fast_rows=[]
           original_periodic=TriggerDispatcher.dispatch_periodic
           def traced_periodic(dispatcher,effect_id,rule_index,*,time,context):
@@ -74,7 +73,6 @@ jobs:
           print('FAST_FB',fast_result.full_burst_starts,fast_result.full_burst_ends)
           print('FAST_PERIODIC',fast_rows)
 
-          # Moris trace: detect target effect entering/leaving active set around tick().
           moris_rows=[]
           orig_tick=BuffManager.tick
           def snapshot(bm):
@@ -89,7 +87,7 @@ jobs:
               out=orig_tick(bm,t)
               after=snapshot(bm)
               if before!=after:
-                  moris_rows.append((round(float(t),9),before,after,bool(bm.battle_state.get('full_burst'))))
+                  moris_rows.append((round(float(t),9),before,after))
               return out
           with patch.object(BuffManager,'tick',new=traced_tick):
               moris=simulate(raw,config=config,verbose=True)
