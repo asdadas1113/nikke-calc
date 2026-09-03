@@ -43,7 +43,7 @@ def patch_dispatcher() -> None:
             and effect.max_stack is not None
             and float(effect.max_stack) > 1.0
             and float(effect.max_stack).is_integer()
-            and not effect.parameters
+            and set(effect.parameters).issubset({"note"})
             and not effect.condition_rules
             and len(effect.triggers) == 1
         ):
@@ -81,8 +81,6 @@ def patch_dispatcher() -> None:
             marker = providers[0]
             if threshold > int(float(marker.max_stack or 0.0)):
                 return False
-            # A second stack-mutating path would make sparse hit-count ownership
-            # insufficient to know the exact threshold phase.
             if any(
                 other.effect_id != marker.effect_id
                 and other.parameters.get("target_effect") == name
@@ -149,8 +147,6 @@ def patch_dispatcher() -> None:
             and cls._stack_reach_source_shape_supported(squad, effect)
         ):
             return False
-        # Reaching max stack without a same-edge reset would only fire once.
-        # Require the reset as part of the certified recurring provider chain.
         for rule in effect.triggers:
             key = rule.event_key or ""
             parsed = cls._parse_stack_reach_event_key(key)
@@ -216,7 +212,7 @@ def patch_dispatcher() -> None:
     text = replace_once(text, old, new, label="stack-heal runtime executable")
 
     old = '''            elif stat == "remove_named_buff" and self._enemy_remove_named_state_runtime_supported(effect):\n                name = str(effect.parameters.get("target_effect") or "")\n                if tuple(targets) != (ENEMY,):\n                    return False\n                self.effects.remove_named_state(ENEMY, name, now=now)\n'''
-    new = '''            elif stat == "remove_named_buff" and self._self_stack_remove_runtime_supported(effect):\n                name = str(effect.parameters.get("target_effect") or "")\n                if tuple(targets) != (effect.actor,):\n                    return False\n                removed = self.effects.remove_named_state(effect.actor, name, now=now)\n                if removed and name in self._self_stack_dependency_names:\n                    self._sync_self_stack_conditional_passives(now=now)\n                if removed and name in self._self_state_dependency_names:\n                    self._sync_self_state_conditional_passives(now=now)\n            elif stat == "heal_hp_pct" and self._self_stack_heal_runtime_supported(effect):\n                if tuple(targets) != (effect.actor,):\n                    return False\n                # Patternless Fast does not mutate HP here. Moris still emits\n                # heal_received at full HP, so recipient-event delivery is exact.\n                from .burst import BurstSignal\n                self.dispatch(\n                    BurstSignal(now, "event:heal_received", effect.actor, effect.actor)\n                )\n            elif stat == "remove_named_buff" and self._enemy_remove_named_state_runtime_supported(effect):\n                name = str(effect.parameters.get("target_effect") or "")\n                if tuple(targets) != (ENEMY,):\n                    return False\n                self.effects.remove_named_state(ENEMY, name, now=now)\n'''
+    new = '''            elif stat == "remove_named_buff" and self._self_stack_remove_runtime_supported(effect):\n                name = str(effect.parameters.get("target_effect") or "")\n                if tuple(targets) != (effect.actor,):\n                    return False\n                removed = self.effects.remove_named_state(effect.actor, name, now=now)\n                if removed and name in self._self_stack_dependency_names:\n                    self._sync_self_stack_conditional_passives(now=now)\n                if removed and name in self._self_state_dependency_names:\n                    self._sync_self_state_conditional_passives(now=now)\n            elif stat == "heal_hp_pct" and self._self_stack_heal_runtime_supported(effect):\n                if tuple(targets) != (effect.actor,):\n                    return False\n                from .burst import BurstSignal\n                self.dispatch(\n                    BurstSignal(now, "event:heal_received", effect.actor, effect.actor)\n                )\n            elif stat == "remove_named_buff" and self._enemy_remove_named_state_runtime_supported(effect):\n                name = str(effect.parameters.get("target_effect") or "")\n                if tuple(targets) != (ENEMY,):\n                    return False\n                self.effects.remove_named_state(ENEMY, name, now=now)\n'''
     text = replace_once(text, old, new, label="instant stack-heal execution")
 
     old = '''        elif effect.effect_type == "buff":\n            if stat in self._SHIELD_STATS and any(target == ENEMY for target in targets):\n                return False\n            was_active = self.effects.group_active(effect.effect_id, targets, now=now)\n            activated_group = self.effects.activate_group(effect, targets, now, self.scheduler)\n            if (\n                activated_group\n                and effect.name\n                and effect.name in self._self_stack_dependency_names\n            ):\n'''
