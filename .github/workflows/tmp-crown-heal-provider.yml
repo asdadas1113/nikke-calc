@@ -17,5 +17,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Probe Crown heal providers and Moris events
-        run: python -m fast_engine.research.tmp_crown_heal_provider_probe
+      - name: Probe Crown Fast state path
+        run: python -m fast_engine.research.tmp_crown_fast_state_probe
