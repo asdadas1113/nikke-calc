@@ -13,11 +13,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Decompose MM residual under combined cadence trial
+      - name: Trace MM static-shot and skill residuals
         shell: bash
         run: |
           python - <<'PY'
           from bisect import bisect_left
+          from collections import defaultdict
           from calculator.timeline import DEFAULT_ENEMY, DT, simulate
           from calculator.sim_result import _is_normal
           from context import spec
@@ -26,23 +27,35 @@ jobs:
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import StaticNormalAttackObserver, _dynamic_charge_score_actors, static_score_blockers
+          from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
+          from fast_engine.engine.shot_blocks import compile_static_shot_blocks
           from fast_engine.engine.weapon import DynamicChargeCadenceRuntime
 
           NAMES=("미란다","브리드 : 사일런트 트랙","헬름","루주","미하라 : 본딩 체인")
+          STATIC=("미란다","브리드 : 사일런트 트랙","미하라 : 본딩 체인")
           D=180.0; CFG={'duration':D,'first_burst_time':3.0,'rng_mode':'expected'}
           enemy=dict(DEFAULT_ENEMY); enemy['def']=55000.0; enemy['code']='작열'; enemy['core_px']=10.0
           profile=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=D)
           squad=spec.build_squad(list(NAMES)); cp=compile_moris_squad(squad)
           if static_score_blockers(cp): raise RuntimeError(static_score_blockers(cp))
           policy=compile_burst_policy(squad,cp,dict(CFG))
-          print('DYNAMIC_CHARGE',[(a,cp.names[a],cp.members[a].weapon.get('weapon_type')) for a in _dynamic_charge_score_actors(cp)])
-          print('WEAPON_CHANGES',[(e.actor,cp.names[e.actor],e.name) for e in cp.effects if e.effect_type=='weapon_change'])
-
           moris=simulate(squad,config=spec.build_config(squad,dict(CFG)),enemy=enemy,seed=42,verbose=False)
-          mnormal={n:0.0 for n in NAMES}
-          for h in moris.hits:
-              if h.caster in mnormal and _is_normal(h): mnormal[h.caster]+=float(h.damage)
+
+          # Static physical-shot timestamp comparison independent of score state.
+          blocks=compile_static_shot_blocks(cp,duration=D)
+          for n in STATIC:
+              a=cp.names.index(n)
+              mt=sorted(set(round(float(h.t),9) for h in moris.hits if h.caster==n and _is_normal(h)))
+              ft=[]
+              for b in blocks[a]:
+                  ft.extend(round(float(b.first_time+i*b.interval),9) for i in range(b.count))
+              print('SHOTPLAN|%s|mode=%s|weapon=%s|m=%d|f=%d' % (n,cp.members[a].weapon.get('fire_mode'),cp.members[a].weapon.get('weapon_type'),len(mt),len(ft)))
+              shown=0
+              for i,(m,f) in enumerate(zip(mt,ft)):
+                  if abs(m-f)>1e-7:
+                      print('SHOTDIFF|%s|i=%d|m=%.9f|f=%.9f|d=%+.9f' % (n,i,m,f,f-m))
+                      shown+=1
+                      if shown>=12: break
 
           ticks=[]; t=0.0
           while t<=D+1.0: ticks.append(t); t+=DT
@@ -54,7 +67,6 @@ jobs:
           obsched=BurstMachine._schedule
           def bs(self,scheduler,time,kind,*,stage=None): return obsched(self,scheduler,bt(time),kind,stage=stage)
           BurstMachine._schedule=bs
-
           oe=DynamicChargeCadenceRuntime._enter_charge; oa=DynamicChargeCadenceRuntime._after_shot
           of=DynamicChargeCadenceRuntime._finish_nonshot_phase; os=DynamicChargeCadenceRuntime.sync
           def pe(self,st,at,now): oe(self,st,at,now); st.phase_end=ct(st.phase_end)
@@ -76,21 +88,42 @@ jobs:
                       st.signature=new
                       if not wc_changed:
                           self._invalidate(st)
-                          if st.phase=='charging' and (new[4],new[5])!=(old[4],old[5]):
-                              st.phase_end=ct(st.charge_start+self._effective_charge_time(a,now))
+                          if st.phase=='charging' and (new[4],new[5])!=(old[4],old[5]): st.phase_end=ct(st.charge_start+self._effective_charge_time(a,now))
                   if st.scheduled_time is None: self._plan(a,now)
                   self.state.set_ammo(a,st.ammo)
           DynamicChargeCadenceRuntime._enter_charge=pe; DynamicChargeCadenceRuntime._after_shot=pa
           DynamicChargeCadenceRuntime._finish_nonshot_phase=pf; DynamicChargeCadenceRuntime.sync=ps
 
-          sink=SimpleDamageScoreSink(cp,profile); rt=BurstRuntime(cp,policy,profile,damage_sink=sink)
-          obs=StaticNormalAttackObserver(rt,duration=D); rr=rt.run(duration=D,score_observer=obs); fnormal=obs.finish(events_processed=rr.events_processed)
-          print('TEAM|m=%.3f|f=%.3f|err=%+.8f' % (float(moris.squad_total),sum(fnormal.char_total)+sum(sink.char_total),(sum(fnormal.char_total)+sum(sink.char_total))/float(moris.squad_total)-1))
-          for i,n in enumerate(NAMES):
-              mt=float(moris.char_total[n]); mn=mnormal[n]; ms=mt-mn
-              fn=float(fnormal.char_total[i]); fs=float(sink.char_total[i]); ft=fn+fs
-              print('ACTOR|%s|total_m=%.3f|total_f=%.3f|terr=%+.8f|normal_m=%.3f|normal_f=%.3f|nerr=%+.8f|skill_m=%.3f|skill_f=%.3f|serr=%+.8f' % (
-                  n,mt,ft,ft/mt-1 if mt else 0,mn,fn,fn/mn-1 if mn else 0,ms,fs,fs/ms-1 if ms else 0))
+          class TraceSink(SimpleDamageScoreSink):
+              def __init__(self,*a,**k):
+                  super().__init__(*a,**k); self.rows=[]; self.by_name=defaultdict(float)
+              def _score_spec(self,effect_id,*,now,full_burst):
+                  actor=self._effect_actor.get(effect_id); before=self.char_total[actor] if actor is not None else 0.0
+                  ok=super()._score_spec(effect_id,now=now,full_burst=full_burst)
+                  if ok and actor is not None:
+                      delta=self.char_total[actor]-before; e=self.squad.effects[effect_id]
+                      if self.squad.members[actor].name=='미하라 : 본딩 체인':
+                          self.rows.append((float(now),e.name,e.stat,delta,bool(full_burst)))
+                          self.by_name[e.name]+=delta
+                  return ok
+
+          sink=TraceSink(cp,profile); rt=BurstRuntime(cp,policy,profile,damage_sink=sink)
+          obs=StaticNormalAttackObserver(rt,duration=D); rr=rt.run(duration=D,score_observer=obs); normal=obs.finish(events_processed=rr.events_processed)
+
+          mm=defaultdict(float); mevents=defaultdict(list)
+          for h in moris.hits:
+              if h.caster!='미하라 : 본딩 체인' or _is_normal(h): continue
+              name=h.skill_name or h.hit_tag or '?'; mm[name]+=float(h.damage); mevents[name].append((float(h.t),float(h.damage)))
+          print('MIHARA_SKILLS_MORIS',dict(mm))
+          print('MIHARA_SKILLS_FAST',dict(sink.by_name))
+          for name in sorted(set(mm)|set(sink.by_name)):
+              m=mm[name]; f=sink.by_name[name]
+              print('SKILL|%s|m=%.3f|f=%.3f|err=%+.8f|m_events=%d|f_events=%d' % (name,m,f,f/m-1 if m else 0,len(mevents[name]),sum(1 for r in sink.rows if r[1]==name)))
+          print('FAST_SKILL_ROWS')
+          for row in sink.rows[:80]: print(row)
+          print('MORIS_SKILL_ROWS')
+          for name,rows in mevents.items():
+              for row in rows[:40]: print(name,round(row[0],9),round(row[1],3))
 
           BurstMachine._schedule=obsched
           DynamicChargeCadenceRuntime._enter_charge=oe; DynamicChargeCadenceRuntime._after_shot=oa
