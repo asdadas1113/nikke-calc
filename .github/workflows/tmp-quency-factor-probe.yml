@@ -1,4 +1,4 @@
-name: tmp-self-state-parity-verify
+name: tmp-public-ranking-rerun
 
 on:
   push:
@@ -8,7 +8,7 @@ permissions:
   contents: write
 
 jobs:
-  verify:
+  audit:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
@@ -18,88 +18,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Targeted regression tests
-        run: python -m unittest fast_engine.tests.test_conditional_passive_self_stack
-      - name: Verify Frika parity and certified crossover
+      - name: Run standardized public ranking audit
         run: |
-          mkdir -p fast_engine/research
-          python - <<'PY' > fast_engine/research/tmp_self_state_parity_probe.txt
-          from calculator.timeline import DEFAULT_ENEMY, simulate
-          from context import spec
-          from fast_engine.engine.burst import compile_burst_policy
-          from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import score_static_squad, static_score_blockers
-
-          teams = {
-              'MIRANDA_MIHARA': ['미란다','브리드 : 사일런트 트랙','헬름','루주','미하라 : 본딩 체인'],
-              'RH_QUENCY': ['라피 : 레드 후드','레드 후드','프리카','민트','퀀시 : 이스케이프 퀸'],
-          }
-          cfg = {'duration':180.0,'first_burst_time':3.0,'rng_mode':'expected'}
-          results = {}
-          for core_px in (0.0,10.0,20.0,30.0,40.0,52.0):
-              print('=== CORE', core_px, '===')
-              results[core_px] = {}
-              for label, members in teams.items():
-                  enemy = dict(DEFAULT_ENEMY)
-                  enemy['def'] = 60000
-                  enemy['code'] = '작열'
-                  enemy['core_px'] = core_px
-                  squad = spec.build_squad(members)
-                  moris = simulate(
-                      squad,
-                      config=spec.build_config(squad, dict(cfg)),
-                      enemy=dict(enemy),
-                      seed=42,
-                      verbose=False,
-                  )
-                  compiled = compile_moris_squad(squad)
-                  policy = compile_burst_policy(squad, compiled, dict(cfg))
-                  fast = score_static_squad(
-                      compiled,
-                      policy,
-                      EnemyStaticProfile(
-                          defense=60000.0,
-                          element='작열',
-                          core_uptime=1.0 if core_px > 0 else 0.0,
-                          core_px=core_px,
-                          duration=180.0,
-                      ),
-                  )
-                  mchars = [float(moris.char_total[n]) for n in members]
-                  fchars = [float(v) for v in fast.char_total]
-                  results[core_px][label] = (
-                      members, float(moris.squad_total), float(fast.squad_total), mchars, fchars
-                  )
-                  print(label, 'M_TOTAL', moris.squad_total, 'F_TOTAL', fast.squad_total,
-                        'ERR', fast.squad_total/moris.squad_total-1.0,
-                        'BLOCKERS', static_score_blockers(compiled), 'UNSUPPORTED', fast.unsupported)
-                  for n,mv,fv in zip(members,mchars,fchars):
-                      print('ACTOR', n, 'M', mv, 'F', fv, 'ERR', fv/mv-1.0 if mv else None)
-              ma = results[core_px]['MIRANDA_MIHARA'][1]
-              mb = results[core_px]['RH_QUENCY'][1]
-              fa = results[core_px]['MIRANDA_MIHARA'][2]
-              fb = results[core_px]['RH_QUENCY'][2]
-              print('PAIR_M_MARGIN', (ma-mb)/max(ma,mb))
-              print('PAIR_F_MARGIN', (fa-fb)/max(fa,fb))
-              print('ORDER_AGREES', (ma >= mb) == (fa >= fb))
-
-          print('\n=== CORE 0 -> 10 ACTOR GAINS ===')
-          for label in teams:
-              members,m0,f0,mc0,fc0 = results[0.0][label]
-              _,m10,f10,mc10,fc10 = results[10.0][label]
-              print(label, 'TOTAL_M_GAIN', m10-m0, 'TOTAL_F_GAIN', f10-f0,
-                    'GAIN_RATIO', (f10-f0)/(m10-m0) if m10 != m0 else None)
-              for n,a,b,c,d in zip(members,mc0,mc10,fc0,fc10):
-                  mg = b-a
-                  fg = d-c
-                  print('GAIN', n, 'M', mg, 'F', fg, 'RATIO', fg/mg if mg else None)
-          PY
-      - name: Persist probe output
+          python -m fast_engine.research.public_ranking_probe > fast_engine/research/tmp_public_ranking_after_self_state.txt
+      - name: Persist audit output
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add fast_engine/research/tmp_self_state_parity_probe.txt
+          git add fast_engine/research/tmp_public_ranking_after_self_state.txt
           if git diff --cached --quiet; then exit 0; fi
-          git commit -m "chore: persist self-state parity verification"
+          git commit -m "chore: persist post-fix public ranking audit"
           git push origin HEAD:fast-engine-phase2-20260901
