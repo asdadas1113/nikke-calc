@@ -13,15 +13,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Trial burst action frame quantization
+      - name: Localize Quency 180s drift in one pass
         shell: bash
         run: |
           python - <<'PY'
-          from math import ceil
-          from calculator.timeline import DEFAULT_ENEMY, DT, simulate
+          from collections import defaultdict
+          from calculator.timeline import DEFAULT_ENEMY, simulate
           from calculator.sim_result import _is_normal
           from context import spec
-          from fast_engine.engine.burst import BurstMachine, compile_burst_policy
+          from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
@@ -29,7 +29,7 @@ jobs:
           from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
 
           MEMBERS=("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸")
-          TARGET="퀀시 : 이스케이프 퀸"; DURATION=60.0
+          TARGET="퀀시 : 이스케이프 퀸"; DURATION=180.0
           CONFIG={"duration":DURATION,"first_burst_time":3.0,"rng_mode":"expected"}
           squad=spec.build_squad(list(MEMBERS)); config=spec.build_config(squad,dict(CONFIG))
           compiled=compile_moris_squad(squad); blockers=static_score_blockers(compiled)
@@ -38,29 +38,34 @@ jobs:
           enemy=dict(DEFAULT_ENEMY); enemy["def"]=55000.0; enemy["code"]="작열"; enemy["core_px"]=10.0
           profile=EnemyStaticProfile(defense=55000.0,element="작열",core_uptime=1.0,core_px=10.0,duration=DURATION)
 
-          moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=True)
-          m_starts=[float(r.t) for r in moris.log.burst_log if r.event=="full_burst 시작"]
-          m_normal=sum(float(h.damage) for h in moris.hits if h.caster==TARGET and _is_normal(h))
+          moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=False)
+          m_by_t=defaultdict(float)
+          for h in moris.hits:
+              if h.caster==TARGET and _is_normal(h):
+                  m_by_t[round(float(h.t),9)] += float(h.damage)
 
-          def fast(label):
-              sink=SimpleDamageScoreSink(compiled,profile)
-              runtime=BurstRuntime(compiled,policy,profile,damage_sink=sink)
-              obs=StaticNormalAttackObserver(runtime,duration=DURATION)
-              rr=runtime.run(duration=DURATION,score_observer=obs)
-              normal=obs.finish(events_processed=rr.events_processed)
-              value=float(normal.char_total[idx])
-              print(f"RESULT|set={label}|normal={value:.3f}|err={value/m_normal-1:.8f}")
-              print(f"STARTS|set={label}|"+",".join(f"{x:.6f}" for x in rr.full_burst_starts))
-              return value
+          sink=SimpleDamageScoreSink(compiled,profile)
+          runtime=BurstRuntime(compiled,policy,profile,damage_sink=sink)
+          class TraceObserver(StaticNormalAttackObserver):
+              def __init__(self,*a,**k):
+                  self.rows=[]
+                  super().__init__(*a,**k)
+              def _score_shots(self,actor,count,*,eval_time):
+                  before=float(self.char_total[actor])
+                  out=super()._score_shots(actor,count,eval_time=eval_time)
+                  if actor==idx:
+                      self.rows.append((float(eval_time),int(count),float(self.char_total[actor])-before))
+                  return out
+          obs=TraceObserver(runtime,duration=DURATION)
+          rr=runtime.run(duration=DURATION,score_observer=obs)
+          final=obs.finish(events_processed=rr.events_processed)
 
-          base=fast("base")
-          orig_schedule=BurstMachine._schedule
-          def frame_schedule(self,scheduler,time,kind,*,stage=None):
-              t=float(time)
-              framed=ceil((t-1e-9)/DT)*DT
-              return orig_schedule(self,scheduler,framed,kind,stage=stage)
-          BurstMachine._schedule=frame_schedule
-          framed=fast("burst_frame")
-          print("M_STARTS|"+",".join(f"{x:.6f}" for x in m_starts))
-          print(f"DELTA|base_err={base/m_normal-1:.8f}|framed_err={framed/m_normal-1:.8f}")
+          for cp in (30,60,75,90,105,120,135,150,165,180):
+              md=sum(v for t,v in m_by_t.items() if t < cp-1e-9)
+              mc=sum(1 for t in m_by_t if t < cp-1e-9)
+              fd=sum(d for t,c,d in obs.rows if t < cp-1e-9)
+              fc=sum(c for t,c,d in obs.rows if t < cp-1e-9)
+              print(f"CUM|t={cp}|m={md:.3f}|f={fd:.3f}|err={fd/md-1:.8f}|m_shots={mc}|f_shots={fc}|shot_delta={fc-mc}")
+          print(f"FINAL|m={sum(m_by_t.values()):.3f}|f={float(final.char_total[idx]):.3f}|err={float(final.char_total[idx])/sum(m_by_t.values())-1:.8f}")
+          print("FAST_STARTS|"+",".join(f"{x:.6f}" for x in rr.full_burst_starts))
           PY
