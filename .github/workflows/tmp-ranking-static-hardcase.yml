@@ -13,23 +13,67 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Inspect certified charge controls
+      - name: Isolate charge frame phase impact
         shell: bash
         run: |
           python - <<'PY'
+          from bisect import bisect_left
+          from calculator.timeline import DT
           from context import spec
+          from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.model import EnemyStaticProfile
+          from fast_engine.engine.score import score_static_squad, static_score_blockers
+          from fast_engine.engine.weapon import DynamicChargeCadenceRuntime
+
           TEAMS={
             'MM':("미란다","브리드 : 사일런트 트랙","헬름","루주","미하라 : 본딩 체인"),
             'RHQ':("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸"),
           }
+          MORIS={'MM':3532610672.0,'RHQ':3528909503.0}
+          D=180.0; CFG={'duration':D,'first_burst_time':3.0,'rng_mode':'expected'}
+          profile=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=D)
+          ticks=[]; t=0.0
+          while t<=181.0: ticks.append(t); t+=DT
+          def snap(x):
+              i=bisect_left(ticks,float(x)); return ticks[i] if i<len(ticks) else float(x)
+          built={}
           for label,names in TEAMS.items():
-              squad=spec.build_squad(list(names)); compiled=compile_moris_squad(squad)
-              for raw,c in zip(squad,compiled.members):
-                  w=c.weapon
-                  if str(w.get('fire_mode'))=='charge' or w.get('charge_time') is not None:
-                      print(f'CHARGE|team={label}|name={c.name}|control={raw.get("control")}|weapon={w}')
-                      for e in c.effects:
-                          if (e.stat or '') in {'charge_speed_pct','charge_time_flat','post_fire_delay','reload_speed_pct','max_ammo_pct','max_ammo_flat'}:
-                              print(f'EFFECT|name={c.name}|source={e.source}|ename={e.name}|stat={e.stat}|value={e.value}|duration={e.duration}|triggers={[r.event_key for r in e.triggers]}')
+              sq=spec.build_squad(list(names)); cp=compile_moris_squad(sq); bl=static_score_blockers(cp)
+              if bl: raise RuntimeError((label,bl))
+              built[label]=(cp,compile_burst_policy(sq,cp,dict(CFG)))
+          orig_enter=DynamicChargeCadenceRuntime._enter_charge
+          orig_after=DynamicChargeCadenceRuntime._after_shot
+          orig_finish=DynamicChargeCadenceRuntime._finish_nonshot_phase
+          def reset():
+              DynamicChargeCadenceRuntime._enter_charge=orig_enter
+              DynamicChargeCadenceRuntime._after_shot=orig_after
+              DynamicChargeCadenceRuntime._finish_nonshot_phase=orig_finish
+          def install(parts):
+              reset()
+              if 'enter' in parts:
+                  def pe(self,st,at,now_for_mods): orig_enter(self,st,at,now_for_mods); st.phase_end=snap(st.phase_end)
+                  DynamicChargeCadenceRuntime._enter_charge=pe
+              if 'after' in parts:
+                  def pa(self,st,shot_time): orig_after(self,st,shot_time); st.phase_end=snap(st.phase_end)
+                  DynamicChargeCadenceRuntime._after_shot=pa
+              if 'finish' in parts:
+                  def pf(self,st,transition_time,now_for_mods): orig_finish(self,st,transition_time,now_for_mods); st.phase_end=snap(st.phase_end)
+                  DynamicChargeCadenceRuntime._finish_nonshot_phase=pf
+          def score(label,parts):
+              install(parts); vals={}
+              for team,(cp,po) in built.items():
+                  r=score_static_squad(cp,po,profile); vals[team]=sum(float(v) for v in r.char_total)
+              margin=(vals['MM']-vals['RHQ'])/max(vals.values())
+              print(f'VAR|set={label}|MM={vals["MM"]:.3f}|RHQ={vals["RHQ"]:.3f}|margin={margin:.8f}|delta_to_moris={margin-((MORIS["MM"]-MORIS["RHQ"])/max(MORIS.values())):+.8f}')
+          score('base',set())
+          score('enter',{'enter'})
+          score('after',{'after'})
+          score('finish',{'finish'})
+          score('enter_after',{'enter','after'})
+          score('after_finish',{'after','finish'})
+          score('enter_finish',{'enter','finish'})
+          score('enter_after_finish',{'enter','after','finish'})
+          reset()
+          print(f'MORIS|margin={(MORIS["MM"]-MORIS["RHQ"])/max(MORIS.values()):.8f}')
           PY
