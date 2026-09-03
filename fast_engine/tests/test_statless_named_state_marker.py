@@ -123,7 +123,7 @@ class StatlessNamedStateMarkerTests(unittest.TestCase):
             runtime.dispatcher.effects.has_named_state(grave, "미래 예지", now=11.0)
         )
 
-    def test_marker_support_removes_only_grave_delivery_dependency(self):
+    def test_marker_support_and_self_stack_heal_bridge_stay_narrow(self):
         squad = compile_moris_squad(spec.build_squad(_GRAVE_TEAM))
         blockers = static_score_blockers(squad)
         self.assertFalse(any("그레이브:과열 II" in row for row in blockers))
@@ -131,11 +131,11 @@ class StatlessNamedStateMarkerTests(unittest.TestCase):
 
         crown = compile_moris_squad(spec.build_squad(_CROWN_TEAM))
         crown_blockers = static_score_blockers(crown)
-        self.assertIn(
+        self.assertNotIn(
             "normal_delivery:크라운:로얄 에타이어 4:atk_dmg_pct",
             crown_blockers,
         )
-        self.assertIn(
+        self.assertNotIn(
             "skill_state_delivery:크라운:로얄 에타이어 4:atk_dmg_pct",
             crown_blockers,
         )

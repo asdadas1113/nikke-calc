@@ -717,6 +717,10 @@ def _named_buff_event_dependency_score_safe(squad: CompiledSquad, effect) -> boo
     if not keys:
         return True
     for key in keys:
+        if key == "event:heal_received":
+            if not TriggerDispatcher.heal_received_dependency_score_safe(squad, effect):
+                return False
+            continue
         name = key[len("event:"):]
         providers = tuple(
             provider

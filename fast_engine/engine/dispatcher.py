@@ -482,6 +482,187 @@ class TriggerDispatcher:
             return False
         return True
 
+    @staticmethod
+    def _parse_stack_reach_event_key(key: str) -> tuple[str, int] | None:
+        prefix = "stack_reach:"
+        if not key.startswith(prefix):
+            return None
+        body = key[len(prefix):]
+        name, sep, raw = body.rpartition(":")
+        if not sep or not name or not raw.isdigit():
+            return None
+        threshold = int(raw)
+        return None if threshold <= 0 else (name, threshold)
+
+    @classmethod
+    def _self_stack_reach_marker_shape_supported(cls, effect: "CompiledEffect") -> bool:
+        """Materialize only a sparse permanent self stack used as a state counter.
+
+        The underlying stat may remain a Moris-NOP for damage purposes. Fast owns
+        only the stack count and its hit-count boundaries, not the ignored stat.
+        """
+        if not (
+            effect.capability.disposition is CapabilityDisposition.MIRROR_MORIS_NOP
+            and effect.effect_type == "buff"
+            and bool(effect.name)
+            and effect.target_spec.mode is TargetMode.SELF
+            and effect.duration in (None, -1, -1.0)
+            and effect.max_stack is not None
+            and float(effect.max_stack) > 1.0
+            and float(effect.max_stack).is_integer()
+            and set(effect.parameters).issubset({"note"})
+            and not effect.condition_rules
+            and len(effect.triggers) == 1
+        ):
+            return False
+        rule = effect.triggers[0]
+        return (
+            rule.mode is TriggerMode.MODULO
+            and rule.trigger_count_reducible
+            and rule.event_key == "hit_count"
+            and int(rule.threshold or 0) > 0
+        )
+
+    @classmethod
+    def _stack_reach_source_shape_supported(
+        cls, squad: "CompiledSquad", effect: "CompiledEffect"
+    ) -> bool:
+        parsed = tuple(
+            cls._parse_stack_reach_event_key(rule.event_key or "")
+            for rule in effect.triggers
+        )
+        if not parsed or any(item is None for item in parsed):
+            return False
+        for item in parsed:
+            assert item is not None
+            name, threshold = item
+            providers = tuple(
+                provider
+                for provider in squad.members[effect.actor].effects
+                if provider.effect_id != effect.effect_id
+                and provider.name == name
+                and cls._self_stack_reach_marker_shape_supported(provider)
+            )
+            if len(providers) != 1:
+                return False
+            marker = providers[0]
+            if threshold > int(float(marker.max_stack or 0.0)):
+                return False
+            if any(
+                other.effect_id != marker.effect_id
+                and other.parameters.get("target_effect") == name
+                and (other.stat or "") in {
+                    "buff_stack_add", "buff_stack_remove", "buff_stack_init"
+                }
+                for other in squad.members[effect.actor].effects
+            ):
+                return False
+        return True
+
+    @classmethod
+    def _self_stack_remove_shape_supported(cls, effect: "CompiledEffect") -> bool:
+        name = effect.parameters.get("target_effect")
+        if not (
+            effect.capability.disposition is CapabilityDisposition.PLANNED
+            and effect.effect_type == "instant"
+            and (effect.stat or "") == "remove_named_buff"
+            and effect.target_spec.mode is TargetMode.SELF
+            and isinstance(name, str)
+            and bool(name)
+            and set(effect.parameters) == {"target_effect"}
+            and not effect.condition_rules
+            and bool(effect.triggers)
+        ):
+            return False
+        for rule in effect.triggers:
+            parsed = cls._parse_stack_reach_event_key(rule.event_key or "")
+            if rule.mode is not TriggerMode.EVENT or parsed is None or parsed[0] != name:
+                return False
+        return True
+
+    def _self_stack_remove_runtime_supported(self, effect: "CompiledEffect") -> bool:
+        return (
+            self._self_stack_remove_shape_supported(effect)
+            and self._stack_reach_source_shape_supported(self.squad, effect)
+        )
+
+    @classmethod
+    def _self_stack_heal_shape_supported(cls, effect: "CompiledEffect") -> bool:
+        return (
+            effect.capability.disposition is CapabilityDisposition.PLANNED
+            and effect.effect_type == "instant"
+            and (effect.stat or "") == "heal_hp_pct"
+            and effect.target_spec.mode is TargetMode.SELF
+            and effect.value is not None
+            and float(effect.value) > 0.0
+            and not effect.parameters
+            and not effect.condition_rules
+            and bool(effect.triggers)
+            and all(
+                rule.mode is TriggerMode.EVENT
+                and cls._parse_stack_reach_event_key(rule.event_key or "") is not None
+                for rule in effect.triggers
+            )
+        )
+
+    @classmethod
+    def _self_stack_heal_chain_shape_supported(
+        cls, squad: "CompiledSquad", effect: "CompiledEffect"
+    ) -> bool:
+        if not (
+            cls._self_stack_heal_shape_supported(effect)
+            and cls._stack_reach_source_shape_supported(squad, effect)
+        ):
+            return False
+        for rule in effect.triggers:
+            key = rule.event_key or ""
+            parsed = cls._parse_stack_reach_event_key(key)
+            if parsed is None:
+                return False
+            name, _threshold = parsed
+            resetters = tuple(
+                other
+                for other in squad.members[effect.actor].effects
+                if other.effect_id != effect.effect_id
+                and cls._self_stack_remove_shape_supported(other)
+                and other.parameters.get("target_effect") == name
+                and any((r.event_key or "") == key for r in other.triggers)
+            )
+            if not resetters:
+                return False
+        return True
+
+    def _self_stack_heal_runtime_supported(self, effect: "CompiledEffect") -> bool:
+        return self._self_stack_heal_chain_shape_supported(self.squad, effect)
+
+    @classmethod
+    def heal_received_dependency_score_safe(
+        cls, squad: "CompiledSquad", consumer: "CompiledEffect"
+    ) -> bool:
+        """Certify heal_received only when every possible provider is owned.
+
+        The first slice intentionally supports only a recurring self stack-heal
+        chain. External instant heals and lifesteal remain fail-closed so omitted
+        refreshes cannot silently change a comparison-critical buff window.
+        """
+        owner = consumer.actor
+        providers = tuple(
+            provider
+            for provider in squad.effects
+            if provider.effect_id != consumer.effect_id
+            and (provider.stat or "") in {"heal_hp_pct", "lifesteal_pct"}
+            and owner in possible_ally_targets(squad, provider)
+        )
+        if not providers:
+            return False
+        return all(
+            (provider.stat or "") == "heal_hp_pct"
+            and provider.actor == owner
+            and provider.target_spec.mode is TargetMode.SELF
+            and cls._self_stack_heal_chain_shape_supported(squad, provider)
+            for provider in providers
+        )
+
     _NAMED_EVENT_EXEMPT = frozenset({
         "event:enemy_spawn",
         "event:target_spawn",
@@ -670,7 +851,8 @@ class TriggerDispatcher:
     def is_executable_effect(effect: "CompiledEffect") -> bool:
         stat = effect.stat or ""
         if (
-            TriggerDispatcher._timed_self_named_state_marker_shape_supported(effect)
+            TriggerDispatcher._self_stack_reach_marker_shape_supported(effect)
+            or TriggerDispatcher._timed_self_named_state_marker_shape_supported(effect)
             or TriggerDispatcher._named_event_control_shape_supported(effect)
             or TriggerDispatcher._named_duration_extend_shape_supported(effect)
             or TriggerDispatcher._on_attack_charge_speed_shape_supported(effect)
@@ -717,6 +899,10 @@ class TriggerDispatcher:
         if not keys:
             return True
         for key in keys:
+            if key == "event:heal_received":
+                if not self.heal_received_dependency_score_safe(self.squad, effect):
+                    return False
+                continue
             name = key[len("event:"):]
             providers = tuple(
                 provider
@@ -758,6 +944,10 @@ class TriggerDispatcher:
         ):
             return True
         if self._timed_shield_shape_supported(effect):
+            return True
+        if self._self_stack_remove_runtime_supported(effect):
+            return True
+        if self._self_stack_heal_runtime_supported(effect):
             return True
         if self.is_executable_effect(effect):
             if not self._named_event_source_runtime_safe(effect):
@@ -1044,6 +1234,22 @@ class TriggerDispatcher:
                     now=now,
                     scheduler=self.scheduler,
                 )
+            elif stat == "remove_named_buff" and self._self_stack_remove_runtime_supported(effect):
+                name = str(effect.parameters.get("target_effect") or "")
+                if tuple(targets) != (effect.actor,):
+                    return False
+                removed = self.effects.remove_named_state(effect.actor, name, now=now)
+                if removed and name in self._self_stack_dependency_names:
+                    self._sync_self_stack_conditional_passives(now=now)
+                if removed and name in self._self_state_dependency_names:
+                    self._sync_self_state_conditional_passives(now=now)
+            elif stat == "heal_hp_pct" and self._self_stack_heal_runtime_supported(effect):
+                if tuple(targets) != (effect.actor,):
+                    return False
+                from .burst import BurstSignal
+                self.dispatch(
+                    BurstSignal(now, "event:heal_received", effect.actor, effect.actor)
+                )
             elif stat == "remove_named_buff" and self._enemy_remove_named_state_runtime_supported(effect):
                 name = str(effect.parameters.get("target_effect") or "")
                 if tuple(targets) != (ENEMY,):
@@ -1098,8 +1304,29 @@ class TriggerDispatcher:
         elif effect.effect_type == "buff":
             if stat in self._SHIELD_STATS and any(target == ENEMY for target in targets):
                 return False
+            marker_stack_before = (
+                self.effects.named_stack(effect.actor, effect.name or "", now=now)
+                if self._self_stack_reach_marker_shape_supported(effect)
+                else None
+            )
             was_active = self.effects.group_active(effect.effect_id, targets, now=now)
             activated_group = self.effects.activate_group(effect, targets, now, self.scheduler)
+            if activated_group and marker_stack_before is not None and effect.name:
+                marker_stack_after = self.effects.named_stack(
+                    effect.actor, effect.name, now=now
+                )
+                if marker_stack_after > marker_stack_before + 1e-9:
+                    stack_int = int(round(marker_stack_after))
+                    if abs(marker_stack_after - stack_int) <= 1e-9:
+                        from .burst import BurstSignal
+                        self.dispatch(
+                            BurstSignal(
+                                now,
+                                f"stack_reach:{effect.name}:{stack_int}",
+                                effect.actor,
+                                effect.actor,
+                            )
+                        )
             if (
                 activated_group
                 and effect.name
