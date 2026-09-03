@@ -1,0 +1,103 @@
+===== VARIANT: baseline =====
+FAST_TOTAL=2837049287.480554581
+FAST_ANNIHILATE_STACKS=[30, 30, 30, 30, 29, 30, 30]
+FAST_ANNIHILATE_ROWS=[(12.349999999999993, 30.0, 1866057.0657290965), (38.34999999999961, 30.0, 1866057.0657290816), (64.34999999999815, 30.0, 1866057.0657290816), (90.34999999999667, 30.0, 1866057.0657290816), (116.34999999999519, 29.0, 1794014.228966415), (141.8999999999979, 30.0, 1497300.474723041), (167.9000000000186, 30.0, 1866057.0657290816)]
+Traceback (most recent call last):
+  File "/home/runner/work/nikke-calc/nikke-calc/fast_engine/research/tmp_validate_asuka_mg_v2.py", line 240, in <module>
+    main()
+    ~~~~^^
+  File "/home/runner/work/nikke-calc/nikke-calc/fast_engine/research/tmp_validate_asuka_mg_v2.py", line 223, in main
+    assert moris_stacks == fast_stacks, (
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: seed=0 stack mismatch: Moris=[30, 29, 29, 30, 29, 29, 29] Fast=[30, 30, 30, 30, 29, 30, 30]
+...................
+----------------------------------------------------------------------
+Ran 19 tests in 10.828s
+
+OK
+RESULT variant=baseline asuka_rc=1 focused_rc=0
+
+===== VARIANT: mg_v2_only =====
+FAST_TOTAL=2839655598.480229855
+FAST_ANNIHILATE_STACKS=[30, 29, 29, 30, 29, 29, 30]
+FAST_ANNIHILATE_ROWS=[(12.349999999999993, 30.0, 1866057.0657290965), (38.34999999999961, 29.0, 1794014.2289664447), (64.34999999999815, 29.0, 1794014.2289664447), (90.34999999999667, 30.0, 1866057.0657290816), (116.34999999999519, 29.0, 1794014.228966415), (141.8999999999979, 29.0, 1439494.2180623412), (167.9000000000186, 30.0, 1866057.0657290816)]
+Traceback (most recent call last):
+  File "/home/runner/work/nikke-calc/nikke-calc/fast_engine/research/tmp_validate_asuka_mg_v2.py", line 240, in <module>
+    main()
+    ~~~~^^
+  File "/home/runner/work/nikke-calc/nikke-calc/fast_engine/research/tmp_validate_asuka_mg_v2.py", line 223, in main
+    assert moris_stacks == fast_stacks, (
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: seed=0 stack mismatch: Moris=[30, 29, 29, 30, 29, 29, 29] Fast=[30, 29, 29, 30, 29, 29, 30]
+..............F....
+======================================================================
+FAIL: test_def55_near_tie_preserves_moris_order (fast_engine.tests.test_damage_moris_frame_timing.MorisFrameTimingTest.test_def55_near_tie_preserves_moris_order)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/nikke-calc/nikke-calc/fast_engine/tests/test_damage_moris_frame_timing.py", line 85, in test_def55_near_tie_preserves_moris_order
+    self.assertGreater(fast_margin, 0.0)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+AssertionError: -0.0012732627369900645 not greater than 0.0
+
+----------------------------------------------------------------------
+Ran 19 tests in 10.849s
+
+FAILED (failures=1)
+RESULT variant=mg_v2_only asuka_rc=1 focused_rc=1
+
+===== VARIANT: expiry_only =====
+FAST_TOTAL=2837980033.531516552
+FAST_ANNIHILATE_STACKS=[30, 30, 30, 30, 30, 30, 30]
+FAST_ANNIHILATE_ROWS=[(12.350000000000193, 30.0, 1866057.0657290965), (38.36666666666577, 30.0, 1866057.0657290816), (64.3666666666643, 30.0, 1866057.0657290816), (90.36666666666282, 30.0, 1866057.0657290816), (116.36666666666135, 30.0, 1866057.0657290816), (141.90000000000506, 30.0, 1497300.474723041), (167.90000000002576, 30.0, 1866057.0657290816)]
+Traceback (most recent call last):
+  File "/home/runner/work/nikke-calc/nikke-calc/fast_engine/research/tmp_validate_asuka_mg_v2.py", line 240, in <module>
+    main()
+    ~~~~^^
+  File "/home/runner/work/nikke-calc/nikke-calc/fast_engine/research/tmp_validate_asuka_mg_v2.py", line 223, in main
+    assert moris_stacks == fast_stacks, (
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: seed=0 stack mismatch: Moris=[30, 29, 29, 30, 29, 29, 29] Fast=[30, 30, 30, 30, 30, 30, 30]
+..............F....
+======================================================================
+FAIL: test_def55_near_tie_preserves_moris_order (fast_engine.tests.test_damage_moris_frame_timing.MorisFrameTimingTest.test_def55_near_tie_preserves_moris_order)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/nikke-calc/nikke-calc/fast_engine/tests/test_damage_moris_frame_timing.py", line 86, in test_def55_near_tie_preserves_moris_order
+    self.assertLess(abs(mm_f / mm_m - 1.0), 0.001)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0.0011084490378325818 not less than 0.001
+
+----------------------------------------------------------------------
+Ran 19 tests in 11.051s
+
+FAILED (failures=1)
+RESULT variant=expiry_only asuka_rc=1 focused_rc=1
+
+===== VARIANT: mg_v2_plus_expiry =====
+FAST_TOTAL=2840222074.695575714
+FAST_ANNIHILATE_STACKS=[30, 29, 29, 30, 29, 29, 30]
+FAST_ANNIHILATE_ROWS=[(12.350000000000193, 30.0, 1866057.0657290965), (38.36666666666577, 29.0, 1794014.2289664447), (64.3666666666643, 29.0, 1794014.2289664447), (90.36666666666282, 30.0, 1866057.0657290816), (116.36666666666135, 29.0, 1794014.228966415), (141.90000000000506, 29.0, 1439494.2180623412), (167.90000000002576, 30.0, 1866057.0657290816)]
+Traceback (most recent call last):
+  File "/home/runner/work/nikke-calc/nikke-calc/fast_engine/research/tmp_validate_asuka_mg_v2.py", line 240, in <module>
+    main()
+    ~~~~^^
+  File "/home/runner/work/nikke-calc/nikke-calc/fast_engine/research/tmp_validate_asuka_mg_v2.py", line 223, in main
+    assert moris_stacks == fast_stacks, (
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: seed=0 stack mismatch: Moris=[30, 29, 29, 30, 29, 29, 29] Fast=[30, 29, 29, 30, 29, 29, 30]
+..............F....
+======================================================================
+FAIL: test_def55_near_tie_preserves_moris_order (fast_engine.tests.test_damage_moris_frame_timing.MorisFrameTimingTest.test_def55_near_tie_preserves_moris_order)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/nikke-calc/nikke-calc/fast_engine/tests/test_damage_moris_frame_timing.py", line 85, in test_def55_near_tie_preserves_moris_order
+    self.assertGreater(fast_margin, 0.0)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+AssertionError: -0.0009730863794754576 not greater than 0.0
+
+----------------------------------------------------------------------
+Ran 19 tests in 11.129s
+
+FAILED (failures=1)
+RESULT variant=mg_v2_plus_expiry asuka_rc=1 focused_rc=1
+
