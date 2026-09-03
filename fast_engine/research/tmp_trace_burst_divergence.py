@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from calculator.buff_manager import BuffManager
+from calculator.timeline import BurstController
 from fast_engine.engine.burst import BurstMachine
 from fast_engine.research import tmp_validate_asuka_mg_v2 as validation
 
@@ -10,11 +11,15 @@ from fast_engine.research import tmp_validate_asuka_mg_v2 as validation
 def main() -> None:
     old_handle = BurstMachine.handle
     old_cast = BurstMachine._cast_signals
+    old_adjust = BurstMachine.adjust_cooldown
     old_notify = BuffManager.notify
+    old_moris_tick = BurstController.tick
 
     fast_events: list[tuple] = []
     fast_casts: list[tuple] = []
+    fast_cd: list[tuple] = []
     moris_events: list[tuple] = []
+    moris_wait: list[tuple] = []
 
     def traced_handle(machine, event, scheduler, **kwargs):
         before = (machine.phase, machine.cycle_count)
@@ -44,13 +49,29 @@ def main() -> None:
             ))
         return old_cast(machine, actor, stage, now)
 
+    def traced_adjust(machine, actor, reduction, now, scheduler):
+        before = float(machine.ready_at[actor])
+        out = old_adjust(machine, actor, reduction, now, scheduler)
+        after = float(machine.ready_at[actor])
+        if 118.0 <= float(now) <= 121.0:
+            fast_cd.append((
+                float(now),
+                machine.squad.members[actor].name,
+                float(reduction),
+                before,
+                after,
+                machine.phase,
+                machine._waiting_stage,
+                tuple(machine._waiting_candidates),
+            ))
+        return out
+
     def traced_notify(manager, event, t, caster, **ctx):
         if 100.0 <= float(t) <= 140.0:
             keep = False
             if event == "burst_cast":
                 keep = True
             elif event in {"full_burst_start", "full_burst_end"}:
-                # These are broadcast to every owner; one row is enough.
                 keep = caster == validation.NAMES[0]
             elif event.startswith("burst_enter:"):
                 keep = caster == validation.NAMES[0]
@@ -58,11 +79,32 @@ def main() -> None:
                 moris_events.append((float(t), event, caster))
         return old_notify(manager, event, t, caster, **ctx)
 
+    def traced_moris_tick(ctrl, t, bm, state):
+        if 119.35 <= float(t) <= 119.82:
+            before = (
+                ctrl._phase,
+                float(ctrl._next_action_t),
+                tuple(ctrl._cd_wait_candidates or ()),
+                tuple((name, float(ctrl.burst_ready_at.get(name, 0.0))) for name in validation.NAMES),
+            )
+            out = old_moris_tick(ctrl, t, bm, state)
+            after = (
+                ctrl._phase,
+                float(ctrl._next_action_t),
+                tuple(ctrl._cd_wait_candidates or ()),
+                tuple((name, float(ctrl.burst_ready_at.get(name, 0.0))) for name in validation.NAMES),
+            )
+            moris_wait.append((float(t), before, after))
+            return out
+        return old_moris_tick(ctrl, t, bm, state)
+
     try:
         with (
             patch.object(BurstMachine, "handle", new=traced_handle),
             patch.object(BurstMachine, "_cast_signals", new=traced_cast),
+            patch.object(BurstMachine, "adjust_cooldown", new=traced_adjust),
             patch.object(BuffManager, "notify", new=traced_notify),
+            patch.object(BurstController, "tick", new=traced_moris_tick),
         ):
             try:
                 validation.main()
@@ -75,8 +117,14 @@ def main() -> None:
         print("FAST_CASTS_100_140=")
         for row in fast_casts:
             print(row)
+        print("FAST_CD_ADJUST_118_121=")
+        for row in fast_cd:
+            print(row)
         print("MORIS_BURST_EVENTS_100_140=")
         for row in moris_events:
+            print(row)
+        print("MORIS_WAIT_119_35_119_82=")
+        for row in moris_wait:
             print(row)
 
 
