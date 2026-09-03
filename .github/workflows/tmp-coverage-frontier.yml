@@ -13,25 +13,100 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect squad ammo consumer semantics
+      - name: Compare squad-ammo threshold timestamps
         run: |
           PYTHONPATH=. python - <<'PY'
+          from calculator.buff_manager import BuffManager
+          from calculator.timeline import DEFAULT_ENEMY, simulate
           from context import spec
+          from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
+          from fast_engine.engine.dynamic_reload import DynamicRapidReloadRuntime
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.engine.weapon import DynamicChargeCadenceRuntime
+          import fast_engine.engine.score as score_mod
 
           names = ['리틀 머메이드', '크라운', '라피 : 레드 후드', '미하라 : 본딩 체인', '헬름']
-          compiled = compile_moris_squad(spec.build_squad(names))
-          sink = SimpleDamageScoreSink(compiled, EnemyStaticProfile(defense=0.0, duration=180.0))
-          print('BLOCKERS', static_score_blockers(compiled))
-          for effect in compiled.effects:
-              if not any(rule.event_key == 'squad_ammo_consume' for rule in effect.triggers):
-                  continue
-              print('EFFECT', compiled.members[effect.actor].name, repr(effect))
-              print('  dispatcher_static_executable=', TriggerDispatcher.is_executable_effect(effect))
-              print('  damage_sink_supports=', sink.supports(effect))
-              print('  damage_state_supports=', sink.supports_state_operation(effect))
+          duration = 180.0
+          cfg = {'duration': duration, 'first_burst_time': 3.0, 'rng_mode': 'expected'}
+
+          # Moris: record the true team-global 500-shot crossings.
+          moris_count = 0
+          moris_cross = []
+          orig_notify = BuffManager._notify
+          def traced_notify(self, event, t, caster):
+              global moris_count
+              if event == 'squad_ammo_consume':
+                  moris_count += 1
+                  if moris_count % 500 == 0:
+                      moris_cross.append((moris_count, float(t), str(caster)))
+              return orig_notify(self, event, t, caster)
+          BuffManager._notify = traced_notify
+          try:
+              moris_squad = spec.build_squad(names)
+              simulate(
+                  moris_squad,
+                  config=spec.build_config(moris_squad, dict(cfg)),
+                  enemy=dict(DEFAULT_ENEMY),
+                  seed=42,
+                  verbose=False,
+              )
+          finally:
+              BuffManager._notify = orig_notify
+
+          # Fast: collect only real actor-state shots, excluding copy-only predictions.
+          fast_shots = []
+          orig_rapid_after = DynamicRapidReloadRuntime._after_shot
+          def traced_rapid_after(self, st, shot_time):
+              actual = st is self._states.get(st.actor)
+              result = orig_rapid_after(self, st, shot_time)
+              if actual:
+                  fast_shots.append((float(shot_time), int(st.actor)))
+              return result
+          DynamicRapidReloadRuntime._after_shot = traced_rapid_after
+
+          orig_charge_after = DynamicChargeCadenceRuntime._after_shot
+          def traced_charge_after(self, st, shot_time):
+              actual = st is self._states.get(st.actor)
+              result = orig_charge_after(self, st, shot_time)
+              if actual:
+                  fast_shots.append((float(shot_time), int(st.actor)))
+              return result
+          DynamicChargeCadenceRuntime._after_shot = traced_charge_after
+
+          old_blockers = score_mod.static_normal_score_blockers
+          score_mod.static_normal_score_blockers = lambda _squad: ()
+          try:
+              fast_moris = spec.build_squad(names)
+              compiled = compile_moris_squad(fast_moris)
+              policy = compile_burst_policy(fast_moris, compiled, dict(cfg))
+              enemy = EnemyStaticProfile(
+                  defense=float(DEFAULT_ENEMY.get('def', 31784.0)),
+                  element=DEFAULT_ENEMY.get('code'),
+                  core_uptime=1.0 if float(DEFAULT_ENEMY.get('core_px', 0.0) or 0.0) > 0 else 0.0,
+                  core_px=float(DEFAULT_ENEMY.get('core_px', 0.0) or 0.0),
+                  duration=duration,
+              )
+              runtime = BurstRuntime(compiled, policy, enemy)
+              observer = score_mod.StaticNormalAttackObserver(runtime, duration=duration)
+              runtime.run(duration=duration, score_observer=observer)
+              observer.finish(events_processed=0)
+          finally:
+              score_mod.static_normal_score_blockers = old_blockers
+              DynamicRapidReloadRuntime._after_shot = orig_rapid_after
+              DynamicChargeCadenceRuntime._after_shot = orig_charge_after
+
+          fast_shots.sort(key=lambda row: (row[0], row[1]))
+          fast_cross = []
+          for absolute in range(500, len(fast_shots) + 1, 500):
+              t, actor = fast_shots[absolute - 1]
+              fast_cross.append((absolute, t, names[actor]))
+
+          print('MORIS_TOTAL', moris_count)
+          print('FAST_TOTAL', len(fast_shots))
+          print('MORIS_CROSS', moris_cross)
+          print('FAST_CROSS', fast_cross)
+          for m, f in zip(moris_cross, fast_cross):
+              print(f'DIFF|count={m[0]}|m={m[1]:.12f}|f={f[1]:.12f}|dt={f[1]-m[1]:+.12f}|m_actor={m[2]}|f_actor={f[2]}')
           PY
