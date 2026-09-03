@@ -11,8 +11,10 @@ The probe therefore keeps every real non-``지그_*`` five-character source case
 rebuilds each squad with the same public defaults, and evaluates every source
 case under one common config/enemy. Two source cases with identical ordered
 memberships remain two source cases in the standardized 24-case corpus even
-though their rebuilt standardized inputs are identical. Fast blockers or
-unsupported damage remain coverage gaps rather than artificial low scores.
+though their rebuilt standardized inputs are identical. Ranking metrics dedupe
+those exact ordered memberships because the optimizer validation contract
+requires one observation per candidate. Fast blockers or unsupported damage
+remain coverage gaps rather than artificial low scores.
 
 This is a first engine-ranking diagnosis, not a production optimizer benchmark.
 The corpus is curated and small, so its recall numbers are not production
@@ -104,6 +106,44 @@ def _groups(compiled) -> tuple[str, ...]:
     return tuple(sorted(groups))
 
 
+def _dedupe_rows_by_members(rows: list[ProbeRow]) -> list[ProbeRow]:
+    """Keep source accounting separate from unique ranking candidates.
+
+    Duplicate source cases are allowed, but after rebuilding under the common
+    scenario they must carry identical deterministic score/safety evidence.
+    Wall-clock timings and source labels are intentionally excluded from the
+    equality contract.
+    """
+
+    unique: dict[tuple[str, ...], ProbeRow] = {}
+    comparable_fields = (
+        "moris_score",
+        "raw_fast_score",
+        "certified_fast_score",
+        "relative_error",
+        "blockers",
+        "unsupported",
+        "groups",
+    )
+    for row in rows:
+        previous = unique.get(row.members)
+        if previous is None:
+            unique[row.members] = row
+            continue
+        mismatches = tuple(
+            field
+            for field in comparable_fields
+            if getattr(previous, field) != getattr(row, field)
+        )
+        if mismatches:
+            raise AssertionError(
+                "duplicate standardized membership diverged: "
+                f"{row.members}: fields={mismatches} "
+                f"sources=({previous.source_name}, {row.source_name})"
+            )
+    return list(unique.values())
+
+
 def run_public_probe(*, top_n: int = 10, top_k: int = 20) -> dict:
     corpus = _source_corpus()
     rows: list[ProbeRow] = []
@@ -169,6 +209,7 @@ def run_public_probe(*, top_n: int = 10, top_k: int = 20) -> dict:
             )
         )
 
+    unique_rows = _dedupe_rows_by_members(rows)
     observations = [
         RankingObservation(
             members=row.members,
@@ -178,7 +219,7 @@ def run_public_probe(*, top_n: int = 10, top_k: int = 20) -> dict:
             unsupported=row.unsupported,
             groups=row.groups,
         )
-        for row in rows
+        for row in unique_rows
     ]
     coverage = analyze_fast_moris_ranking(
         observations,
@@ -186,7 +227,7 @@ def run_public_probe(*, top_n: int = 10, top_k: int = 20) -> dict:
         top_k=min(top_k, len(observations)),
     )
 
-    clean = [row for row in rows if row.certified_fast_score is not None]
+    clean = [row for row in unique_rows if row.certified_fast_score is not None]
     clean_metrics = None
     if clean:
         clean_top_n = min(5, len(clean))
@@ -208,12 +249,12 @@ def run_public_probe(*, top_n: int = 10, top_k: int = 20) -> dict:
     rel = [row.relative_error for row in clean if row.relative_error is not None]
     blocker_families = Counter(
         blocker.split(":", 1)[0]
-        for row in rows
+        for row in unique_rows
         for blocker in row.blockers
     )
     unsupported_families = Counter(
         item.split(":", 1)[0]
-        for row in rows
+        for row in unique_rows
         for item in row.unsupported
     )
 
@@ -230,8 +271,9 @@ def run_public_probe(*, top_n: int = 10, top_k: int = 20) -> dict:
         },
         "snapshot_source_case_count": len(snapshot.SQUADS),
         "team_count": len(rows),
+        "unique_team_count": len(unique_rows),
         "certified_team_count": len(clean),
-        "coverage_gap_count": len(rows) - len(clean),
+        "coverage_gap_count": len(unique_rows) - len(clean),
         "moris_sim_seconds": sum(row.moris_seconds for row in rows),
         "fast_score_seconds_certified_or_attempted": sum(row.fast_seconds for row in rows),
         "certified_top_n_in_top_k": asdict(coverage),
@@ -251,8 +293,8 @@ def main() -> None:
     report = run_public_probe()
     print("=== Fast vs Moris standardized public-source-case ranking probe ===")
     print(
-        f"teams={report['team_count']} certified={report['certified_team_count']} "
-        f"coverage_gaps={report['coverage_gap_count']}"
+        f"source_teams={report['team_count']} unique_memberships={report['unique_team_count']} "
+        f"certified={report['certified_team_count']} coverage_gaps={report['coverage_gap_count']}"
     )
     print(
         f"moris_seconds={report['moris_sim_seconds']:.3f} "
