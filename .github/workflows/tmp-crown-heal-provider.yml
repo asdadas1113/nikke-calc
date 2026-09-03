@@ -33,6 +33,8 @@ jobs:
           PY
       - name: Apply temporary generic stack-heal bridge
         run: python -m fast_engine.research.tmp_apply_crown_stack_heal_bridge
+      - name: Trace Crown 43-hit cadence
+        run: python -m fast_engine.research.tmp_crown_hit43_probe
       - name: Validate Crown stack-heal semantics
         run: python -m fast_engine.research.tmp_validate_crown_stack_heal_bridge
       - name: Fast regression suite
