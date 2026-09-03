@@ -1,348 +1,75 @@
 from __future__ import annotations
 
-from pathlib import Path
-from textwrap import dedent, indent
+from calculator.timeline import DEFAULT_ENEMY, simulate
+from context import spec
+from fast_engine.engine.burst import compile_burst_policy
+from fast_engine.engine.compiler import compile_moris_squad
+from fast_engine.engine.model import EnemyStaticProfile
+from fast_engine.engine.score import score_static_squad, static_score_blockers
+
+MM = ("미란다", "브리드 : 사일런트 트랙", "헬름", "루주", "미하라 : 본딩 체인")
+RHQ = ("라피 : 레드 후드", "레드 후드", "프리카", "민트", "퀀시 : 이스케이프 퀸")
+DURATION = 180.0
+CFG = {"duration": DURATION, "first_burst_time": 3.0, "rng_mode": "expected"}
 
 
-def replace_once(path: str, old: str, new: str) -> None:
-    p = Path(path)
-    text = p.read_text()
-    count = text.count(old)
-    if count != 1:
-        raise RuntimeError(f"expected one anchor in {path}, got {count}: {old[:100]!r}")
-    p.write_text(text.replace(old, new, 1))
-
-
-Path("fast_engine/engine/frame_lattice.py").write_text(
-    dedent(
-        '''\
-        from __future__ import annotations
-
-        from bisect import bisect_left, bisect_right
-        from functools import lru_cache
-        from math import ceil
-
-        _MORIS_DT = 1.0 / 60.0
-
-
-        @lru_cache(maxsize=32)
-        def _repeated_add_ticks(horizon_seconds: int) -> tuple[float, ...]:
-            """Return Moris outer-loop timestamps from repeated ``t += 1/60``."""
-            limit = max(1, int(horizon_seconds))
-            ticks: list[float] = []
-            t = 0.0
-            while t <= float(limit) + _MORIS_DT:
-                ticks.append(t)
-                t += _MORIS_DT
-            return tuple(ticks)
-
-
-        def _ticks_for(deadline: float, horizon: float) -> tuple[float, ...]:
-            limit = max(float(deadline), float(horizon), 0.0)
-            return _repeated_add_ticks(int(ceil(limit)) + 2)
-
-
-        def moris_observed_tick(
-            deadline: float, *, horizon: float, epsilon: float = 0.0
-        ) -> float:
-            """First repeated-add Moris tick satisfying ``t >= deadline - epsilon``."""
-            value = float(deadline)
-            ticks = _ticks_for(value, horizon)
-            index = bisect_left(ticks, value - float(epsilon))
-            return ticks[index] if index < len(ticks) else value
-
-
-        def moris_next_tick(after: float, *, horizon: float) -> float:
-            """First repeated-add Moris tick strictly after ``after``."""
-            value = float(after)
-            ticks = _ticks_for(value, horizon)
-            index = bisect_right(ticks, value)
-            return ticks[index] if index < len(ticks) else value + _MORIS_DT
-        '''
+def score(names, *, defense: float, code: str, core_px: float):
+    squad = spec.build_squad(list(names))
+    compiled = compile_moris_squad(squad)
+    blockers = static_score_blockers(compiled)
+    if blockers:
+        raise RuntimeError(blockers)
+    policy = compile_burst_policy(squad, compiled, dict(CFG))
+    enemy = dict(DEFAULT_ENEMY)
+    enemy.update({"def": defense, "code": code, "core_px": core_px})
+    profile = EnemyStaticProfile(
+        defense=defense,
+        element=code,
+        core_uptime=1.0,
+        core_px=core_px,
+        duration=DURATION,
     )
-)
-
-replace_once(
-    "fast_engine/engine/burst.py",
-    "from .model import CompiledSquad\nfrom .scheduler import EventKind, EventScheduler, ScheduledEvent\n",
-    "from .frame_lattice import moris_observed_tick\nfrom .model import CompiledSquad\nfrom .scheduler import EventKind, EventScheduler, ScheduledEvent\n",
-)
-replace_once(
-    "fast_engine/engine/burst.py",
-    "        self._generation += 1\n        scheduler.schedule(time, kind, payload=BurstActionToken(self._generation, stage))\n",
-    indent(
-        dedent(
-            '''\
-            observed = moris_observed_tick(
-                time, horizon=self.policy.duration, epsilon=_EPS
-            )
-            self._generation += 1
-            scheduler.schedule(
-                observed, kind, payload=BurstActionToken(self._generation, stage)
-            )
-            '''
-        ),
-        "        ",
-    ),
-)
-
-replace_once(
-    "fast_engine/engine/effects.py",
-    "        return self.expires_at == inf or now < self.expires_at - _EPS\n",
-    "        return self.expires_at == inf or now < self.expires_at\n",
-)
-
-replace_once(
-    "fast_engine/engine/weapon.py",
-    "from .scheduler import EventKind, EventScheduler, ScheduledEvent\n",
-    "from .frame_lattice import moris_next_tick, moris_observed_tick\nfrom .scheduler import EventKind, EventScheduler, ScheduledEvent\n",
-)
-replace_once(
-    "fast_engine/engine/weapon.py",
-    "    weapon_change_id: int | None = None\n    full_charge_count: int = 0\n",
-    "    weapon_change_id: int | None = None\n    pending_weapon_change_refill: bool = False\n    full_charge_count: int = 0\n",
-)
-
-p = Path("fast_engine/engine/weapon.py")
-text = p.read_text()
-start = text.index(
-    "    def _enter_charge(self, st: _ChargeActorState, at: float, now_for_mods: float) -> None:\n"
-)
-end = text.index("    def _advance_actor_to(\n", start)
-charge_methods = dedent(
-    '''\
-    def _observe_phase_boundary(self, deadline: float) -> float:
-        return moris_observed_tick(deadline, horizon=self.duration)
-
-    def _next_outer_tick(self, after: float) -> float:
-        return moris_next_tick(after, horizon=self.duration)
-
-    def _enter_charge(self, st: _ChargeActorState, at: float, now_for_mods: float) -> None:
-        st.phase = "charging"
-        st.charge_start = at
-        st.phase_end = self._observe_phase_boundary(
-            at + self._effective_charge_time(st.actor, now_for_mods)
-        )
-
-    def _after_shot(self, st: _ChargeActorState, shot_time: float) -> None:
-        st.ammo -= 1
-        st.full_charge_count += 1
-        st.phase = "post_fire_reload" if st.ammo <= 0 else "post_fire"
-        if st.pending_weapon_change_refill and st.ammo <= 0:
-            st.phase = "post_fire"
-        st.phase_end = self._observe_phase_boundary(
-            shot_time
-            + float(
-                self.effective_weapon(st.actor, shot_time).get("post_fire_delay", 0.0)
-            )
-        )
-
-    def _finish_nonshot_phase(
-        self, st: _ChargeActorState, transition_time: float, now_for_mods: float
-    ) -> None:
-        actor = st.actor
-        weapon = self.effective_weapon(actor, now_for_mods)
-        if st.phase == "post_fire":
-            if st.pending_weapon_change_refill and st.ammo <= 0:
-                st.phase = "post_reload"
-                st.phase_end = self._next_outer_tick(transition_time)
-            else:
-                self._enter_charge(st, transition_time, now_for_mods)
-            return
-        if st.phase == "post_fire_reload":
-            factor = self._reload_factor(actor, now_for_mods)
-            st.phase = "reloading"
-            st.phase_end = self._observe_phase_boundary(
-                transition_time
-                + float(weapon.get("reload_start_delay", 0.0)) * factor
-                + self._reload_duration_from_empty(actor, now_for_mods)
-            )
-            return
-        if st.phase == "reloading":
-            st.ammo = self._full_ammo(actor, now_for_mods)
-            factor = self._reload_factor(actor, now_for_mods)
-            delay = float(weapon.get("post_reload_delay", 0.0)) * factor
-            if delay > _EPS:
-                st.phase = "post_reload"
-                st.phase_end = self._observe_phase_boundary(transition_time + delay)
-            else:
-                self._enter_charge(st, transition_time, now_for_mods)
-            return
-        if st.phase == "post_reload":
-            if st.pending_weapon_change_refill:
-                st.ammo = self._full_ammo(actor, now_for_mods)
-                st.pending_weapon_change_refill = False
-            self._enter_charge(st, transition_time, now_for_mods)
-            return
-        raise RuntimeError(f"unexpected dynamic charge phase: {st.phase!r}")
-
-    '''
-)
-p.write_text(text[:start] + indent(charge_methods, "    ") + text[end:])
-
-replace_once(
-    "fast_engine/engine/weapon.py",
-    "                phase_end=float(now) + charge,\n",
-    "                phase_end=self._observe_phase_boundary(float(now) + charge),\n",
-)
-
-p = Path("fast_engine/engine/weapon.py")
-text = p.read_text()
-start = text.index("    def sync(self, now: float) -> None:\n")
-end = text.index("    def handle_boundary(\n", start)
-sync_method = dedent(
-    '''\
-    def sync(self, now: float) -> None:
-        for actor in self.actors:
-            st = self._states[actor]
-            while st.phase != "charging" and st.phase_end <= now + _EPS:
-                self._finish_nonshot_phase(st, st.phase_end, now)
-
-            current_wc_id = self._weapon_change_id(actor, now)
-            wc_changed = current_wc_id != st.weapon_change_id
-            if wc_changed:
-                entering = current_wc_id is not None
-                inherited_magazine = (
-                    entering and st.phase in {"charging", "post_fire"} and st.ammo > 0
-                )
-                st.weapon_change_id = current_wc_id
-                self._invalidate(st)
-                if inherited_magazine:
-                    st.pending_weapon_change_refill = True
-                else:
-                    st.pending_weapon_change_refill = False
-                    st.ammo = self._full_ammo(actor, now)
-
-                if entering and st.phase == "charging":
-                    st.charge_start = float(now)
-                    st.phase_end = self._observe_phase_boundary(
-                        float(now) + self._effective_charge_time(actor, now)
-                    )
-                elif st.phase in {"post_fire_reload", "reloading", "post_reload"}:
-                    self._enter_charge(st, float(now), float(now))
-                elif not entering and st.phase == "charging":
-                    st.phase_end = self._observe_phase_boundary(
-                        st.charge_start + self._effective_charge_time(actor, now)
-                    )
-
-            old_signature = st.signature
-            signature = self._signature(actor, now)
-            if signature != old_signature:
-                st.signature = signature
-                if not wc_changed:
-                    self._invalidate(st)
-                    if (
-                        st.phase == "charging"
-                        and old_signature is not None
-                        and (signature[4], signature[5])
-                        != (old_signature[4], old_signature[5])
-                    ):
-                        st.phase_end = self._observe_phase_boundary(
-                            st.charge_start + self._effective_charge_time(actor, now)
-                        )
-            if st.scheduled_time is None:
-                self._plan(actor, now)
-            self.state.set_ammo(actor, st.ammo)
-
-    '''
-)
-p.write_text(text[:start] + indent(sync_method, "    ") + text[end:])
-
-Path("fast_engine/tests/test_damage_moris_frame_timing.py").write_text(
-    dedent(
-        '''\
-        from __future__ import annotations
-
-        import unittest
-
-        from calculator.timeline import DEFAULT_ENEMY, simulate
-        from context import spec
-        from fast_engine.engine.burst import compile_burst_policy
-        from fast_engine.engine.compiler import compile_moris_squad
-        from fast_engine.engine.effects import ActiveEffect
-        from fast_engine.engine.frame_lattice import moris_observed_tick
-        from fast_engine.engine.model import EnemyStaticProfile
-        from fast_engine.engine.score import score_static_squad, static_score_blockers
-
-
-        class MorisFrameTimingTest(unittest.TestCase):
-            def test_charge_and_burst_deadlines_use_distinct_outer_tick_rules(self):
-                self.assertAlmostEqual(
-                    moris_observed_tick(3.0, horizon=180.0, epsilon=1e-9),
-                    3.0,
-                    places=12,
-                )
-                self.assertAlmostEqual(
-                    moris_observed_tick(3.65, horizon=180.0),
-                    3.6666666666666585,
-                    places=12,
-                )
-                self.assertAlmostEqual(
-                    moris_observed_tick(15.57, horizon=180.0, epsilon=1e-9),
-                    15.583333333333687,
-                    places=12,
-                )
-
-            def test_timed_effect_lives_until_true_expiry(self):
-                effect = ActiveEffect(
-                    effect_id=0,
-                    target=0,
-                    source_actor=0,
-                    cohort=(0,),
-                    stacks=1.0,
-                    expires_at=26.40000000000035,
-                    generation=1,
-                )
-                self.assertTrue(effect.active(26.4))
-                self.assertFalse(effect.active(effect.expires_at))
-
-            def test_def55_near_tie_preserves_moris_order(self):
-                mm = (
-                    "미란다", "브리드 : 사일런트 트랙", "헬름", "루주", "미하라 : 본딩 체인",
-                )
-                rhq = (
-                    "라피 : 레드 후드", "레드 후드", "프리카", "민트", "퀀시 : 이스케이프 퀸",
-                )
-                duration = 180.0
-                cfg = {"duration": duration, "first_burst_time": 3.0, "rng_mode": "expected"}
-                enemy = dict(DEFAULT_ENEMY)
-                enemy.update({"def": 55000.0, "code": "작열", "core_px": 10.0})
-                profile = EnemyStaticProfile(
-                    defense=55000.0,
-                    element="작열",
-                    core_uptime=1.0,
-                    core_px=10.0,
-                    duration=duration,
-                )
-
-                def run(names):
-                    squad = spec.build_squad(list(names))
-                    compiled = compile_moris_squad(squad)
-                    self.assertEqual(static_score_blockers(compiled), ())
-                    policy = compile_burst_policy(squad, compiled, dict(cfg))
-                    moris = simulate(
-                        squad,
-                        config=spec.build_config(squad, dict(cfg)),
-                        enemy=enemy,
-                        seed=42,
-                        verbose=False,
-                    )
-                    fast = score_static_squad(compiled, policy, profile, duration=duration)
-                    return float(moris.squad_total), float(fast.squad_total)
-
-                mm_m, mm_f = run(mm)
-                rhq_m, rhq_f = run(rhq)
-                moris_margin = (mm_m - rhq_m) / max(mm_m, rhq_m)
-                fast_margin = (mm_f - rhq_f) / max(mm_f, rhq_f)
-                self.assertGreater(moris_margin, 0.0)
-                self.assertGreater(fast_margin, 0.0)
-                self.assertLess(abs(mm_f / mm_m - 1.0), 0.001)
-                self.assertLess(abs(rhq_f / rhq_m - 1.0), 0.001)
-                self.assertLess(abs(fast_margin - moris_margin), 0.0005)
-
-
-        if __name__ == "__main__":
-            unittest.main()
-        '''
+    moris = simulate(
+        squad,
+        config=spec.build_config(squad, dict(CFG)),
+        enemy=enemy,
+        seed=42,
+        verbose=False,
     )
-)
+    fast = score_static_squad(compiled, policy, profile, duration=DURATION)
+    return float(moris.squad_total), float(fast.squad_total)
+
+
+def margin(a: float, b: float) -> float:
+    return (a - b) / max(a, b)
+
+
+def check(label: str, *, defense: float, code: str, core_px: float):
+    mm_m, mm_f = score(MM, defense=defense, code=code, core_px=core_px)
+    rhq_m, rhq_f = score(RHQ, defense=defense, code=code, core_px=core_px)
+    m = margin(mm_m, rhq_m)
+    f = margin(mm_f, rhq_f)
+    agree = (m >= 0.0) == (f >= 0.0)
+    print(
+        f"ROW|{label}|def={defense:g}|code={code}|core={core_px:g}"
+        f"|m={m:+.8%}|f={f:+.8%}|agree={agree}"
+        f"|mm_err={mm_f / mm_m - 1:+.8%}|rhq_err={rhq_f / rhq_m - 1:+.8%}"
+    )
+    if not agree:
+        raise AssertionError(f"ranking mismatch: {label}: Moris={m:+.8%}, Fast={f:+.8%}")
+    return m, f
+
+
+print("CORE_GRID")
+for core in (0, 10, 20, 30, 40, 52):
+    check(f"core-{core}", defense=60000.0, code="작열", core_px=float(core))
+
+print("DEF_GRID")
+for defense in (0, 20000, 31784, 40000, 50000, 55000, 60000, 65000, 70000, 80000, 90000):
+    check(f"def-{defense}", defense=float(defense), code="작열", core_px=10.0)
+
+print("CODE_GRID")
+for code in ("작열", "수냉", "전격", "철갑", "풍압"):
+    check(f"code-{code}", defense=60000.0, code=code, core_px=10.0)
+
+print("ALL_RANKING_ROWS_AGREE")
