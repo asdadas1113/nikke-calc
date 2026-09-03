@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Run residual normal-skill bias probe
+      - name: Compare normal shot counts and average damage
         shell: bash
         run: |
           python - <<'PY'
@@ -28,72 +28,68 @@ jobs:
           from fast_engine.engine.model import EnemyStaticProfile
           from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
 
-          TEAMS = {
-              "MM": ("미란다", "브리드 : 사일런트 트랙", "헬름", "루주", "미하라 : 본딩 체인"),
-              "RHQ": ("라피 : 레드 후드", "레드 후드", "프리카", "민트", "퀀시 : 이스케이프 퀸"),
-          }
+          MEMBERS = ("라피 : 레드 후드", "레드 후드", "프리카", "민트", "퀀시 : 이스케이프 퀸")
           CONFIG = {"duration": 180.0, "first_burst_time": 3.0, "rng_mode": "expected"}
           DEFENSE = 55000.0
           CODE = "작열"
-          CORE_PX = 10.0
 
-          for key, members in TEAMS.items():
-              squad = spec.build_squad(list(members))
-              config = spec.build_config(squad, dict(CONFIG))
-              compiled = compile_moris_squad(squad)
-              blockers = static_score_blockers(compiled)
-              if blockers:
-                  raise RuntimeError(f"{key} blockers={blockers}")
-              policy = compile_burst_policy(squad, compiled, dict(CONFIG))
+          class CountingObserver(StaticNormalAttackObserver):
+              def __init__(self, runtime, *, duration):
+                  super().__init__(runtime, duration=duration)
+                  self.shot_counts = [0] * len(runtime.squad.members)
+              def _score_shots(self, actor, count, *, eval_time):
+                  self.shot_counts[actor] += int(count)
+                  return super()._score_shots(actor, count, eval_time=eval_time)
 
+          squad = spec.build_squad(list(MEMBERS))
+          config = spec.build_config(squad, dict(CONFIG))
+          compiled = compile_moris_squad(squad)
+          blockers = static_score_blockers(compiled)
+          if blockers:
+              raise RuntimeError(f"blockers={blockers}")
+          policy = compile_burst_policy(squad, compiled, dict(CONFIG))
+
+          for core_px in (0.0, 10.0):
               enemy = dict(DEFAULT_ENEMY)
               enemy["def"] = DEFENSE
               enemy["code"] = CODE
-              enemy["core_px"] = CORE_PX
+              enemy["core_px"] = core_px
               moris = simulate(squad, config=config, enemy=enemy, seed=42, verbose=False)
 
               profile = EnemyStaticProfile(
                   defense=DEFENSE,
                   element=CODE,
-                  core_uptime=1.0,
-                  core_px=CORE_PX,
+                  core_uptime=1.0 if core_px > 0 else 0.0,
+                  core_px=core_px,
                   duration=policy.duration,
               )
               sink = SimpleDamageScoreSink(compiled, profile)
               runtime = BurstRuntime(compiled, policy, profile, damage_sink=sink)
-              observer = StaticNormalAttackObserver(runtime, duration=policy.duration)
+              observer = CountingObserver(runtime, duration=policy.duration)
               result = runtime.run(duration=policy.duration, score_observer=observer)
               normal = observer.finish(events_processed=result.events_processed)
-              fast_total = tuple(normal.char_total[i] + sink.char_total[i] for i in range(len(members)))
 
               m_normal = defaultdict(float)
-              m_skill = defaultdict(float)
-              normal_hits = Counter()
-              skill_hits = Counter()
-              skill_damage = defaultdict(lambda: defaultdict(float))
+              m_hits = Counter()
               for hit in moris.hits:
                   if _is_normal(hit):
                       m_normal[hit.caster] += float(hit.damage)
-                      normal_hits[hit.caster] += 1
-                  else:
-                      m_skill[hit.caster] += float(hit.damage)
-                      skill_hits[hit.caster] += 1
-                      skill_damage[hit.caster][hit.skill_name or hit.hit_tag] += float(hit.damage)
+                      m_hits[hit.caster] += 1
 
-              print(f"TEAM|team={key}|moris={float(moris.squad_total):.3f}|fast={sum(fast_total):.3f}")
-              for idx, name in enumerate(members):
-                  mn = m_normal[name]
-                  ms = m_skill[name]
-                  fn = float(normal.char_total[idx])
-                  fs = float(sink.char_total[idx])
-                  nerr = fn / mn - 1.0 if mn else 0.0
-                  serr = fs / ms - 1.0 if ms else 0.0
-                  terr = fast_total[idx] / float(moris.char_total.get(name, 1.0)) - 1.0
+              print(f"CORE|core_px={core_px}")
+              for idx, name in enumerate(MEMBERS):
+                  mh = int(m_hits[name])
+                  fh = int(observer.shot_counts[idx])
+                  md = float(m_normal[name])
+                  fd = float(normal.char_total[idx])
+                  mavg = md / mh if mh else 0.0
+                  favg = fd / fh if fh else 0.0
+                  count_ratio = fh / mh if mh else 0.0
+                  avg_ratio = favg / mavg if mavg else 0.0
+                  total_ratio = fd / md if md else 0.0
                   print(
-                      f"CAT|team={key}|name={name}|moris_normal={mn:.3f}|fast_normal={fn:.3f}|normal_err={nerr:.8f}|"
-                      f"moris_skill={ms:.3f}|fast_skill={fs:.3f}|skill_err={serr:.8f}|total_err={terr:.8f}|"
-                      f"normal_hits={normal_hits[name]}|skill_hits={skill_hits[name]}"
+                      f"SHOT|name={name}|moris_hits={mh}|fast_shots={fh}|count_ratio={count_ratio:.8f}|"
+                      f"moris_normal={md:.3f}|fast_normal={fd:.3f}|moris_avg={mavg:.6f}|fast_avg={favg:.6f}|"
+                      f"avg_ratio={avg_ratio:.8f}|total_ratio={total_ratio:.8f}"
                   )
-                  for skill, dmg in sorted(skill_damage[name].items(), key=lambda kv: -kv[1])[:8]:
-                      print(f"SKILL|team={key}|name={name}|skill={skill}|moris_damage={dmg:.3f}")
           PY
