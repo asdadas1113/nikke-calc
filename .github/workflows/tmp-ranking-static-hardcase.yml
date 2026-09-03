@@ -14,4 +14,4 @@ jobs:
         with:
           python-version: '3.13'
       - name: Run permanent timing stress grid
-        run: python fast_engine/research/tmp_apply_moris_timing.py
+        run: PYTHONPATH=. python fast_engine/research/tmp_apply_moris_timing.py
