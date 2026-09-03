@@ -1,0 +1,17 @@
+name: tmp-coverage-frontier
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Scan public Fast blockers
+        run: PYTHONPATH=. python -m fast_engine.research.public_blocker_frontier
