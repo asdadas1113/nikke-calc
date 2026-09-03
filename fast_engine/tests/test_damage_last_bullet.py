@@ -4,12 +4,15 @@ from dataclasses import replace
 import unittest
 
 from context.spec import build_squad
-from fast_engine.engine.burst import compile_burst_policy
+from fast_engine.engine.burst import BurstPolicy, BurstSignal, compile_burst_policy
 from fast_engine.engine.burst_runtime import BurstRuntime
 from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_supported
+from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
 from fast_engine.engine.last_bullet import simulate_static_last_bullet_boundaries
+from fast_engine.engine.model import EnemyStaticProfile
 from fast_engine.engine.score import static_score_blockers
+from fast_engine.engine.state import ENEMY
 from fast_engine.engine.triggers import TriggerMode, TriggerRule
 
 
@@ -90,6 +93,49 @@ class LastBulletDamageStateTests(unittest.TestCase):
         )
         self.assertGreater(helm_value, 0.0)
         self.assertAlmostEqual(ally_value, helm_value, places=9)
+
+    def test_last_bullet_damage_support_respects_named_enemy_state_gate(self):
+        moris_squad = build_squad(["프리바티"])
+        compiled = compile_moris_squad(moris_squad, require_five=False)
+        ld2 = next(effect for effect in compiled.effects if effect.name == "LD 어설트 2")
+        ld3 = next(effect for effect in compiled.effects if effect.name == "LD 어설트 3")
+
+        enemy = EnemyStaticProfile(defense=0.0, duration=20.0)
+        sink = SimpleDamageScoreSink(compiled, enemy)
+        self.assertTrue(sink.supports(ld2))
+        self.assertTrue(sink.supports(ld3))
+
+        runtime = BurstRuntime(
+            compiled,
+            BurstPolicy(
+                duration=20.0,
+                first_burst_time=20.0,
+                max_burst_count=0,
+                no_burst_actors=frozenset({0}),
+            ),
+            enemy,
+            damage_sink=sink,
+        )
+        runtime._broadcast(0.0, "battle_start")
+
+        runtime.dispatcher.dispatch(BurstSignal(1.0, "last_bullet", 0, 0))
+        self.assertEqual(runtime.dispatcher._activation_counts.get(ld2.effect_id, 0), 1)
+        self.assertEqual(runtime.dispatcher._activation_counts.get(ld3.effect_id, 0), 0)
+
+        runtime.dispatcher.dispatch(BurstSignal(3.0, "burst_cast", 0, 0))
+        self.assertTrue(
+            runtime.dispatcher.effects.has_named_state(ENEMY, "타겟 지정", now=3.1)
+        )
+        runtime.dispatcher.dispatch(BurstSignal(3.1, "last_bullet", 0, 0))
+        self.assertEqual(runtime.dispatcher._activation_counts.get(ld2.effect_id, 0), 2)
+        self.assertEqual(runtime.dispatcher._activation_counts.get(ld3.effect_id, 0), 1)
+
+        self.assertFalse(
+            runtime.dispatcher.effects.has_named_state(ENEMY, "타겟 지정", now=13.1)
+        )
+        runtime.dispatcher.dispatch(BurstSignal(13.1, "last_bullet", 0, 0))
+        self.assertEqual(runtime.dispatcher._activation_counts.get(ld2.effect_id, 0), 3)
+        self.assertEqual(runtime.dispatcher._activation_counts.get(ld3.effect_id, 0), 1)
 
 
 if __name__ == "__main__":
