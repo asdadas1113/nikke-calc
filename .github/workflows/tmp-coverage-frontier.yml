@@ -57,7 +57,6 @@ jobs:
                           elif not p.target_spec.runtime_supported: reason='provider_target_unsupported'
                           elif TriggerDispatcher.is_executable_effect(p): reason='provider_executable'
                           elif TriggerDispatcher._named_event_marker_nop_shape_supported(p): reason='provider_moris_nop_marker'
-                          elif TriggerDispatcher._is_state_dependency(p): reason='provider_state_dependency'
                           else: reason='provider_not_executable'
                           statuses.append((key,reason))
                           provider_rows.append((key,reason,p))
