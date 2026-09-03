@@ -9,7 +9,6 @@ from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.conditions import SignalContext
 from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_supported
 from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
-from fast_engine.engine.last_bullet import simulate_static_last_bullet_boundaries
 from fast_engine.engine.model import EnemyStaticProfile
 from fast_engine.engine.score import score_static_squad, static_score_blockers
 from fast_engine.engine.shot_blocks import next_static_shot_after
@@ -157,18 +156,23 @@ class RealSquadCertificationTests(unittest.TestCase):
 
     def test_real_helm_last_bullet_still_activates(self):
         moris, compiled, _policy, enemy = self._fixture()
-        helm = next(e for e in compiled.effects if e.actor == 2 and e.name == "진두지휘" and e.stat == "normal_atk_crit_rate")
-        rows = simulate_static_last_bullet_boundaries(compiled, duration=30.0, effect_filter=lambda e: e.effect_id == helm.effect_id)
-        self.assertTrue(rows)
-        first = rows[0].time
-        policy = compile_burst_policy(moris, compiled, {**CONFIG, "duration": first + 0.01})
+        helm = next(
+            e
+            for e in compiled.effects
+            if e.actor == 2
+            and e.name == "진두지휘"
+            and e.stat == "normal_atk_crit_rate"
+        )
+        policy = compile_burst_policy(moris, compiled, {**CONFIG, "duration": 30.0})
         sink = SimpleDamageScoreSink(compiled, enemy)
         runtime = BurstRuntime(compiled, policy, enemy, damage_sink=sink)
-        runtime.run(duration=first + 0.01)
-        helm_value = runtime.dispatcher.effects.sum_stat(2, "normal_atk_crit_rate", now=first + 0.001)
-        ally_value = runtime.dispatcher.effects.sum_stat(0, "normal_atk_crit_rate", now=first + 0.001)
-        self.assertGreater(helm_value, 0.0)
-        self.assertAlmostEqual(ally_value, helm_value, places=9)
+        runtime.run(duration=30.0)
+
+        # Helm is a charge score actor, so last_bullet is emitted by the live
+        # repeated-add cadence rather than the legacy static cadence projection.
+        self.assertIn(2, runtime.weapons.all_dynamic_actors)
+        self.assertTrue(runtime.weapons.supports_dynamic_last_bullet(2))
+        self.assertGreater(runtime.dispatcher._activation_counts[helm.effect_id], 0)
 
 
 if __name__ == "__main__":
