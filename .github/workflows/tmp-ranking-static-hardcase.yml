@@ -13,45 +13,75 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Decompose post-clamp DEF55 residual
+      - name: Retest charge lattice after ammo clamp
         shell: bash
         run: |
           python - <<'PY'
-          from collections import defaultdict
-          from calculator.timeline import DEFAULT_ENEMY, simulate
-          from calculator.sim_result import _is_normal
+          from bisect import bisect_left
+          from calculator.timeline import DT
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import score_static_squad, score_static_normal_squad, static_score_blockers
+          from fast_engine.engine.score import StaticNormalAttackObserver, score_static_squad, static_score_blockers
+          from fast_engine.engine.weapon import DynamicChargeCadenceRuntime
 
           TEAMS={
             'MM':("미란다","브리드 : 사일런트 트랙","헬름","루주","미하라 : 본딩 체인"),
             'RHQ':("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸"),
           }
-          DURATION=180.0
-          CONFIG={"duration":DURATION,"first_burst_time":3.0,"rng_mode":"expected"}
-          enemy=dict(DEFAULT_ENEMY); enemy['def']=55000.0; enemy['code']='작열'; enemy['core_px']=10.0
-          profile=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=DURATION)
+          DURATION=180.0; CONFIG={"duration":DURATION,"first_burst_time":3.0,"rng_mode":"expected"}
+          PROFILE=EnemyStaticProfile(defense=55000.0,element='작열',core_uptime=1.0,core_px=10.0,duration=DURATION)
+          MORIS={'MM':3532610672.0,'RHQ':3528909503.0}
 
+          ticks=[]; t=0.0
+          while t<=181.0: ticks.append(t); t+=DT
+          def snap(x):
+              i=bisect_left(ticks,float(x)); return ticks[i] if i<len(ticks) else float(x)
+
+          built={}
           for label,members in TEAMS.items():
-              squad=spec.build_squad(list(members)); config=spec.build_config(squad,dict(CONFIG))
-              compiled=compile_moris_squad(squad); blockers=static_score_blockers(compiled)
+              squad=spec.build_squad(list(members)); compiled=compile_moris_squad(squad)
+              blockers=static_score_blockers(compiled)
               if blockers: raise RuntimeError((label,blockers))
-              policy=compile_burst_policy(squad,compiled,dict(CONFIG))
-              moris=simulate(squad,config=config,enemy=enemy,seed=42,verbose=False)
-              fast=score_static_squad(compiled,policy,profile)
-              normal=score_static_normal_squad(compiled,policy,profile,duration=DURATION)
-              mt=sum(float(moris.char_total[n]) for n in members); ft=sum(float(v) for v in fast.char_total)
-              print(f'TEAM|{label}|m={mt:.3f}|f={ft:.3f}|err={ft/mt-1:.8f}')
-              for i,name in enumerate(members):
-                  m_total=float(moris.char_total[name]); f_total=float(fast.char_total[i]); f_normal=float(normal.char_total[i])
-                  m_normal=sum(float(h.damage) for h in moris.hits if h.caster==name and _is_normal(h))
-                  m_skill=m_total-m_normal; f_skill=f_total-f_normal
-                  m_times={round(float(h.t),9) for h in moris.hits if h.caster==name and _is_normal(h)}
-                  normal_err=(f_normal/m_normal-1.0) if m_normal else 0.0
-                  skill_err=(f_skill/m_skill-1.0) if abs(m_skill)>1e-9 else 0.0
-                  contribution=f_total-m_total
-                  print(f'ACTOR|team={label}|name={name}|m={m_total:.3f}|f={f_total:.3f}|err={f_total/m_total-1:.8f}|delta={contribution:.3f}|m_normal={m_normal:.3f}|f_normal={f_normal:.3f}|normal_err={normal_err:.8f}|m_skill={m_skill:.3f}|f_skill={f_skill:.3f}|skill_err={skill_err:.8f}|m_shot_times={len(m_times)}')
+              built[label]=(members,compiled,compile_burst_policy(squad,compiled,dict(CONFIG)))
+
+          def score_all(tag):
+              totals={}; counts={}
+              for label,(members,compiled,policy) in built.items():
+                  result=score_static_squad(compiled,policy,PROFILE); totals[label]=sum(float(v) for v in result.char_total)
+                  sink=SimpleDamageScoreSink(compiled,PROFILE); runtime=BurstRuntime(compiled,policy,PROFILE,damage_sink=sink)
+                  class O(StaticNormalAttackObserver):
+                      def __init__(self,*a,**k): self.counts=[0]*len(compiled.members); super().__init__(*a,**k)
+                      def _score_shots(self,actor,count,*,eval_time): self.counts[actor]+=int(count); return super()._score_shots(actor,count,eval_time=eval_time)
+                  obs=O(runtime,duration=DURATION); rr=runtime.run(duration=DURATION,score_observer=obs); obs.finish(events_processed=rr.events_processed)
+                  counts[label]=dict(zip(members,obs.counts))
+              margin=(totals['MM']-totals['RHQ'])/max(totals.values())
+              print(f'SCORE|set={tag}|MM={totals["MM"]:.3f}|RHQ={totals["RHQ"]:.3f}|margin={margin:.8f}')
+              for label in ('MM','RHQ'):
+                  for name,c in counts[label].items(): print(f'SHOT|set={tag}|team={label}|name={name}|count={c}')
+              return totals
+
+          base=score_all('base')
+          oe=DynamicChargeCadenceRuntime._enter_charge; oa=DynamicChargeCadenceRuntime._after_shot; of=DynamicChargeCadenceRuntime._finish_nonshot_phase; os=DynamicChargeCadenceRuntime.start; oy=DynamicChargeCadenceRuntime.sync
+          def pe(self,st,at,now_for_mods): oe(self,st,at,now_for_mods); st.phase_end=snap(st.phase_end)
+          def pa(self,st,shot_time): oa(self,st,shot_time); st.phase_end=snap(st.phase_end)
+          def pf(self,st,transition_time,now_for_mods): of(self,st,transition_time,now_for_mods); st.phase_end=snap(st.phase_end)
+          def ps(self,now=0.0):
+              os(self,now)
+              for actor,st in self._states.items():
+                  q=snap(st.phase_end)
+                  if q!=st.phase_end: self._invalidate(st); st.phase_end=q; self._plan(actor,float(now))
+          def py(self,now):
+              oy(self,now)
+              for actor,st in self._states.items():
+                  q=snap(st.phase_end)
+                  if q!=st.phase_end: self._invalidate(st); st.phase_end=q; self._plan(actor,float(now))
+          DynamicChargeCadenceRuntime._enter_charge=pe; DynamicChargeCadenceRuntime._after_shot=pa; DynamicChargeCadenceRuntime._finish_nonshot_phase=pf; DynamicChargeCadenceRuntime.start=ps; DynamicChargeCadenceRuntime.sync=py
+          lattice=score_all('charge_lattice')
+          m_margin=(MORIS['MM']-MORIS['RHQ'])/max(MORIS.values())
+          print(f'MORIS|margin={m_margin:.8f}')
+          print(f'DELTA|base_margin={(base["MM"]-base["RHQ"])/max(base.values()):.8f}|lattice_margin={(lattice["MM"]-lattice["RHQ"])/max(lattice.values()):.8f}')
           PY
