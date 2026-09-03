@@ -19,5 +19,6 @@ jobs:
         with:
           python-version: '3.13'
       - name: Probe repeated delivery blocker shapes
-        run: |
-          python -m fast_engine.research.tmp_delivery_blocker_shapes
+        run: python -m fast_engine.research.tmp_delivery_blocker_shapes
+      - name: Probe standardized public ranking
+        run: python -m fast_engine.research.public_ranking_probe
