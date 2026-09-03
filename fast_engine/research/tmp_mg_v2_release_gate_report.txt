@@ -1,0 +1,21 @@
+FAST_TOTAL=2839655598.480229855
+FAST_ANNIHILATE_STACKS=[30, 29, 29, 30, 29, 29, 30]
+FAST_ANNIHILATE_ROWS=[(12.349999999999993, 30.0, 1866057.0657290965), (38.34999999999961, 29.0, 1794014.2289664447), (64.34999999999815, 29.0, 1794014.2289664447), (90.34999999999667, 30.0, 1866057.0657290816), (116.34999999999519, 29.0, 1794014.228966415), (141.8999999999979, 29.0, 1439494.2180623412), (167.9000000000186, 30.0, 1866057.0657290816)]
+Traceback (most recent call last):
+  File "/home/runner/work/nikke-calc/nikke-calc/fast_engine/research/tmp_validate_asuka_mg_v2.py", line 240, in <module>
+    main()
+    ~~~~^^
+  File "/home/runner/work/nikke-calc/nikke-calc/fast_engine/research/tmp_validate_asuka_mg_v2.py", line 223, in main
+    assert moris_stacks == fast_stacks, (
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: seed=0 stack mismatch: Moris=[30, 29, 29, 30, 29, 29, 29] Fast=[30, 29, 29, 30, 29, 29, 30]
+Traceback (most recent call last):
+  File "/home/runner/work/nikke-calc/nikke-calc/fast_engine/research/tmp_certified_baseline.py", line 63, in <module>
+    main()
+    ~~~~^^
+  File "/home/runner/work/nikke-calc/nikke-calc/fast_engine/research/tmp_certified_baseline.py", line 57, in main
+    assert abs(rel) < 1e-12, f"{name}: pre={old} post={value} rel={rel}"
+           ^^^^^^^^^^^^^^^^
+AssertionError: 컨트롤_미란다미하라: pre=2828580838.869534 post=2817688423.263301 rel=-0.00385084119094381
+
+ASUKA_STEP_OUTCOME=failure
