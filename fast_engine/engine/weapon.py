@@ -271,7 +271,22 @@ class WeaponCadenceMachine:
 
     def _full_ammo(self) -> int:
         base = int(self.weapon["max_ammo"])
-        pct_gain = _round_half_up(base * self.mods.max_ammo_pct / 100.0)
+        # Moris quantizes permanent max-ammo percentage sources separately before
+        # adding them. Aggregating equipment + collection percentages first can
+        # move the magazine by one bullet at half-step boundaries.
+        pct_gain = 0
+        for effect in self.character.effects:
+            if effect.effect_type != "buff" or effect.stat != "max_ammo_pct":
+                continue
+            if effect.target != "self" or effect.condition_rules:
+                continue
+            if effect.duration not in (None, -1):
+                continue
+            if not any(rule.event_key == "battle_start" for rule in effect.triggers):
+                continue
+            pct_gain += _round_half_up(
+                base * float(effect.value or 0.0) / 100.0
+            )
         flat = _round_half_up(self.mods.max_ammo_flat)
         return max(1, base + pct_gain + flat)
 

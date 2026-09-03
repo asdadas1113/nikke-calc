@@ -32,6 +32,20 @@ class WeaponCompileTests(unittest.TestCase):
         self.assertAlmostEqual(mods.max_ammo_pct, 129.64)
         self.assertAlmostEqual(mods.reload_speed_pct, 29.69)
 
+    def test_permanent_max_ammo_pct_is_quantized_per_source(self):
+        squad = compile_moris_squad(
+            build_squad(["아스카 : WILLE", "라피", "폴리", "델타", "아니스"])
+        )
+        from fast_engine.engine.weapon import WeaponCadenceMachine, compile_static_cadence_modifiers
+
+        asuka = squad.members[0]
+        mods = compile_static_cadence_modifiers(asuka)
+        self.assertAlmostEqual(mods.max_ammo_pct, 139.14)
+        self.assertEqual(
+            WeaponCadenceMachine(0, asuka, duration=40.0)._full_ammo(),
+            718,
+        )
+
 
 class WeaponCadenceParityTests(unittest.TestCase):
     NAMES = ["라피", "폴리", "프로덕트 12", "델타", "아니스"]
