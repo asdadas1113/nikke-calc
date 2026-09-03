@@ -20,7 +20,23 @@ jobs:
           python-version: '3.12'
       - name: Run standardized public ranking audit
         run: |
-          python -m fast_engine.research.public_ranking_probe > fast_engine/research/tmp_public_ranking_after_self_state.txt
+          python - <<'PY' > fast_engine/research/tmp_public_ranking_after_self_state.txt
+          from fast_engine.research import public_ranking_probe as probe
+
+          source = probe._source_corpus()
+          unique = []
+          seen = set()
+          for members, source_name in source:
+              if members in seen:
+                  continue
+              seen.add(members)
+              unique.append((members, source_name))
+
+          print('SOURCE_CASE_COUNT', len(source))
+          print('UNIQUE_MEMBERSHIP_COUNT', len(unique))
+          probe._source_corpus = lambda: tuple(unique)
+          probe.main()
+          PY
       - name: Persist audit output
         run: |
           git config user.name "github-actions[bot]"
