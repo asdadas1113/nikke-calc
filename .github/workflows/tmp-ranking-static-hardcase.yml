@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Decompose Quency 180s damage
+      - name: Decompose Quency 60s damage
         shell: bash
         run: |
           python - <<'PY'
@@ -26,7 +26,7 @@ jobs:
           from fast_engine.engine.score import score_static_squad, score_static_normal_squad, static_score_blockers
 
           MEMBERS=("라피 : 레드 후드","레드 후드","프리카","민트","퀀시 : 이스케이프 퀸")
-          TARGET="퀀시 : 이스케이프 퀸"; DURATION=180.0
+          TARGET="퀀시 : 이스케이프 퀸"; DURATION=60.0
           CONFIG={"duration":DURATION,"first_burst_time":3.0,"rng_mode":"expected"}
           squad=spec.build_squad(list(MEMBERS)); config=spec.build_config(squad,dict(CONFIG))
           compiled=compile_moris_squad(squad); blockers=static_score_blockers(compiled)
