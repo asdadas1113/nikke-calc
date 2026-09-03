@@ -5,6 +5,7 @@ from pathlib import Path
 from .tmp_apply_river_core import ROOT, main as apply_patch
 
 TEST_PATH = ROOT / "fast_engine" / "tests" / "test_damage_full_charge_core_presence.py"
+EXISTING_SCORE_TEST = ROOT / "fast_engine" / "tests" / "test_damage_score.py"
 
 TEST_CONTENT = r'''from __future__ import annotations
 
@@ -63,9 +64,6 @@ class FullChargeCorePresenceDamageStateTests(unittest.TestCase):
                 )
             )
 
-        # The score-shot callback runs after the physical shot's damage/ammo
-        # boundary but before post-shot full_charge_hit dispatch. This makes the
-        # triggering-shot ordering directly observable without a frame loop.
         runtime.weapons.attach_score_shot_sink((0,), observe)
         runtime.run(duration=duration)
         return rows
@@ -123,12 +121,31 @@ if __name__ == "__main__":
 '''
 
 
+def _replace_once(path: Path, old: str, new: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    count = text.count(old)
+    if count != 1:
+        raise RuntimeError(f"expected exactly one fixture anchor in {path}, found {count}")
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
 def main() -> None:
     if TEST_PATH.exists():
         raise RuntimeError(f"production test path already exists: {TEST_PATH}")
     apply_patch()
     TEST_PATH.write_text(TEST_CONTENT, encoding="utf-8")
+    _replace_once(
+        EXISTING_SCORE_TEST,
+        "enemy = EnemyStaticProfile(duration=self.DURATION)",
+        "enemy = EnemyStaticProfile(duration=self.DURATION, core_px=0.0)",
+    )
+    _replace_once(
+        EXISTING_SCORE_TEST,
+        "EnemyStaticProfile(duration=1.6),",
+        "EnemyStaticProfile(duration=1.6, core_px=0.0),",
+    )
     print(f"wrote production regression test: {TEST_PATH.relative_to(ROOT)}")
+    print("made existing Riverellio no-core fixtures explicit")
 
 
 if __name__ == "__main__":
