@@ -13,82 +13,59 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Trace Quency incoming buff activation
+      - name: Measure same-frame weapon ordering contribution
         shell: bash
         run: |
           python - <<'PY'
-          from calculator.timeline import DEFAULT_ENEMY, CharState, simulate
+          from calculator.timeline import DEFAULT_ENEMY, simulate
           from context import spec
           from fast_engine.engine.burst import compile_burst_policy
-          from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.effects import ActiveEffectStore
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
-          from fast_engine.engine.target_scope import possible_ally_targets
+          from fast_engine.engine.score import score_static_squad, static_score_blockers
+          from fast_engine.engine.scheduler import EventKind, _EVENT_PHASE
 
-          MEMBERS = ("라피 : 레드 후드", "레드 후드", "프리카", "민트", "퀀시 : 이스케이프 퀸")
-          TARGET = "퀀시 : 이스케이프 퀸"
-          CONFIG = {"duration": 1.2, "first_burst_time": 3.0, "rng_mode": "expected"}
-          squad = spec.build_squad(list(MEMBERS))
-          config = spec.build_config(squad, dict(CONFIG))
-          compiled = compile_moris_squad(squad)
-          idx = MEMBERS.index(TARGET)
-          if static_score_blockers(compiled):
-              raise RuntimeError(static_score_blockers(compiled))
-
-          WATCH = {"atk_flat", "pierce_dmg_pct", "projectile_explosion_dmg_pct", "atk_pct", "accuracy_pct"}
-          print("CANDIDATES")
-          for eff in compiled.effects:
-              if (eff.stat or "") not in WATCH:
-                  continue
-              if idx not in possible_ally_targets(compiled, eff):
-                  continue
-              print(f"EFFECT|id={eff.effect_id}|owner={compiled.names[eff.actor]}|name={eff.name}|stat={eff.stat}|value={eff.value}|target={eff.target}|triggers={[r.raw for r in eff.triggers]}|conditions={eff.conditions}|duration={eff.duration}")
-
-          # Moris: inspect the actual active rows visible to Quency immediately
-          # before each physical shot around the first 1s boundary.
-          orig_tick_auto = CharState._tick_auto
-          def traced_tick_auto(self, t, bm, enemy, cfg):
-              if self.name == TARGET and 0.94 <= t <= 1.08:
-                  rows=[]
-                  for ab in bm._active:
-                      if TARGET not in ab.target_chars:
-                          continue
-                      stat=ab.effect.get("stat", "")
-                      if stat in WATCH:
-                          rows.append((ab.effect.get("name"), ab.caster, stat, bm._get_value(ab.effect, ab, ab.caster), ab.stack, ab.expires_at))
-                  print(f"M_PRE|t={t:.6f}|rows={rows}")
-              out = orig_tick_auto(self, t, bm, enemy, cfg)
-              if self.name == TARGET and 0.94 <= t <= 1.08 and out:
-                  print(f"M_SHOT|t={t:.6f}|hits={len(out)}|damage={sum(float(x.damage) for x in out):.3f}")
-              return out
-          CharState._tick_auto = traced_tick_auto
-
+          TEAMS = {
+              "MM": ("미란다", "브리드 : 사일런트 트랙", "헬름", "루주", "미하라 : 본딩 체인"),
+              "RHQ": ("라피 : 레드 후드", "레드 후드", "프리카", "민트", "퀀시 : 이스케이프 퀸"),
+          }
+          CONFIG = {"duration": 180.0, "first_burst_time": 3.0, "rng_mode": "expected"}
           enemy = dict(DEFAULT_ENEMY)
           enemy["def"] = 55000.0; enemy["code"] = "작열"; enemy["core_px"] = 10.0
-          simulate(squad, config=config, enemy=enemy, seed=42, verbose=False)
+          profile = EnemyStaticProfile(defense=55000.0, element="작열", core_uptime=1.0, core_px=10.0, duration=180.0)
 
-          # Fast: print activation timestamps into Quency, then the score-state
-          # visible at weapon boundaries in the same window.
-          orig_activate = ActiveEffectStore._activate_one
-          def traced_activate(self, effect, target, cohort, now, scheduler, **kwargs):
-              row = orig_activate(self, effect, target, cohort, now, scheduler, **kwargs)
-              if target == idx and (effect.stat or "") in WATCH and 0.8 <= now <= 1.1:
-                  print(f"F_ACT|t={now:.6f}|owner={compiled.names[effect.actor]}|name={effect.name}|stat={effect.stat}|value={effect.value}|stacks={row.stacks}|expires={row.expires_at:.6f}")
-              return row
-          ActiveEffectStore._activate_one = traced_activate
+          built={}; ms={}
+          for key,members in TEAMS.items():
+              squad=spec.build_squad(list(members))
+              config=spec.build_config(squad, dict(CONFIG))
+              compiled=compile_moris_squad(squad)
+              blockers=static_score_blockers(compiled)
+              if blockers: raise RuntimeError(f"{key}:{blockers}")
+              policy=compile_burst_policy(squad, compiled, dict(CONFIG))
+              moris=simulate(squad, config=config, enemy=enemy, seed=42, verbose=False)
+              built[key]=(members,compiled,policy,moris)
+              ms[key]=float(moris.squad_total)
 
-          policy = compile_burst_policy(squad, compiled, dict(CONFIG))
-          profile = EnemyStaticProfile(defense=55000.0, element="작열", core_uptime=1.0, core_px=10.0, duration=1.2)
-          class TraceObserver(StaticNormalAttackObserver):
-              def _score_shots(self, actor, count, *, eval_time):
-                  if actor == idx and 0.94 <= eval_time <= 1.08:
-                      terms = self.resolver.resolve(actor, now=eval_time)
-                      print(f"F_PRE|t={eval_time:.6f}|count={count}|atk_pct={terms.atk_pct:.3f}|atk_flat={terms.atk_flat:.3f}|pierce={terms.pierce_dmg_pct:.3f}|proj={terms.projectile_explosion_dmg_pct:.3f}|acc={terms.accuracy_pct:.3f}")
-                  return super()._score_shots(actor, count, eval_time=eval_time)
-          runtime = BurstRuntime(compiled, policy, profile)
-          observer = TraceObserver(runtime, duration=1.2)
-          result = runtime.run(duration=1.2, score_observer=observer)
-          observer.finish(events_processed=result.events_processed)
+          def fast_scores():
+              out={}
+              rows={}
+              for key,(members,compiled,policy,moris) in built.items():
+                  fast=score_static_squad(compiled,policy,profile)
+                  out[key]=float(fast.squad_total)
+                  rows[key]=[(name,float(moris.char_total[name]),float(fast.char_total[i])) for i,name in enumerate(members)]
+              return out,rows
+
+          before,brows=fast_scores()
+          old=_EVENT_PHASE[EventKind.WEAPON_BOUNDARY]
+          _EVENT_PHASE[EventKind.WEAPON_BOUNDARY]=29
+          after,arows=fast_scores()
+          _EVENT_PHASE[EventKind.WEAPON_BOUNDARY]=old
+
+          def margin(scores):
+              return (scores['MM']-scores['RHQ'])/max(scores['MM'],scores['RHQ'])
+          print(f"MARGIN|moris={margin(ms):.8f}|before={margin(before):.8f}|after={margin(after):.8f}")
+          for key in TEAMS:
+              print(f"TEAM|{key}|m={ms[key]:.3f}|before={before[key]:.3f}|after={after[key]:.3f}|before_err={before[key]/ms[key]-1:.8f}|after_err={after[key]/ms[key]-1:.8f}")
+              for (name,mt,fb),(_,_,fa) in zip(brows[key],arows[key]):
+                  print(f"ACTOR|team={key}|name={name}|m={mt:.3f}|before={fb:.3f}|after={fa:.3f}|before_err={fb/mt-1:.8f}|after_err={fa/mt-1:.8f}")
           PY
