@@ -13,106 +13,72 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Compare Privaty last-bullet damage parity
+      - name: Validate last-bullet damage semantics
         run: |
           PYTHONPATH=. python - <<'PY'
           from calculator.timeline import simulate, DEFAULT_ENEMY
           from context import spec
-          from fast_engine.engine.burst import BurstPolicy, compile_burst_policy
+          from fast_engine.engine.burst import BurstPolicy, BurstSignal
           from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.last_bullet import simulate_static_last_bullet_boundaries
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
+          from fast_engine.engine.state import ENEMY
           import fast_engine.engine.damage_runtime as dr
 
           class TrackingSink(dr.SimpleDamageScoreSink):
               __slots__ = ('events',)
               def __init__(self, squad, enemy):
-                  super().__init__(squad, enemy)
-                  self.events = []
+                  super().__init__(squad, enemy); self.events=[]
               def _score_spec(self, effect_id, *, now, full_burst):
-                  actor = self._effect_actor.get(effect_id)
-                  before = None if actor is None else self.char_total[actor]
-                  fired = super()._score_spec(effect_id, now=now, full_burst=full_burst)
+                  actor=self._effect_actor.get(effect_id); before=None if actor is None else self.char_total[actor]
+                  fired=super()._score_spec(effect_id, now=now, full_burst=full_burst)
                   if fired and actor is not None and before is not None:
-                      self.events.append((effect_id, float(now), self.char_total[actor] - before))
+                      self.events.append((effect_id,float(now),self.char_total[actor]-before))
                   return fired
 
           def enemy(duration):
-              core_px = float(DEFAULT_ENEMY.get('core_px', 0.0) or 0.0)
-              return EnemyStaticProfile(
-                  defense=float(DEFAULT_ENEMY.get('def', 31784.0)),
-                  element=DEFAULT_ENEMY.get('code'),
-                  core_uptime=1.0 if core_px > 0 else 0.0,
-                  core_px=core_px,
-                  duration=duration,
-              )
+              core_px=float(DEFAULT_ENEMY.get('core_px',0.0) or 0.0)
+              return EnemyStaticProfile(defense=float(DEFAULT_ENEMY.get('def',31784.0)), element=DEFAULT_ENEMY.get('code'), core_uptime=1.0 if core_px>0 else 0.0, core_px=core_px, duration=duration)
 
-          old = dr._SAFE_EVENT_KEYS
-          dr._SAFE_EVENT_KEYS = frozenset(set(old) | {'last_bullet'})
+          old=dr._SAFE_EVENT_KEYS
+          dr._SAFE_EVENT_KEYS=frozenset(set(old)|{'last_bullet'})
           try:
-              # Case A: no burst, isolate unconditional LD Assault 2 over several magazines.
-              duration = 35.0
-              names = ['프리바티']
-              moris_squad = spec.build_squad(names)
-              moris = simulate(
-                  moris_squad,
-                  config={'duration': duration, 'rng_mode': 'expected', 'first_burst_time': duration, 'max_burst_count': 0},
-                  enemy=dict(DEFAULT_ENEMY), seed=42, verbose=True,
-              )
-              compiled = compile_moris_squad(moris_squad, require_five=False)
-              ld2 = next(e for e in compiled.effects if e.name == 'LD 어설트 2')
-              ld3 = next(e for e in compiled.effects if e.name == 'LD 어설트 3')
-              sink = TrackingSink(compiled, enemy(duration))
-              print('CASE_A_SUPPORT', sink.supports(ld2), sink.supports(ld3))
-              runtime = BurstRuntime(
-                  compiled,
-                  BurstPolicy(duration=duration, first_burst_time=duration, max_burst_count=0, no_burst_actors=frozenset({0})),
-                  enemy(duration), damage_sink=sink,
-              )
-              runtime.run(duration=duration)
-              fast2 = [(t, d) for eid, t, d in sink.events if eid == ld2.effect_id]
-              fast3 = [(t, d) for eid, t, d in sink.events if eid == ld3.effect_id]
-              moris2 = [(float(h.t), float(h.damage)) for h in moris.hits if h.caster == '프리바티' and h.skill_name == 'LD 어설트 2']
-              moris3 = [(float(h.t), float(h.damage)) for h in moris.hits if h.caster == '프리바티' and h.skill_name == 'LD 어설트 3']
-              print('CASE_A_COUNTS', len(moris2), len(fast2), len(moris3), len(fast3))
-              for i, (m, f) in enumerate(zip(moris2, fast2)):
-                  rel = f[1] / m[1] - 1.0 if m[1] else 0.0
-                  print(f'CASE_A|{i}|m_t={m[0]:.12f}|f_t={f[0]:.12f}|dt={f[0]-m[0]:+.12f}|m_d={m[1]:.6f}|f_d={f[1]:.6f}|rel={rel:+.8%}')
+              # A. Real Privaty, no burst: use the same static magazine boundaries explicitly.
+              duration=35.0
+              ms=spec.build_squad(['프리바티'])
+              moris=simulate(ms, config={'duration':duration,'rng_mode':'expected','first_burst_time':duration,'max_burst_count':0}, enemy=dict(DEFAULT_ENEMY), seed=42, verbose=True)
+              comp=compile_moris_squad(ms, require_five=False)
+              ld2=next(e for e in comp.effects if e.name=='LD 어설트 2')
+              ld3=next(e for e in comp.effects if e.name=='LD 어설트 3')
+              sink=TrackingSink(comp,enemy(duration)); rt=BurstRuntime(comp,BurstPolicy(duration=duration,first_burst_time=duration,max_burst_count=0,no_burst_actors=frozenset({0})),enemy(duration),damage_sink=sink)
+              rt._broadcast(0.0,'battle_start')
+              rows=simulate_static_last_bullet_boundaries(comp,duration=duration,effect_filter=lambda e:e.effect_id in {ld2.effect_id,ld3.effect_id})
+              for row in rows:
+                  rt.dispatcher.dispatch(BurstSignal(row.time,'last_bullet',0,0))
+              fast2=[(t,d) for eid,t,d in sink.events if eid==ld2.effect_id]
+              fast3=[(t,d) for eid,t,d in sink.events if eid==ld3.effect_id]
+              moris2=[(float(h.t),float(h.damage)) for h in moris.hits if h.caster=='프리바티' and h.skill_name=='LD 어설트 2']
+              moris3=[(float(h.t),float(h.damage)) for h in moris.hits if h.caster=='프리바티' and h.skill_name=='LD 어설트 3']
+              print('STATIC_COUNTS',len(rows),len(moris2),len(fast2),len(moris3),len(fast3))
+              for i,(m,f) in enumerate(zip(moris2,fast2)):
+                  print(f'STATIC_LD2|{i}|m_t={m[0]:.12f}|f_t={f[0]:.12f}|dt={f[0]-m[0]:+.12f}|m_d={m[1]:.6f}|f_d={f[1]:.6f}|rel={f[1]/m[1]-1:+.8%}')
 
-              # Case B: minimal B1/B2/B3 chain, let Privaty create Target Designation.
-              duration = 30.0
-              names = ['리타', '아니스', '프리바티']
-              moris_squad = spec.build_squad(names)
-              cfg = {'duration': duration, 'first_burst_time': 3.0, 'rng_mode': 'expected'}
-              moris_cfg = spec.build_config(moris_squad, dict(cfg))
-              moris = simulate(moris_squad, config=moris_cfg, enemy=dict(DEFAULT_ENEMY), seed=42, verbose=True)
-              compiled = compile_moris_squad(moris_squad, require_five=False)
-              policy = compile_burst_policy(moris_squad, compiled, dict(cfg))
-              ld2 = next(e for e in compiled.effects if compiled.members[e.actor].name == '프리바티' and e.name == 'LD 어설트 2')
-              ld3 = next(e for e in compiled.effects if compiled.members[e.actor].name == '프리바티' and e.name == 'LD 어설트 3')
-              sink = TrackingSink(compiled, enemy(duration))
-              print('CASE_B_BLOCKERS', static_score_blockers(compiled))
-              print('CASE_B_SUPPORT', sink.supports(ld2), sink.supports(ld3))
-              runtime = BurstRuntime(compiled, policy, enemy(duration), damage_sink=sink)
-              try:
-                  observer = StaticNormalAttackObserver(runtime, duration=duration)
-                  result = runtime.run(duration=duration, score_observer=observer)
-                  observer.finish(events_processed=result.events_processed)
-                  print('CASE_B_RUN', 'observer')
-              except Exception as exc:
-                  print('CASE_B_RUN_ERROR', type(exc).__name__, str(exc))
-                  runtime = BurstRuntime(compiled, policy, enemy(duration), damage_sink=sink)
-                  runtime.run(duration=duration)
-              fast2 = [(t, d) for eid, t, d in sink.events if eid == ld2.effect_id]
-              fast3 = [(t, d) for eid, t, d in sink.events if eid == ld3.effect_id]
-              moris2 = [(float(h.t), float(h.damage)) for h in moris.hits if h.caster == '프리바티' and h.skill_name == 'LD 어설트 2']
-              moris3 = [(float(h.t), float(h.damage)) for h in moris.hits if h.caster == '프리바티' and h.skill_name == 'LD 어설트 3']
-              print('CASE_B_COUNTS', len(moris2), len(fast2), len(moris3), len(fast3))
-              for label, ms, fs in [('LD2', moris2, fast2), ('LD3', moris3, fast3)]:
-                  for i, (m, f) in enumerate(zip(ms, fs)):
-                      rel = f[1] / m[1] - 1.0 if m[1] else 0.0
-                      print(f'CASE_B_{label}|{i}|m_t={m[0]:.12f}|f_t={f[0]:.12f}|dt={f[0]-m[0]:+.12f}|m_d={m[1]:.6f}|f_d={f[1]:.6f}|rel={rel:+.8%}')
+              # B. Real named-state semantics: burst_cast creates Target Designation;
+              # last_bullet inside duration fires LD3, after expiry it does not.
+              duration=20.0
+              sink=TrackingSink(comp,enemy(duration)); rt=BurstRuntime(comp,BurstPolicy(duration=duration,first_burst_time=duration,max_burst_count=0,no_burst_actors=frozenset({0})),enemy(duration),damage_sink=sink)
+              rt._broadcast(0.0,'battle_start')
+              rt.dispatcher.dispatch(BurstSignal(3.0,'burst_cast',0,0))
+              print('TARGET_STATE_3_1',rt.dispatcher.effects.has_named_state(ENEMY,'타겟 지정',now=3.1))
+              rt.dispatcher.dispatch(BurstSignal(3.1,'last_bullet',0,0))
+              before=len([x for x in sink.events if x[0]==ld3.effect_id])
+              print('LD3_INSIDE_COUNT',before)
+              print('TARGET_STATE_13_1',rt.dispatcher.effects.has_named_state(ENEMY,'타겟 지정',now=13.1))
+              rt.dispatcher.dispatch(BurstSignal(13.1,'last_bullet',0,0))
+              after=len([x for x in sink.events if x[0]==ld3.effect_id])
+              print('LD3_AFTER_COUNT',after)
+              print('LD3_EVENTS',[(t,d) for eid,t,d in sink.events if eid==ld3.effect_id])
           finally:
-              dr._SAFE_EVENT_KEYS = old
+              dr._SAFE_EVENT_KEYS=old
           PY
