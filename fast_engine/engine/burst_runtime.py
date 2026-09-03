@@ -10,6 +10,7 @@ from .core_events import (
 )
 from .damage_state import DamageTermResolver
 from .dispatcher import TriggerDispatcher
+from .frame_lattice import moris_observed_tick
 from .dynamic_weapon import MultiSignalChargeCadenceRuntime
 from .last_bullet import simulate_static_last_bullet_boundaries
 from .model import CompiledSquad, EnemyStaticProfile
@@ -32,6 +33,7 @@ class PeriodicTickToken:
     effect_id: int
     rule_index: int
     interval: float
+    nominal_time: float
 
 
 class BurstRuntime:
@@ -120,12 +122,15 @@ class BurstRuntime:
             # Moris initializes every:Ns at t=interval, not battle_start.
             # The combat scoring window is [0, horizon), so a tick exactly at the
             # nominal end time is not a damage-bearing combat event.
+            observed = moris_observed_tick(interval, horizon=horizon)
+            if observed >= horizon:
+                continue
             self.scheduler.schedule(
-                interval,
+                observed,
                 EventKind.PERIODIC_TICK,
                 actor=effect.actor,
                 payload=PeriodicTickToken(
-                    effect.effect_id, indexed.rule_index, interval
+                    effect.effect_id, indexed.rule_index, interval, interval
                 ),
             )
 
@@ -529,14 +534,18 @@ class BurstRuntime:
                     time=event.time,
                     context=SignalContext(),
                 )
-                next_t = event.time + token.interval
-                if next_t < horizon:
-                    self.scheduler.schedule(
-                        next_t,
-                        EventKind.PERIODIC_TICK,
-                        actor=event.actor,
-                        payload=token,
-                    )
+                next_nominal = token.nominal_time + token.interval
+                if next_nominal < horizon:
+                    next_t = moris_observed_tick(next_nominal, horizon=horizon)
+                    if next_t < horizon:
+                        self.scheduler.schedule(
+                            next_t,
+                            EventKind.PERIODIC_TICK,
+                            actor=event.actor,
+                            payload=PeriodicTickToken(
+                                token.effect_id, token.rule_index, token.interval, next_nominal
+                            ),
+                        )
                 self.weapons.sync(event.time)
                 score_end_of_time(event.time)
                 continue

@@ -10,6 +10,7 @@ from fast_engine.engine.burst_runtime import BurstRuntime
 from fast_engine.engine.capabilities import CapabilityDisposition
 from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.dispatcher import TriggerDispatcher
+from fast_engine.engine.frame_lattice import moris_observed_tick
 from fast_engine.engine.weapon import DynamicChargeCadenceRuntime
 
 FRAME = 1.0 / 60.0
@@ -232,6 +233,30 @@ class PeriodicRuntimeTests(unittest.TestCase):
                 12 * FRAME + 1e-8,
                 f"cycle={cycle}, fast={actual:.6f}, moris={expected:.6f}, delta={actual-expected:+.6f}",
             )
+
+    def test_periodic_deadlines_use_nominal_moris_outer_ticks_without_drift(self):
+        duration = 70.0
+        moris_squad, compiled = self._compiled(favorite_stage=3)
+        policy = compile_burst_policy(moris_squad, compiled, {"duration": duration})
+        target = self._milk_periodic(compiled)
+        seen: list[float] = []
+        original = TriggerDispatcher.dispatch_periodic
+
+        def traced(dispatcher, effect_id, rule_index, *, time, context):
+            if effect_id == target.effect_id:
+                seen.append(time)
+            return original(
+                dispatcher, effect_id, rule_index, time=time, context=context
+            )
+
+        with patch.object(TriggerDispatcher, "dispatch_periodic", new=traced):
+            BurstRuntime(compiled, policy).run(duration=duration)
+
+        expected = [
+            moris_observed_tick(nominal, horizon=duration)
+            for nominal in (20.0, 40.0, 60.0)
+        ]
+        self.assertEqual(seen, expected)
 
     def test_auxiliary_periodic_atk_does_not_overclaim_fast_capability(self):
         _squad, compiled = self._compiled()
