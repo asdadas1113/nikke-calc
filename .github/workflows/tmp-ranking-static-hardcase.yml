@@ -13,39 +13,52 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Inspect Rouge Moris buff source
+      - name: Validate adjacent fix on hard case
         shell: bash
         run: |
           python - <<'PY'
-          import inspect
-          from calculator.timeline import DEFAULT_ENEMY, CharState, simulate
-          from calculator.buff_manager import BuffManager
+          from calculator.timeline import DEFAULT_ENEMY, simulate
           from context import spec
+          from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.model import EnemyStaticProfile
+          from fast_engine.engine.score import score_static_squad, static_score_blockers
 
-          MEMBERS = ("미란다", "브리드 : 사일런트 트랙", "헬름", "루주", "미하라 : 본딩 체인")
-          TARGET = "루주"
-          print("RESOLVE_SOURCE")
-          print(inspect.getsource(BuffManager._resolve_target))
-
-          orig = CharState._charge_fire
-          def traced(self, t, bm, enemy, cfg, is_full):
-              if self.name == TARGET and t <= 5.3:
-                  buffs = bm.get_buffs(self.name, "__enemy__", t)
-                  print(f"SHOT_STATE|t={t:.6f}|atk_dmg={buffs.get('atk_dmg_pct')}|received={buffs.get('received_dmg')}|atk_pct={buffs.get('atk_pct')}|atk_flat={buffs.get('atk_flat')}|crit={buffs.get('crit_rate')}|charge_mag={buffs.get('charge_dmg_mag_pct')}")
-                  for ab in bm._active:
-                      if ab.effect.get("name") in {"소드 코인", "포문 개방 2", "풀 마스콘", "파워 업!"}:
-                          print(f"ACTIVE|t={t:.6f}|name={ab.effect.get('name')}|caster={ab.caster}|targets={ab.target_chars}|stat={ab.effect.get('stat')}|value={bm._get_value(ab.effect, ab, ab.caster)}|expires={ab.expires_at}")
-              return orig(self, t, bm, enemy, cfg, is_full)
-          CharState._charge_fire = traced
-
-          squad = spec.build_squad(list(MEMBERS))
-          config = spec.build_config(squad, {"duration": 5.3, "first_burst_time": 3.0, "rng_mode": "expected"})
+          TEAMS = {
+              "MM": ("미란다", "브리드 : 사일런트 트랙", "헬름", "루주", "미하라 : 본딩 체인"),
+              "RHQ": ("라피 : 레드 후드", "레드 후드", "프리카", "민트", "퀀시 : 이스케이프 퀸"),
+          }
+          CONFIG = {"duration": 180.0, "first_burst_time": 3.0, "rng_mode": "expected"}
           enemy = dict(DEFAULT_ENEMY)
           enemy["def"] = 55000.0
           enemy["code"] = "작열"
           enemy["core_px"] = 10.0
-          result = simulate(squad, config=config, enemy=enemy, seed=42, verbose=False)
-          for h in result.hits:
-              if h.caster == TARGET:
-                  print(f"HIT|t={h.t:.6f}|tag={h.hit_tag}|skill={h.skill_name}|damage={float(h.damage):.3f}")
+          profile = EnemyStaticProfile(
+              defense=55000.0, element="작열", core_uptime=1.0,
+              core_px=10.0, duration=180.0,
+          )
+
+          ms = {}
+          fs = {}
+          for key, members in TEAMS.items():
+              squad = spec.build_squad(list(members))
+              config = spec.build_config(squad, dict(CONFIG))
+              compiled = compile_moris_squad(squad)
+              blockers = static_score_blockers(compiled)
+              if blockers:
+                  raise RuntimeError(f"{key} blockers={blockers}")
+              policy = compile_burst_policy(squad, compiled, dict(CONFIG))
+              moris = simulate(squad, config=config, enemy=enemy, seed=42, verbose=False)
+              fast = score_static_squad(compiled, policy, profile)
+              ms[key] = float(moris.squad_total)
+              fs[key] = float(fast.squad_total)
+              print(f"TEAM|{key}|moris={ms[key]:.3f}|fast={fs[key]:.3f}|err={fs[key]/ms[key]-1.0:.8f}")
+              for idx, name in enumerate(members):
+                  mt = float(moris.char_total[name])
+                  ft = float(fast.char_total[idx])
+                  print(f"ACTOR|team={key}|name={name}|m={mt:.3f}|f={ft:.3f}|err={ft/mt-1.0:.8f}")
+
+          def margin(scores):
+              return (scores["MM"] - scores["RHQ"]) / max(scores["MM"], scores["RHQ"])
+          print(f"MARGIN|moris={margin(ms):.8f}|fast={margin(fs):.8f}|same_sign={(margin(ms) >= 0) == (margin(fs) >= 0)}")
           PY
