@@ -4,6 +4,7 @@ import math
 from dataclasses import dataclass, replace
 from typing import Callable, Iterable, TYPE_CHECKING
 
+from .frame_lattice import moris_next_tick, moris_observed_tick
 from .scheduler import EventKind, EventScheduler, ScheduledEvent
 from .triggers import TriggerMode
 
@@ -491,6 +492,7 @@ class _ChargeActorState:
     phase_end: float
     charge_start: float
     weapon_change_id: int | None = None
+    pending_weapon_change_refill: bool = False
     full_charge_count: int = 0
     dispatched_count: int = 0
     generation: int = 0
@@ -681,17 +683,30 @@ class DynamicChargeCadenceRuntime:
             for threshold in self._thresholds.get(actor, ())
         )
 
+    def _observe_phase_boundary(self, deadline: float) -> float:
+        return moris_observed_tick(deadline, horizon=self.duration)
+
+    def _next_outer_tick(self, after: float) -> float:
+        return moris_next_tick(after, horizon=self.duration)
+
     def _enter_charge(self, st: _ChargeActorState, at: float, now_for_mods: float) -> None:
         st.phase = "charging"
         st.charge_start = at
-        st.phase_end = at + self._effective_charge_time(st.actor, now_for_mods)
+        st.phase_end = self._observe_phase_boundary(
+            at + self._effective_charge_time(st.actor, now_for_mods)
+        )
 
     def _after_shot(self, st: _ChargeActorState, shot_time: float) -> None:
         st.ammo -= 1
         st.full_charge_count += 1
         st.phase = "post_fire_reload" if st.ammo <= 0 else "post_fire"
-        st.phase_end = shot_time + float(
-            self.effective_weapon(st.actor, shot_time).get("post_fire_delay", 0.0)
+        if st.pending_weapon_change_refill and st.ammo <= 0:
+            st.phase = "post_fire"
+        st.phase_end = self._observe_phase_boundary(
+            shot_time
+            + float(
+                self.effective_weapon(st.actor, shot_time).get("post_fire_delay", 0.0)
+            )
         )
 
     def _finish_nonshot_phase(
@@ -700,30 +715,35 @@ class DynamicChargeCadenceRuntime:
         actor = st.actor
         weapon = self.effective_weapon(actor, now_for_mods)
         if st.phase == "post_fire":
-            self._enter_charge(st, transition_time, now_for_mods)
+            if st.pending_weapon_change_refill and st.ammo <= 0:
+                st.phase = "post_reload"
+                st.phase_end = self._next_outer_tick(transition_time)
+            else:
+                self._enter_charge(st, transition_time, now_for_mods)
             return
         if st.phase == "post_fire_reload":
             factor = self._reload_factor(actor, now_for_mods)
             st.phase = "reloading"
-            st.phase_end = (
+            st.phase_end = self._observe_phase_boundary(
                 transition_time
                 + float(weapon.get("reload_start_delay", 0.0)) * factor
                 + self._reload_duration_from_empty(actor, now_for_mods)
             )
             return
         if st.phase == "reloading":
-            # Moris resolves the magazine size at reload completion. The reload
-            # duration itself was fixed when reloading began.
             st.ammo = self._full_ammo(actor, now_for_mods)
             factor = self._reload_factor(actor, now_for_mods)
             delay = float(weapon.get("post_reload_delay", 0.0)) * factor
             if delay > _EPS:
                 st.phase = "post_reload"
-                st.phase_end = transition_time + delay
+                st.phase_end = self._observe_phase_boundary(transition_time + delay)
             else:
                 self._enter_charge(st, transition_time, now_for_mods)
             return
         if st.phase == "post_reload":
+            if st.pending_weapon_change_refill:
+                st.ammo = self._full_ammo(actor, now_for_mods)
+                st.pending_weapon_change_refill = False
             self._enter_charge(st, transition_time, now_for_mods)
             return
         raise RuntimeError(f"unexpected dynamic charge phase: {st.phase!r}")
@@ -802,7 +822,7 @@ class DynamicChargeCadenceRuntime:
                 actor=actor,
                 ammo=full,
                 phase="charging",
-                phase_end=float(now) + charge,
+                phase_end=self._observe_phase_boundary(float(now) + charge),
                 charge_start=float(now),
                 weapon_change_id=self._weapon_change_id(actor, now),
                 signature=self._signature(actor, now),
@@ -814,7 +834,6 @@ class DynamicChargeCadenceRuntime:
     def sync(self, now: float) -> None:
         for actor in self.actors:
             st = self._states[actor]
-            # Complete non-shot transitions that are exactly on this boundary.
             while st.phase != "charging" and st.phase_end <= now + _EPS:
                 self._finish_nonshot_phase(st, st.phase_end, now)
 
@@ -822,25 +841,44 @@ class DynamicChargeCadenceRuntime:
             wc_changed = current_wc_id != st.weapon_change_id
             if wc_changed:
                 entering = current_wc_id is not None
+                inherited_magazine = (
+                    entering and st.phase in {"charging", "post_fire"} and st.ammo > 0
+                )
                 st.weapon_change_id = current_wc_id
                 self._invalidate(st)
-                st.ammo = self._full_ammo(actor, now)
+                if inherited_magazine:
+                    st.pending_weapon_change_refill = True
+                else:
+                    st.pending_weapon_change_refill = False
+                    st.ammo = self._full_ammo(actor, now)
+
                 if entering and st.phase == "charging":
                     st.charge_start = float(now)
-                    st.phase_end = float(now) + self._effective_charge_time(actor, now)
+                    st.phase_end = self._observe_phase_boundary(
+                        float(now) + self._effective_charge_time(actor, now)
+                    )
                 elif st.phase in {"post_fire_reload", "reloading", "post_reload"}:
                     self._enter_charge(st, float(now), float(now))
                 elif not entering and st.phase == "charging":
-                    st.phase_end = st.charge_start + self._effective_charge_time(actor, now)
+                    st.phase_end = self._observe_phase_boundary(
+                        st.charge_start + self._effective_charge_time(actor, now)
+                    )
 
+            old_signature = st.signature
             signature = self._signature(actor, now)
-            changed = signature != st.signature
-            if changed:
+            if signature != old_signature:
                 st.signature = signature
                 if not wc_changed:
                     self._invalidate(st)
-                    if st.phase == "charging":
-                        st.phase_end = st.charge_start + self._effective_charge_time(actor, now)
+                    if (
+                        st.phase == "charging"
+                        and old_signature is not None
+                        and (signature[4], signature[5])
+                        != (old_signature[4], old_signature[5])
+                    ):
+                        st.phase_end = self._observe_phase_boundary(
+                            st.charge_start + self._effective_charge_time(actor, now)
+                        )
             if st.scheduled_time is None:
                 self._plan(actor, now)
             self.state.set_ammo(actor, st.ammo)

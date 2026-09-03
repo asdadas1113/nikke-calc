@@ -26,7 +26,7 @@ class ActiveEffect:
     generation: int
 
     def active(self, now: float) -> bool:
-        return self.expires_at == inf or now < self.expires_at - _EPS
+        return self.expires_at == inf or now < self.expires_at
 
 
 @dataclass(frozen=True, slots=True)

@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 from context.spec import build_config
 
+from .frame_lattice import moris_observed_tick
 from .model import CompiledSquad
 from .scheduler import EventKind, EventScheduler, ScheduledEvent
 
@@ -200,8 +201,13 @@ class BurstMachine:
         *,
         stage: str | None = None,
     ) -> None:
+        observed = moris_observed_tick(
+            time, horizon=self.policy.duration, epsilon=_EPS
+        )
         self._generation += 1
-        scheduler.schedule(time, kind, payload=BurstActionToken(self._generation, stage))
+        scheduler.schedule(
+            observed, kind, payload=BurstActionToken(self._generation, stage)
+        )
 
     def _is_current(self, event: ScheduledEvent) -> bool:
         token = event.payload
