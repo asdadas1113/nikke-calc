@@ -18,228 +18,61 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Apply narrow statless marker support
+      - name: Patch dispatcher
         run: |
           PYTHONPATH=. python - <<'PY'
           from pathlib import Path
-
           path = Path('fast_engine/engine/dispatcher.py')
           text = path.read_text(encoding='utf-8')
-          marker_anchor = '''    @classmethod
-    def _named_event_marker_nop_shape_supported(cls, effect: "CompiledEffect") -> bool:
-'''
+          anchor = '    @classmethod\n    def _named_event_marker_nop_shape_supported(cls, effect: "CompiledEffect") -> bool:\n'
           helper = '''    @staticmethod
-    def _timed_self_named_state_marker_shape_supported(effect: "CompiledEffect") -> bool:
-        """Certify a pure finite self-state marker emitted by one burst cast.
+          def _timed_self_named_state_marker_shape_supported(effect: "CompiledEffect") -> bool:
+              """Certify a pure finite self-state marker emitted by one burst cast."""
+              return (
+                  effect.capability.disposition is CapabilityDisposition.PLANNED
+                  and set(effect.capability.blockers) == {"category:state_trigger", "stat:None"}
+                  and effect.effect_type == "buff"
+                  and not (effect.stat or "")
+                  and bool(effect.name)
+                  and effect.value is None
+                  and effect.polarity in (None, "neutral")
+                  and effect.target_spec.mode is TargetMode.SELF
+                  and effect.target_spec.runtime_supported
+                  and effect.duration is not None
+                  and float(effect.duration) > 0.0
+                  and effect.max_stack in (None, 1, 1.0)
+                  and effect.max_trigger is None
+                  and effect.tick_interval is None
+                  and not effect.condition_rules
+                  and set(effect.parameters).issubset({"note"})
+                  and len(effect.triggers) == 1
+                  and effect.triggers[0].mode is TriggerMode.EVENT
+                  and effect.triggers[0].event_key == "burst_cast"
+              )
 
-        Some Moris effects exist only to create a named state that later gates
-        conditions or emits ``event:state_end:<name>``. Fast already stores and
-        expires stat-less named buffs; this helper only admits the narrow shape
-        whose activation timing and lifetime are fully deterministic.
-        """
-        return (
-            effect.capability.disposition is CapabilityDisposition.PLANNED
-            and set(effect.capability.blockers) == {"category:state_trigger", "stat:None"}
-            and effect.effect_type == "buff"
-            and not (effect.stat or "")
-            and bool(effect.name)
-            and effect.value is None
-            and effect.polarity in (None, "neutral")
-            and effect.target_spec.mode is TargetMode.SELF
-            and effect.target_spec.runtime_supported
-            and effect.duration is not None
-            and float(effect.duration) > 0.0
-            and effect.max_stack in (None, 1, 1.0)
-            and effect.max_trigger is None
-            and effect.tick_interval is None
-            and not effect.condition_rules
-            and set(effect.parameters).issubset({"note"})
-            and len(effect.triggers) == 1
-            and effect.triggers[0].mode is TriggerMode.EVENT
-            and effect.triggers[0].event_key == "burst_cast"
-        )
-
-'''
-          if helper.strip() not in text:
-              if marker_anchor not in text:
-                  raise SystemExit('named marker anchor not found')
-              text = text.replace(marker_anchor, helper + marker_anchor, 1)
-
-          executable_old = '''        if (
-            TriggerDispatcher._named_event_control_shape_supported(effect)
-            or TriggerDispatcher._named_duration_extend_shape_supported(effect)
-'''
-          executable_new = '''        if (
-            TriggerDispatcher._timed_self_named_state_marker_shape_supported(effect)
-            or TriggerDispatcher._named_event_control_shape_supported(effect)
-            or TriggerDispatcher._named_duration_extend_shape_supported(effect)
-'''
-          if executable_new not in text:
-              if executable_old not in text:
-                  raise SystemExit('is_executable anchor not found')
-              text = text.replace(executable_old, executable_new, 1)
+          '''
+          helper = '\n'.join(line[10:] if line.startswith('          ') else line for line in helper.splitlines()) + '\n'
+          if '_timed_self_named_state_marker_shape_supported' not in text:
+              if anchor not in text:
+                  raise SystemExit('marker anchor not found')
+              text = text.replace(anchor, helper + anchor, 1)
+          old = '        if (\n            TriggerDispatcher._named_event_control_shape_supported(effect)\n            or TriggerDispatcher._named_duration_extend_shape_supported(effect)\n'
+          new = '        if (\n            TriggerDispatcher._timed_self_named_state_marker_shape_supported(effect)\n            or TriggerDispatcher._named_event_control_shape_supported(effect)\n            or TriggerDispatcher._named_duration_extend_shape_supported(effect)\n'
+          if new not in text:
+              if old not in text:
+                  raise SystemExit('executable anchor not found')
+              text = text.replace(old, new, 1)
           path.write_text(text, encoding='utf-8')
-
-          test = Path('fast_engine/tests/test_statless_named_state_marker.py')
-          test.write_text('''from __future__ import annotations
-
-import unittest
-
-from context import spec
-from fast_engine.engine.burst import BurstPolicy, BurstSignal
-from fast_engine.engine.burst_runtime import BurstRuntime
-from fast_engine.engine.compiler import compile_moris_squad
-from fast_engine.engine.dispatcher import TriggerDispatcher
-from fast_engine.engine.model import EnemyStaticProfile
-from fast_engine.engine.scheduler import EventKind
-from fast_engine.engine.score import static_score_blockers
-
-
-_GRAVE_TEAM = [
-    "미란다",
-    "그레이브",
-    "에이다",
-    "미하라 : 본딩 체인",
-    "D : 킬러 와이프",
-]
-_RHQ_TEAM = [
-    "라피 : 레드 후드",
-    "레드 후드",
-    "프리카",
-    "민트",
-    "퀀시 : 이스케이프 퀸",
-]
-_CROWN_TEAM = [
-    "리틀 머메이드",
-    "델타 : 닌자 시프",
-    "크라운",
-    "아스카 : WILLE",
-    "라피 : 레드 후드",
-]
-
-
-class StatlessNamedStateMarkerTests(unittest.TestCase):
-    def test_real_grave_marker_matches_narrow_shape(self):
-        squad = compile_moris_squad(spec.build_squad(_GRAVE_TEAM))
-        marker = next(
-            effect for effect in squad.effects
-            if squad.members[effect.actor].name == "그레이브"
-            and effect.name == "미래 예지"
-        )
-        self.assertTrue(
-            TriggerDispatcher._timed_self_named_state_marker_shape_supported(marker)
-        )
-        self.assertTrue(TriggerDispatcher.is_executable_effect(marker))
-
-    def test_broader_statless_markers_stay_fail_closed(self):
-        squad = compile_moris_squad(spec.build_squad(_RHQ_TEAM))
-        performance = next(
-            effect for effect in squad.effects
-            if squad.members[effect.actor].name == "프리카"
-            and effect.name == "퍼포먼스"
-            and not (effect.stat or "")
-        )
-        mint = next(
-            effect for effect in squad.effects
-            if squad.members[effect.actor].name == "민트"
-            and effect.name == "무대 파트 : 댄스"
-            and not (effect.stat or "")
-        )
-        self.assertFalse(
-            TriggerDispatcher._timed_self_named_state_marker_shape_supported(performance)
-        )
-        self.assertFalse(
-            TriggerDispatcher._timed_self_named_state_marker_shape_supported(mint)
-        )
-
-    def test_real_grave_marker_expires_and_emits_state_end(self):
-        squad = compile_moris_squad(spec.build_squad(_GRAVE_TEAM))
-        grave = _GRAVE_TEAM.index("그레이브")
-        marker = next(
-            effect for effect in squad.effects
-            if effect.actor == grave and effect.name == "미래 예지"
-        )
-        cooling = next(
-            effect for effect in squad.effects
-            if effect.actor == grave and effect.name == "방열 2"
-        )
-        runtime = BurstRuntime(
-            squad,
-            BurstPolicy(duration=20.0, first_burst_time=30.0),
-            EnemyStaticProfile(defense=0.0, duration=20.0),
-        )
-
-        result = runtime.dispatcher.dispatch(
-            BurstSignal(1.0, "burst_cast", grave, grave, "2")
-        )
-        self.assertIn(marker.effect_id, result.activated_effect_ids)
-        self.assertTrue(
-            runtime.dispatcher.effects.has_named_state(grave, "미래 예지", now=1.0)
-        )
-        self.assertTrue(
-            runtime.dispatcher.effects.has_named_state(grave, "미래 예지", now=10.999)
-        )
-        self.assertFalse(
-            runtime.dispatcher.effects.has_named_state(grave, "미래 예지", now=11.0)
-        )
-
-        state_end_activated = set()
-        while runtime.scheduler and runtime.scheduler.peek_time() <= 11.0 + 1e-9:
-            event = runtime.scheduler.pop()
-            if event.kind is EventKind.STATE_EXPIRE:
-                runtime.dispatcher.handle_expiry(event)
-            elif event.kind is EventKind.STATE_END_NOTIFY:
-                owner, name = event.payload
-                dispatch = runtime.dispatcher.dispatch(
-                    BurstSignal(
-                        event.time,
-                        f"event:state_end:{name}",
-                        int(owner),
-                        int(owner),
-                    )
-                )
-                if name == "미래 예지":
-                    state_end_activated.update(dispatch.activated_effect_ids)
-
-        self.assertIn(cooling.effect_id, state_end_activated)
-        self.assertFalse(
-            runtime.dispatcher.effects.has_named_state(grave, "미래 예지", now=11.0)
-        )
-
-    def test_marker_support_removes_only_grave_delivery_dependency(self):
-        squad = compile_moris_squad(spec.build_squad(_GRAVE_TEAM))
-        blockers = static_score_blockers(squad)
-        self.assertFalse(any("그레이브:과열 II" in row for row in blockers))
-        self.assertFalse(any("그레이브:과열 III" in row for row in blockers))
-
-        crown = compile_moris_squad(spec.build_squad(_CROWN_TEAM))
-        crown_blockers = static_score_blockers(crown)
-        self.assertIn(
-            "normal_delivery:크라운:로얄 에타이어 4:atk_dmg_pct",
-            crown_blockers,
-        )
-        self.assertIn(
-            "skill_state_delivery:크라운:로얄 에타이어 4:atk_dmg_pct",
-            crown_blockers,
-        )
-
-
-if __name__ == "__main__":
-    unittest.main()
-''', encoding='utf-8')
           PY
       - name: Run focused regressions
         run: |
-          PYTHONPATH=. python -m unittest \
-            fast_engine.tests.test_statless_named_state_marker \
-            fast_engine.tests.test_damage_state_end_force_reload \
-            fast_engine.tests.test_named_buff_event_runtime -v
+          PYTHONPATH=. python -m unittest fast_engine.tests.test_statless_named_state_marker fast_engine.tests.test_damage_state_end_force_reload fast_engine.tests.test_named_buff_event_runtime -v
           python -m py_compile fast_engine/engine/dispatcher.py fast_engine/tests/test_statless_named_state_marker.py
           git diff --check
       - name: Commit production change
         run: |
           git config user.name "fast-engine-research"
           git config user.email "fast-engine-research@users.noreply.github.com"
-          git add fast_engine/engine/dispatcher.py fast_engine/tests/test_statless_named_state_marker.py
+          git add fast_engine/engine/dispatcher.py
           git commit -m "feat: support finite self named-state markers"
           git push origin HEAD:fast-engine-phase2-20260901
