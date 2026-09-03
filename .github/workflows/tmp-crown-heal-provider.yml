@@ -17,5 +17,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect Crown cadence providers
-        run: python -m fast_engine.research.tmp_crown_cadence_provider_probe
+      - name: Baseline Crown blockers
+        run: |
+          python - <<'PY'
+          from context import spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.research.public_ranking_probe import _source_corpus
+          for members, source_name in _source_corpus():
+              if '크라운' not in members:
+                  continue
+              compiled = compile_moris_squad(spec.build_squad(list(members)))
+              rows = [b for b in static_score_blockers(compiled) if '크라운:로얄 에타이어 4:atk_dmg_pct' in b]
+              print(source_name, rows)
+          PY
+      - name: Apply temporary generic stack-heal bridge
+        run: python -m fast_engine.research.tmp_apply_crown_stack_heal_bridge
+      - name: Trace Crown 43-hit cadence on score runtime
+        run: python -m fast_engine.research.tmp_crown_hit43_probe
+      - name: Validate Crown stack-heal semantics on score runtime
+        run: python -m fast_engine.research.tmp_validate_crown_stack_heal_bridge
+      - name: Fast regression suite
+        run: python -m unittest discover -s fast_engine/tests -v
