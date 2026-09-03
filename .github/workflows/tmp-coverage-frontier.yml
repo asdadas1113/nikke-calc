@@ -9,51 +9,73 @@ permissions:
   contents: read
 
 jobs:
-  blocker-frontier:
+  inspect-near-certified:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Rank current public blocker frontier
+      - name: Inspect Crown and Little Mermaid blocker shapes
         run: |
           PYTHONPATH=. python - <<'PY'
-          from collections import Counter, defaultdict
           from context import snapshot, spec
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.score import static_score_blockers
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+          from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_supported
 
-          rows=[]
-          seen=set()
-          for source_name, case in snapshot.SQUADS.items():
-              if str(source_name).startswith('지그_'):
+          members=tuple(snapshot.SQUADS['스쿼드1']['members'])
+          raw=spec.build_squad(list(members))
+          squad=compile_moris_squad(raw)
+          print('MEMBERS',members)
+          print('BLOCKERS',static_score_blockers(squad))
+
+          wanted={
+              ('크라운','로얄 에타이어 4'),
+              ('리틀 머메이드','거품 난사'),
+          }
+          for effect in squad.effects:
+              owner=squad.members[effect.actor].name
+              if (owner,effect.name) not in wanted:
                   continue
-              members=tuple(str(x) for x in case.get('members', ()))
-              if len(members)!=5 or any(x.startswith('test_') for x in members):
-                  continue
-              if members in seen:
-                  continue
-              seen.add(members)
-              squad=compile_moris_squad(spec.build_squad(list(members)))
-              blockers=static_score_blockers(squad)
-              rows.append((len(blockers),str(source_name),members,blockers))
+              print('\nEFFECT',owner)
+              print({
+                  'id':effect.effect_id,
+                  'name':effect.name,
+                  'type':effect.effect_type,
+                  'stat':effect.stat,
+                  'value':effect.value,
+                  'target':effect.target,
+                  'target_mode':effect.target_spec.mode.value,
+                  'duration':effect.duration,
+                  'tick_interval':effect.tick_interval,
+                  'max_stack':effect.max_stack,
+                  'max_trigger':effect.max_trigger,
+                  'polarity':effect.polarity,
+                  'parameters':dict(effect.parameters),
+                  'conditions':[(r.mode.value,r.key,r.value,r.raw) for r in effect.condition_rules],
+                  'triggers':[(r.mode.value,r.event_key,r.threshold,r.interval,r.raw) for r in effect.triggers],
+                  'capability':effect.capability.disposition.value,
+                  'capability_blockers':tuple(effect.capability.blockers),
+                  'direct_damage_runtime':is_direct_damage_buff_runtime_supported(effect),
+                  'dispatcher_executable':TriggerDispatcher.is_executable_effect(effect),
+              })
 
-          print('UNIQUE',len(rows),'ZERO',sum(n==0 for n,*_ in rows))
-          for n,name,members,blockers in sorted(rows,key=lambda x:(x[0],x[1])):
-              print('TEAM',n,name,members)
-              for b in blockers:
-                  print('  ',b)
+          print('\nCROWN_ALL')
+          for effect in squad.effects:
+              if squad.members[effect.actor].name!='크라운': continue
+              print(effect.effect_id,effect.name,effect.effect_type,effect.stat,effect.target,
+                    [(r.mode.value,r.event_key,r.raw) for r in effect.triggers],
+                    [(r.mode.value,r.key,r.value,r.raw) for r in effect.condition_rules],
+                    dict(effect.parameters),effect.duration,effect.max_stack,
+                    effect.capability.disposition.value,tuple(effect.capability.blockers))
 
-          exact=Counter(b for _,_,_,bs in rows for b in bs)
-          family=Counter(b.split(':',1)[0] for _,_,_,bs in rows for b in bs)
-          print('\nFAMILY_COUNTS')
-          for k,v in family.most_common(): print(v,k)
-          print('\nEXACT_COUNTS_TOP')
-          for k,v in exact.most_common(40): print(v,k)
-
-          near=[r for r in rows if 0 < r[0] <= 4]
-          print('\nNEAR_CERTIFIED',len(near))
-          for n,name,members,blockers in sorted(near,key=lambda x:(x[0],x[1])):
-              print(n,name,blockers)
+          print('\nMERMAID_ALL_DAMAGE')
+          for effect in squad.effects:
+              if squad.members[effect.actor].name!='리틀 머메이드' or effect.effect_type!='damage': continue
+              print(effect.effect_id,effect.name,effect.stat,effect.value,effect.target,
+                    [(r.mode.value,r.event_key,r.raw) for r in effect.triggers],
+                    [(r.mode.value,r.key,r.value,r.raw) for r in effect.condition_rules],
+                    dict(effect.parameters),effect.capability.disposition.value,tuple(effect.capability.blockers))
           PY
