@@ -13,20 +13,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Trial narrow statless marker certification
+      - name: Verify marker expiry and Moris state end
         run: |
           PYTHONPATH=. python - <<'PY'
-          from collections import Counter
           from context import spec
+          from calculator.buff_manager import BuffManager
           from fast_engine.engine.burst import BurstPolicy, BurstSignal
           from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.capabilities import CapabilityDisposition
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.dispatcher import TriggerDispatcher
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.engine.scheduler import EventKind
           from fast_engine.engine.triggers import TriggerMode
-          from fast_engine.research.public_ranking_probe import _source_corpus
 
           original = TriggerDispatcher.is_executable_effect
 
@@ -54,30 +53,9 @@ jobs:
 
           TriggerDispatcher.is_executable_effect = staticmethod(patched)
 
-          seen=set(); before=Counter(); after=Counter(); changed=[]
-          # Recover baseline by temporarily restoring the original predicate for blocker scan.
-          for members, source_name in _source_corpus():
-              if members in seen:
-                  continue
-              seen.add(members)
-              squad=compile_moris_squad(spec.build_squad(list(members)))
-              TriggerDispatcher.is_executable_effect = staticmethod(original)
-              b=static_score_blockers(squad)
-              TriggerDispatcher.is_executable_effect = staticmethod(patched)
-              a=static_score_blockers(squad)
-              if b != a:
-                  changed.append((source_name,members,b,a))
-              before.update(b); after.update(a)
-
-          print('CHANGED_TEAMS',len(changed))
-          for row in changed:
-              print('TEAM',row[0],row[1])
-              print(' BEFORE',row[2])
-              print(' AFTER ',row[3])
-
-          # Real Grave activation/expiry smoke: fire only Grave's burst_cast signal.
           names=['미란다','그레이브','에이다','미하라 : 본딩 체인','D : 킬러 와이프']
-          squad=compile_moris_squad(spec.build_squad(names))
+          raw=spec.build_squad(names)
+          squad=compile_moris_squad(raw)
           grave=names.index('그레이브')
           rt=BurstRuntime(
               squad,
@@ -85,22 +63,57 @@ jobs:
               EnemyStaticProfile(defense=0.0,duration=20.0),
           )
           marker=next(e for e in squad.effects if e.actor==grave and e.name=='미래 예지')
-          print('MARKER_SHAPE',narrow_marker(marker),repr(marker))
-          print('PRE',rt.dispatcher.effects.has_named_state(grave,'미래 예지',now=1.0))
+          print('FAST_MARKER_SHAPE',narrow_marker(marker))
           result=rt.dispatcher.dispatch(BurstSignal(1.0,'burst_cast',grave,grave,'2'))
-          print('DISPATCH',result)
-          print('ACTIVE_1',rt.dispatcher.effects.has_named_state(grave,'미래 예지',now=1.0))
-          print('ACTIVE_10_999',rt.dispatcher.effects.has_named_state(grave,'미래 예지',now=10.999))
-          print('ACTIVE_11_LOGICAL',rt.dispatcher.effects.has_named_state(grave,'미래 예지',now=11.0))
-          # Process the scheduled expiry and any state-end notification at t=11.
-          while rt.scheduler and (rt.scheduler.peek_time() or 999.0) <= 11.0 + 1e-9:
+          print('FAST_BURST_DISPATCH',result)
+          print('FAST_ACTIVE_1',rt.dispatcher.effects.has_named_state(grave,'미래 예지',now=1.0))
+          print('FAST_ACTIVE_10_999',rt.dispatcher.effects.has_named_state(grave,'미래 예지',now=10.999))
+          print('FAST_ACTIVE_11_LOGICAL',rt.dispatcher.effects.has_named_state(grave,'미래 예지',now=11.0))
+          state_end_rows=[]
+          while rt.scheduler and (rt.scheduler.peek_time() if rt.scheduler.peek_time() is not None else 999.0) <= 11.0 + 1e-9:
               ev=rt.scheduler.pop()
-              print('EVENT',ev.time,ev.kind,ev.payload)
-              if ev.kind.value == 'state_expire':
+              if ev.kind is EventKind.STATE_EXPIRE:
+                  expired_before = getattr(ev.payload,'effect_id',None)
                   rt.dispatcher.handle_expiry(ev)
-              elif ev.kind.value == 'state_end_notify':
+                  if expired_before == marker.effect_id:
+                      print('FAST_MARKER_EXPIRY_HANDLED',ev.time)
+              elif ev.kind is EventKind.STATE_END_NOTIFY:
                   owner,name=ev.payload
                   r=rt.dispatcher.dispatch(BurstSignal(ev.time,f'event:state_end:{name}',owner,owner))
-                  print('STATE_END_DISPATCH',r)
-          print('ACTIVE_AFTER_EXPIRY',rt.dispatcher.effects.has_named_state(grave,'미래 예지',now=11.0))
+                  labels=tuple(squad.effects[i].name for i in r.activated_effect_ids)
+                  skipped=tuple(squad.effects[i].name for i in r.skipped_unsupported)
+                  state_end_rows.append((ev.time,name,labels,skipped))
+          print('FAST_STATE_END_ROWS',state_end_rows)
+          print('FAST_ACTIVE_AFTER_EXPIRY',rt.dispatcher.effects.has_named_state(grave,'미래 예지',now=11.0))
+
+          # Moris source contract on the same real Grave effect.
+          bm=BuffManager(raw, {'full_burst':False,'burst_casted':set()})
+          events=[]
+          original_notify=bm.notify
+          def wrapped_notify(event,t,caster,**ctx):
+              events.append((float(t),event,caster))
+              return original_notify(event,t,caster,**ctx)
+          bm.notify=wrapped_notify
+          print('MORIS_TIME_METHODS',[n for n in dir(bm) if any(k in n.lower() for k in ('tick','expire','update','advance'))])
+          bm.notify('burst_cast',1.0,'그레이브')
+          def active_names(t):
+              return tuple(sorted(
+                  ab.effect.get('name') for ab in bm._active
+                  if ab.effect.get('name') and ab.expires_at > t
+              ))
+          print('MORIS_HAS_MARKER_1','미래 예지' in active_names(1.0))
+          print('MORIS_MARKER_EXPIRES',[(ab.activated_at,ab.expires_at) for ab in bm._active if ab.effect.get('name')=='미래 예지'])
+          # Call the actual time-maintenance method if exposed by this branch.
+          if hasattr(bm,'tick'):
+              bm.tick(10.999)
+              print('MORIS_HAS_MARKER_10_999','미래 예지' in active_names(10.999))
+              bm.tick(11.0)
+          elif hasattr(bm,'update'):
+              bm.update(10.999)
+              print('MORIS_HAS_MARKER_10_999','미래 예지' in active_names(10.999))
+              bm.update(11.0)
+          else:
+              print('MORIS_NO_TIME_METHOD')
+          print('MORIS_STATE_END_EVENTS',[row for row in events if row[1]=='event:state_end:미래 예지'])
+          print('MORIS_HAS_MARKER_11','미래 예지' in active_names(11.0))
           PY
