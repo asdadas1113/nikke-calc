@@ -5,7 +5,7 @@ from unittest.mock import patch
 from calculator.buff_manager import BuffManager
 from calculator.timeline import DEFAULT_ENEMY, simulate
 from context import spec
-from fast_engine.engine.burst import compile_burst_policy
+from fast_engine.engine.burst import BurstMachine, compile_burst_policy
 from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
 from fast_engine.engine.dispatcher import TriggerDispatcher
@@ -105,6 +105,7 @@ def main() -> None:
     old_runtime = SimpleDamageScoreSink._stack_count_runtime_supported
     old_remove = TriggerDispatcher._enemy_remove_named_state_runtime_supported
     old_score = SimpleDamageScoreSink._score_spec
+    old_cast_signals = BurstMachine._cast_signals
 
     def delivery(sink, effect):
         return old_delivery(sink, effect) or (
@@ -151,6 +152,7 @@ def main() -> None:
         )
 
     fast_rows = []
+    fast_casts = []
 
     def traced_score(sink, effect_id, *, now, full_burst):
         ref = (
@@ -166,12 +168,18 @@ def main() -> None:
             fast_rows.append((float(now), ref, sink.char_total[ASUKA] - before))
         return out
 
+    def traced_cast_signals(machine, actor, stage, now):
+        if actor == ASUKA:
+            fast_casts.append((float(now), str(stage), int(machine.cycle_count)))
+        return old_cast_signals(machine, actor, stage, now)
+
     with (
         patch.object(SimpleDamageScoreSink, "_delivery_supported", new=delivery),
         patch.object(SimpleDamageScoreSink, "_stack_count_shape_supported", new=stack_shape),
         patch.object(SimpleDamageScoreSink, "_stack_count_runtime_supported", new=stack_runtime),
         patch.object(TriggerDispatcher, "_enemy_remove_named_state_runtime_supported", new=remove_runtime),
         patch.object(SimpleDamageScoreSink, "_score_spec", new=traced_score),
+        patch.object(BurstMachine, "_cast_signals", new=traced_cast_signals),
     ):
         blockers = static_score_blockers(squad)
         assert blockers == (), blockers
@@ -187,14 +195,18 @@ def main() -> None:
     print(f"FAST_TOTAL={fast.squad_total:.9f}")
     print(f"FAST_ANNIHILATE_STACKS={fast_stacks}")
     print("FAST_ANNIHILATE_ROWS=" + repr(fast_rows))
+    print("FAST_ASUKA_CASTS=" + repr(fast_casts))
 
     original_notify = BuffManager.notify
     rel_errors = []
     for seed in range(30):
         raw_m, _ = build()
         moris_state = []
+        moris_casts = []
 
         def notify(manager, event, t, caster, **ctx):
+            if caster == "아스카 : WILLE" and event == "burst_cast":
+                moris_casts.append(float(t))
             if caster == "아스카 : WILLE" and event == "event:state_end:섬멸 태세":
                 stack = max(
                     (
@@ -220,6 +232,9 @@ def main() -> None:
         moris_stacks = [stack for _, stack in moris_state]
         rel = float(fast.squad_total) / float(moris.squad_total) - 1.0
         rel_errors.append(rel)
+        if seed == 0:
+            print("MORIS_ASUKA_CASTS=" + repr(moris_casts))
+            print("MORIS_STATE_END_ROWS=" + repr(moris_state))
         assert moris_stacks == fast_stacks, (
             f"seed={seed} stack mismatch: Moris={moris_stacks} Fast={fast_stacks}"
         )
