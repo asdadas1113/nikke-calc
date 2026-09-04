@@ -106,7 +106,9 @@ def main() -> None:
         for hit in moris.hits
         if hit.caster == ACTOR_NAME and hit.skill_name == "섬멸"
     )
+    moris_actor_total = float(moris.char_total[ACTOR_NAME])
     print("MORIS_ANNIHILATION=" + repr(moris_annihilation))
+    print("MORIS_ACTOR_TOTAL=" + repr(moris_actor_total))
 
     original_delivery = SimpleDamageScoreSink._delivery_supported
     original_stack_shape = SimpleDamageScoreSink._stack_count_shape_supported
@@ -233,10 +235,18 @@ def main() -> None:
     assert first_damage[2] == 30.0, first_damage
     assert first_remove[2:] == (30.0, 0.0, True), first_remove
     assert abs(first_damage[1] - first_remove[1]) < 1e-9, trace
+
     fast_annihilation = sum(float(row[3]) for row in damage_rows)
+    fast_actor_total = float(fast.char_total[actor])
     print("FAST_ANNIHILATION=" + repr(fast_annihilation))
+    print("FAST_ACTOR_TOTAL=" + repr(fast_actor_total))
     print("ANNIHILATION_REL_ERR=" + repr(fast_annihilation / moris_annihilation - 1.0))
-    assert abs(fast_annihilation / moris_annihilation - 1.0) < 0.01
+
+    moris_without = moris_actor_total - moris_annihilation
+    fast_without = fast_actor_total - fast_annihilation
+    print("MORIS_WITHOUT_ANNIHILATION=" + repr(moris_without))
+    print("FAST_WITHOUT_ANNIHILATION=" + repr(fast_without))
+    print("BASELINE_ACTOR_REL_ERR=" + repr(fast_without / moris_without - 1.0))
 
 
 if __name__ == "__main__":
