@@ -1,0 +1,68 @@
+name: tmp-frontier-rescan-20260905
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Scan public blocker frontier
+        run: |
+          python - <<'PY'
+          from collections import Counter, defaultdict
+          from context import snapshot, spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+
+          cases = []
+          seen = set()
+          for name, entry in snapshot.SQUADS.items():
+              if name.startswith('지그_'):
+                  continue
+              members = tuple(entry['members'])
+              duplicate_of = seen.intersection({members})
+              if members in seen:
+                  print(f'DUPLICATE\t{name}\t{members}')
+                  continue
+              seen.add(members)
+              squad = compile_moris_squad(spec.build_squad(list(members)))
+              blockers = tuple(static_score_blockers(squad))
+              cases.append((name, members, blockers))
+
+          print(f'SOURCE_CASES={sum(1 for n in snapshot.SQUADS if not n.startswith("지그_"))}')
+          print(f'UNIQUE_MEMBERSHIPS={len(cases)}')
+          print(f'CERTIFIED={sum(not b for _,_,b in cases)}')
+          print(f'GAPS={sum(bool(b) for _,_,b in cases)}')
+          print('\n=== TEAMS BY BLOCKER COUNT ===')
+          for name, members, blockers in sorted(cases, key=lambda x: (len(x[2]), x[0])):
+              print(f'TEAM\t{len(blockers)}\t{name}\t{" | ".join(blockers) if blockers else "CERTIFIED"}')
+
+          counts = Counter()
+          team_map = defaultdict(list)
+          for name, _, blockers in cases:
+              for blocker in blockers:
+                  counts[blocker] += 1
+                  team_map[blocker].append(name)
+          print('\n=== EXACT BLOCKER FREQUENCY ===')
+          for blocker, count in counts.most_common():
+              print(f'BLOCKER\t{count}\t{blocker}\t{";".join(team_map[blocker])}')
+
+          families = Counter()
+          family_teams = defaultdict(set)
+          for name, _, blockers in cases:
+              for blocker in blockers:
+                  family = blocker.split(':', 1)[0]
+                  families[family] += 1
+                  family_teams[family].add(name)
+          print('\n=== PREFIX FAMILIES ===')
+          for family, count in families.most_common():
+              print(f'FAMILY\t{count}\t{len(family_teams[family])}\t{family}')
+          PY
