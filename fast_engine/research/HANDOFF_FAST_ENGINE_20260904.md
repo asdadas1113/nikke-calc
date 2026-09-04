@@ -286,3 +286,18 @@ Crown 조사에만 사용한 temporary probe/helper/workflow는 이번 checkpoin
 별도 timing/river 연구에 쓰이는 temporary diagnostics는 그 연구 checkpoint가 닫힐 때까지 유지한다.
 
 `master`는 그대로 둔다.
+---
+
+## 12. Asuka state-end enemy-stack checkpoint
+
+`레이드_델타`의 `아스카 : WILLE` `섬멸` blocker를 generic finite-state-end enemy-stack support로 닫았다.
+
+- production: `68d8dea58e4b05a630fc1d6545dcb905a7c7cfa8`
+- Moris/Fast 첫 종료 약 `12.35s`: enemy `안티 AT 필드` 30 stack을 읽어 damage 후 같은 timestamp에 `30 -> 0` 제거
+- Moris `섬멸` 1,303,500 / Fast 1,394,345.58 (`+6.97%`)
+- 같은 Asuka의 `섬멸` 제외 기존 damage 오차가 `+8.29%`라 mechanic-specific formula regression 근거는 없음; global `bonus_damage` 수식은 유지
+- fail-open은 unique finite SELF state-end producer + same-actor finite harmful enemy `received_dmg_pct` named stack + exact stack-count bonus-damage/remove 조합만 허용
+- focused 12/12, DEF55 near-tie, release validation `33830517337`, canonical CI `33830517342` (golden 29/29) success
+- public: source24 / unique23 / certified2 / gaps21 유지; `레이드_델타`는 Asuka blocker 제거 후 Little Mermaid `거품 난사` 하나만 잔존
+
+Nayuta periodic/named-stack은 이미 지원되며 실제 남은 `기억 연소`는 `SMG -> RL` cross-class transition이 필요해 보류했다. 다음에는 Little Mermaid squad-ammo, cross-class weapon change, HP chronology를 건너뛰고 latest frontier의 작은 repeated damage-delivery root를 고른다.

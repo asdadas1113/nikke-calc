@@ -187,3 +187,12 @@ public blocker scan 결과:
 6. coverage가 실제 증가하면 ranking validation 재실행
 
 optimizer production integration은 아직 하지 않는다.
+## 11. 후속 채택 — finite state-end enemy-stack damage
+
+`레이드_델타` Asuka `섬멸`을 좁은 generic slice로 채택했다. Moris/Fast 모두 첫 `섬멸 태세` 종료 약 `12.35s`에서 `안티 AT 필드` 30 stack을 읽어 damage를 계산한 뒤 같은 timestamp에 stack을 0으로 제거한다.
+
+정식 commit은 `68d8dea58e4b05a630fc1d6545dcb905a7c7cfa8`. 지원 범위는 unique finite SELF state-end producer + same-actor finite harmful enemy `received_dmg_pct` named stack + exact stack-count `bonus_damage`/same-event removal로 제한하며 broad named-event/enemy-stack support는 계속 fail closed다.
+
+`섬멸` 절대 damage 오차는 `+6.97%`, 같은 Asuka의 기존 비-섬멸 damage 오차는 `+8.29%`여서 global `bonus_damage` 수식은 수정하지 않았다. focused 12/12, DEF55 near-tie, release validation `33830517337`, canonical CI `33830517342` golden 29/29가 통과했다.
+
+public은 source24 / unique23 / certified2 / gaps21 그대로이며 `레이드_델타`에는 Little Mermaid `거품 난사`만 남았다. 다음 탐색에서도 squad-ammo chronology, Nayuta cross-class weapon change, HP chronology는 보류한다.
