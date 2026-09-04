@@ -10,26 +10,155 @@ permissions:
   contents: read
 
 jobs:
-  audit:
+  ab:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Audit unique-23 frontier shapes
+
+      - name: Baseline and Moris trace
         run: |
           python - <<'PY'
-          from collections import Counter, defaultdict
+          from context import snapshot, spec
+          from calculator.timeline import simulate
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+
+          team = next(
+              name for name, entry in snapshot.SQUADS.items()
+              if not name.startswith('지그_') and '신데렐라' in entry['members']
+          )
+          moris_squad = spec.build_squad(list(snapshot.SQUADS[team]['members']))
+          compiled = compile_moris_squad(moris_squad)
+          blocker = 'cadence:신데렐라:무결한 유리 2:charge_speed_pct'
+          assert blocker in static_score_blockers(compiled)
+          result = simulate(
+              moris_squad,
+              config={'duration': 20.0, 'rng_mode': 'expected'},
+              verbose=True,
+          )
+          times = [
+              row.t for row in result.log.buff_events
+              if row.name == '무결한 유리 2' and row.kind == 'activate'
+          ]
+          print('TEAM', team)
+          print('MORIS_ACTIVATIONS', times[:12])
+          assert len(times) >= 3, times
+          assert times[0] > 0.0
+          PY
+
+      - name: Apply runner-only generic patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('fast_engine/engine/dispatcher.py')
+          s = p.read_text(encoding='utf-8')
+          anchor = '''    @staticmethod\n    def _on_attack_charge_speed_shape_supported(effect: "CompiledEffect") -> bool:\n'''
+          helper = '''    @staticmethod\n    def _full_charge_hit_permanent_self_charge_speed_shape_supported(\n        effect: "CompiledEffect",\n    ) -> bool:\n        """Certify a permanent self charge-speed state applied after a full-charge hit."""\n        if not (\n            effect.capability.disposition is CapabilityDisposition.PLANNED\n            and set(effect.capability.blockers) == {"timing:weapon_hit"}\n            and effect.effect_type == "buff"\n            and (effect.stat or "") == "charge_speed_pct"\n            and effect.target_spec.mode is TargetMode.SELF\n            and effect.value is not None\n            and float(effect.value) >= 0.0\n            and effect.duration in (None, -1.0)\n            and effect.max_stack in (None, 1, 1.0)\n            and effect.max_trigger is None\n            and effect.tick_interval is None\n            and not effect.parameters\n            and not effect.condition_rules\n            and len(effect.triggers) == 1\n        ):\n            return False\n        rule = effect.triggers[0]\n        return rule.mode is TriggerMode.EVENT and rule.event_key == "full_charge_hit"\n\n'''
+          if anchor not in s:
+              raise SystemExit('dispatcher insertion anchor missing')
+          s = s.replace(anchor, helper + anchor, 1)
+          old = '''            or TriggerDispatcher._on_attack_charge_speed_shape_supported(effect)\n            or TriggerDispatcher._charge_overflow_conversion_shape_supported(effect)\n'''
+          new = '''            or TriggerDispatcher._on_attack_charge_speed_shape_supported(effect)\n            or TriggerDispatcher._full_charge_hit_permanent_self_charge_speed_shape_supported(effect)\n            or TriggerDispatcher._charge_overflow_conversion_shape_supported(effect)\n'''
+          if old not in s:
+              raise SystemExit('dispatcher executable anchor missing')
+          s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8')
+          print('PATCH_APPLIED')
+          PY
+
+      - name: Focused Moris-Fast semantic A/B
+        run: |
+          python - <<'PY'
+          from unittest.mock import patch
+          from context import snapshot, spec
+          from calculator.timeline import simulate
+          from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.burst_runtime import BurstRuntime
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+          from fast_engine.engine.dynamic_weapon import MultiSignalChargeCadenceRuntime
+          from fast_engine.engine.effects import ActiveEffectStore
+          from fast_engine.engine.score import static_score_blockers
+
+          team = next(
+              name for name, entry in snapshot.SQUADS.items()
+              if not name.startswith('지그_') and '신데렐라' in entry['members']
+          )
+          moris_squad = spec.build_squad(list(snapshot.SQUADS[team]['members']))
+          compiled = compile_moris_squad(moris_squad)
+          actor = next(i for i, m in enumerate(compiled.members) if m.name == '신데렐라')
+          effect = next(e for e in compiled.members[actor].effects if e.name == '무결한 유리 2')
+          helper = TriggerDispatcher._full_charge_hit_permanent_self_charge_speed_shape_supported
+          assert helper(effect), effect
+          blocker = 'cadence:신데렐라:무결한 유리 2:charge_speed_pct'
+          assert blocker not in static_score_blockers(compiled)
+
+          duration = 20.0
+          policy = compile_burst_policy(moris_squad, compiled, {'duration': duration})
+          fast_activations = []
+          fast_shots = []
+          orig_activate = ActiveEffectStore.activate_group
+          orig_boundary = MultiSignalChargeCadenceRuntime.handle_boundary
+
+          def traced_activate(store, eff, targets, now, scheduler):
+              if eff.effect_id == effect.effect_id:
+                  fast_activations.append(float(now))
+              return orig_activate(store, eff, targets, now, scheduler)
+
+          def traced_boundary(runtime, event):
+              row = orig_boundary(runtime, event)
+              if row is not None and row.actor == actor and any(
+                  signal.event_key == 'full_charge_hit' for signal in row.signals
+              ):
+                  fast_shots.append(float(event.time))
+              return row
+
+          with patch.object(ActiveEffectStore, 'activate_group', new=traced_activate), patch.object(
+              MultiSignalChargeCadenceRuntime, 'handle_boundary', new=traced_boundary
+          ):
+              BurstRuntime(compiled, policy).run(duration=duration)
+
+          moris = simulate(
+              moris_squad,
+              config={'duration': duration, 'rng_mode': 'expected'},
+              verbose=True,
+          )
+          moris_times = [
+              row.t for row in moris.log.buff_events
+              if row.name == '무결한 유리 2' and row.kind == 'activate'
+          ]
+          print('FAST_ACTIVATIONS', fast_activations[:12])
+          print('FAST_SHOTS', fast_shots[:12])
+          print('MORIS_ACTIVATIONS', moris_times[:12])
+          assert fast_activations == fast_shots, (fast_activations, fast_shots)
+          assert len(fast_activations) == len(moris_times), (fast_activations, moris_times)
+          for actual, expected in zip(fast_activations, moris_times):
+              assert abs(actual - expected) <= 1e-9, (actual, expected)
+          assert len(fast_activations) >= 3
+          first_gap = fast_activations[1] - fast_activations[0]
+          second_gap = fast_activations[2] - fast_activations[1]
+          print('POST_ACTIVATION_GAPS', first_gap, second_gap)
+          assert first_gap < fast_activations[0], (fast_activations, first_gap)
+          PY
+
+      - name: Public scope and fail-closed gate
+        run: |
+          python - <<'PY'
+          from collections import Counter
           from context import snapshot, spec
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.dispatcher import TriggerDispatcher
           from fast_engine.engine.score import static_score_blockers
 
+          helper = TriggerDispatcher._full_charge_hit_permanent_self_charge_speed_shape_supported
           seen = set()
-          rows = []
-          freq = Counter()
-          by_family = Counter()
+          matches = []
+          cadence = 0
+          certified = 0
           for team, entry in snapshot.SQUADS.items():
               if team.startswith('지그_'):
                   continue
@@ -39,48 +168,29 @@ jobs:
               seen.add(members)
               squad = compile_moris_squad(spec.build_squad(list(members)))
               blockers = static_score_blockers(squad)
-              for blocker in blockers:
-                  freq[blocker] += 1
-                  by_family[blocker.split(':', 1)[0]] += 1
-                  rows.append((team, squad, blocker))
-
-          print('ACCOUNTING', len(seen), sum(1 for team, entry in snapshot.SQUADS.items() if not team.startswith('지그_')))
-          print('FAMILIES')
-          for k, v in by_family.most_common():
-              print(v, k)
-
-          print('\nBLOCKERS')
-          for blocker, count in freq.most_common():
-              print(f'{count}\t{blocker}')
-
-          print('\nDETAILS')
-          emitted = set()
-          for team, squad, blocker in rows:
-              if blocker in emitted:
-                  continue
-              emitted.add(blocker)
-              family, rest = blocker.split(':', 1)
-              matches = []
+              cadence += sum(b.startswith('cadence:') for b in blockers)
+              certified += not blockers
               for effect in squad.effects:
-                  owner = squad.members[effect.actor].name
-                  label = f'{owner}:{effect.name or effect.stat or "?"}:{effect.stat or "?"}'
-                  short = f'{owner}:{effect.name or "unnamed"}'
-                  if rest == label or rest == short or rest.startswith(label) or label.startswith(rest):
-                      matches.append(effect)
-              print('---')
-              print('BLOCKER', blocker)
-              print('TEAM', team)
-              if not matches:
-                  print('NO_EFFECT_MATCH')
-                  continue
-              for effect in matches:
-                  owner = squad.members[effect.actor].name
-                  print('EFFECT', owner, '|', effect.name, '|', effect.stat, '| type=', effect.effect_type)
-                  print(' target=', effect.target_spec.mode.value, 'runtime_target=', effect.target_spec.runtime_supported)
-                  print(' disposition=', effect.capability.disposition.value, 'cap_blockers=', tuple(effect.capability.blockers))
-                  print(' executable=', TriggerDispatcher.is_executable_effect(effect))
-                  print(' value=', effect.value, 'duration=', effect.duration, 'max_stack=', effect.max_stack, 'tick_interval=', effect.tick_interval)
-                  print(' params=', dict(effect.parameters))
-                  print(' triggers=', [(r.mode.value, r.event_key, r.interval, r.threshold) for r in effect.triggers])
-                  print(' conditions=', [(r.mode.value, getattr(r, 'threshold', None), getattr(r, 'stat', None)) for r in effect.condition_rules])
+                  if helper(effect):
+                      matches.append((team, squad.members[effect.actor].name, effect.name, effect.stat))
+          print('ACCOUNTING', len(seen), certified, len(seen)-certified, 'CADENCE', cadence)
+          print('MATCHES', matches)
+          assert len(seen) == 23
+          assert certified == 2
+          assert cadence == 64, cadence
+          assert len(matches) == 2, matches
+          assert {(r[1], r[2], r[3]) for r in matches} == {
+              ('신데렐라', '무결한 유리 2', 'charge_speed_pct')
+          }
+
+          # Neighboring weapon-hit charge-speed semantics remain fail closed.
+          brady_team = next(
+              entry for entry in snapshot.SQUADS.values()
+              if '브래디' in entry['members']
+          )
+          brady = compile_moris_squad(spec.build_squad(list(brady_team['members'])))
+          assert not any(helper(e) for e in brady.effects if brady.members[e.actor].name == '브래디')
           PY
+
+      - name: Full Fast regression
+        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
