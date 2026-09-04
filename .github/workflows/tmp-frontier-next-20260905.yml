@@ -10,95 +10,66 @@ permissions:
   contents: read
 
 jobs:
-  audit:
+  brady:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Compare next frontier candidates
+      - name: Brady compiled shape
         run: |
           python - <<'PY'
-          from collections import Counter
           from context import snapshot, spec
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.engine.score import (
-              static_score_blockers,
-              _is_dynamic_reload_score_supported,
-              _is_dynamic_max_ammo_score_supported,
-              _reload_recipient_score_safe,
-              _max_ammo_recipient_score_safe,
-              _possible_ally_targets,
-          )
+          from fast_engine.engine.score import static_score_blockers
 
-          seen = set()
-          rows = []
-          blocker_freq = Counter()
-          candidate_rows = []
           for team, entry in snapshot.SQUADS.items():
-              if team.startswith('지그_'):
+              if team.startswith('지그_') or '브래디' not in entry['members']:
                   continue
-              members = tuple(entry['members'])
-              if members in seen:
-                  continue
-              seen.add(members)
-              squad = compile_moris_squad(spec.build_squad(list(members)))
-              blockers = static_score_blockers(squad)
-              rows.append((team, members, squad, blockers))
-              blocker_freq.update(blockers)
+              squad = compile_moris_squad(spec.build_squad(list(entry['members'])))
+              print('\nTEAM', team, tuple(m.name for m in squad.members))
+              print('BLOCKERS', static_score_blockers(squad))
               for effect in squad.effects:
                   owner = squad.members[effect.actor].name
                   keys = tuple(rule.event_key for rule in effect.triggers)
-                  if (
-                      (effect.stat or '') in {
-                          'reload_speed_pct', 'max_ammo_pct', 'max_ammo_flat',
-                          'charge_time_fixed'
-                      }
-                      or any('stat_applied' in (key or '') for key in keys)
-                      or owner == '브래디'
-                  ):
-                      candidate_rows.append((team, squad, effect, blockers))
+                  if owner != '브래디' and not any('stat_applied' in (key or '') for key in keys):
+                      continue
+                  print('---')
+                  print('OWNER', owner)
+                  print('ID', effect.effect_id)
+                  print('NAME', effect.name)
+                  print('TYPE', effect.effect_type, 'STAT', effect.stat)
+                  print('CAP', effect.capability.disposition.value, tuple(effect.capability.blockers))
+                  print('EXEC', TriggerDispatcher.is_executable_effect(effect))
+                  print('TARGET', effect.target_spec.mode.value, 'runtime=', effect.target_spec.runtime_supported)
+                  print('VALUE', effect.value, 'DURATION', effect.duration, 'MAX_STACK', effect.max_stack, 'MAX_TRIGGER', effect.max_trigger)
+                  print('PARAMS', dict(effect.parameters))
+                  print('TRIGGERS', [(r.mode.value, r.event_key, r.interval, r.threshold, r.trigger_count_reducible) for r in effect.triggers])
+                  print('CONDS', [(r.mode.value, getattr(r, 'stat', None), getattr(r, 'threshold', None)) for r in effect.condition_rules])
+          PY
+      - name: Locate stat-applied source semantics
+        run: |
+          echo '=== stat_applied grep ==='
+          grep -Rni --exclude-dir=.git -E 'stat[_:-]?applied|stat applied' calculator fast_engine context || true
+          echo '=== named-event grep ==='
+          grep -Rni --exclude-dir=.git -E 'named_event|named event|event:\{' calculator fast_engine | head -200 || true
+      - name: Moris Brady trace
+        run: |
+          python - <<'PY'
+          from context import snapshot, spec
+          from calculator.timeline import simulate
 
-          print('ACCOUNTING', len(seen), 'CERTIFIED', sum(not r[3] for r in rows), 'GAPS', sum(bool(r[3]) for r in rows))
-          print('CADENCE', sum(sum(b.startswith('cadence:') for b in r[3]) for r in rows))
-          print('\nTOP_BLOCKERS')
-          for blocker, count in blocker_freq.most_common():
-              print(count, blocker)
-
-          print('\nCANDIDATES')
-          emitted = set()
-          for team, squad, effect, blockers in candidate_rows:
-              owner = squad.members[effect.actor].name
-              sig = (tuple(m.name for m in squad.members), effect.effect_id)
-              if sig in emitted:
-                  continue
-              emitted.add(sig)
-              stat = effect.stat or ''
-              print('\n---')
-              print('TEAM', team)
-              print('MEMBERS', tuple(m.name for m in squad.members))
-              print('EFFECT', owner, '|', effect.name, '|', stat, '|', effect.effect_type)
-              print('CAP', effect.capability.disposition.value, tuple(effect.capability.blockers))
-              print('EXEC', TriggerDispatcher.is_executable_effect(effect))
-              print('TARGET', effect.target_spec.mode.value, 'runtime=', effect.target_spec.runtime_supported)
-              print('VALUE', effect.value, 'DURATION', effect.duration, 'STACK', effect.max_stack)
-              print('PARAMS', dict(effect.parameters))
-              print('TRIGGERS', [(r.mode.value, r.event_key, r.interval, r.threshold) for r in effect.triggers])
-              print('CONDS', [(r.mode.value, getattr(r, 'stat', None), getattr(r, 'threshold', None)) for r in effect.condition_rules])
-              related = [b for b in blockers if owner in b and (effect.name or stat) in b]
-              print('RELATED_BLOCKERS', related)
-              if stat == 'reload_speed_pct':
-                  targets = _possible_ally_targets(squad, effect)
-                  print('RELOAD_SUPPORTED', _is_dynamic_reload_score_supported(squad, effect))
-                  print('TARGETS', [(i, squad.members[i].name, squad.members[i].weapon.get('fire_mode'), _reload_recipient_score_safe(squad, i)) for i in targets])
-              if stat in {'max_ammo_pct', 'max_ammo_flat'}:
-                  targets = _possible_ally_targets(squad, effect)
-                  print('MAX_AMMO_SUPPORTED', _is_dynamic_max_ammo_score_supported(squad, effect))
-                  print('TARGETS', [(i, squad.members[i].name, squad.members[i].weapon.get('fire_mode'), _max_ammo_recipient_score_safe(squad, i)) for i in targets])
-
-          print('\nTEAM_BLOCKER_COUNTS')
-          for team, members, squad, blockers in sorted(rows, key=lambda r: (len(r[3]), r[0])):
-              print(len(blockers), team, blockers)
+          team = next(name for name, entry in snapshot.SQUADS.items() if not name.startswith('지그_') and '브래디' in entry['members'])
+          squad = spec.build_squad(list(snapshot.SQUADS[team]['members']))
+          result = simulate(squad, config={'duration': 40.0, 'rng_mode': 'expected'}, verbose=True)
+          print('TEAM', team)
+          for row in result.log.buff_events:
+              if row.caster == '브래디' or row.target == '브래디' or '브래디' in str(row):
+                  print('BUFF_EVENT', row)
+          print('ALL_BRADY_SKILLS')
+          brady = next(member for member in squad.members if member.name == '브래디')
+          for effect in brady.effects:
+              print(effect)
           PY
