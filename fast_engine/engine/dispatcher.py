@@ -388,6 +388,31 @@ class TriggerDispatcher:
         )
 
     @staticmethod
+    def _full_charge_hit_permanent_self_charge_speed_shape_supported(
+        effect: "CompiledEffect",
+    ) -> bool:
+        """Certify a permanent self charge-speed state applied after a full-charge hit."""
+        if not (
+            effect.capability.disposition is CapabilityDisposition.PLANNED
+            and set(effect.capability.blockers) == {"timing:weapon_hit"}
+            and effect.effect_type == "buff"
+            and (effect.stat or "") == "charge_speed_pct"
+            and effect.target_spec.mode is TargetMode.SELF
+            and effect.value is not None
+            and float(effect.value) >= 0.0
+            and effect.duration in (None, -1.0)
+            and effect.max_stack in (None, 1, 1.0)
+            and effect.max_trigger is None
+            and effect.tick_interval is None
+            and not effect.parameters
+            and not effect.condition_rules
+            and len(effect.triggers) == 1
+        ):
+            return False
+        rule = effect.triggers[0]
+        return rule.mode is TriggerMode.EVENT and rule.event_key == "full_charge_hit"
+
+    @staticmethod
     def _on_attack_charge_speed_shape_supported(effect: "CompiledEffect") -> bool:
         """Bridge only a simple self charge-speed stack driven by one physical attack."""
         if not (
@@ -961,6 +986,7 @@ class TriggerDispatcher:
             or TriggerDispatcher._named_event_control_shape_supported(effect)
             or TriggerDispatcher._named_duration_extend_shape_supported(effect)
             or TriggerDispatcher._on_attack_charge_speed_shape_supported(effect)
+            or TriggerDispatcher._full_charge_hit_permanent_self_charge_speed_shape_supported(effect)
             or TriggerDispatcher._charge_overflow_conversion_shape_supported(effect)
         ):
             return True
