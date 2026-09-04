@@ -14,55 +14,39 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Compare bounded frontier candidates
+      - name: Verify Snow White periodic direct-state shape
         run: |
           python - <<'PY'
+          from calculator.timeline import simulate
           from context import snapshot, spec
           from fast_engine.engine.compiler import compile_moris_squad
-          import fast_engine.engine.score as score
-          import fast_engine.engine.damage_policy as dp
           from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
-          from fast_engine.engine.model import EnemyStaticProfile
 
-          wanted = {
-              '레이드_네온벨벳': {'네온 : 비전 아이': {'초화력'}},
-              '레이드_일레그': {'일레그 : 붐 앤 쇼크': {'헬로 고스트','헬로 고스트 2','고스트 버스터 2'}},
-              '레이드_소다': {'소다 : 트윙클링 바니': {'비기너즈 베네핏 I','비기너즈 베네핏 II'}},
-              '레이드_헬름아쿠아스노우': {'스노우 화이트': {'세븐스 드워프 : V&VI 2','세븐스 드워프 : I 2'}, '헬름 : 아쿠아마린': {'이지스 캐논 견제 사격 2'}},
-          }
+          team = '레이드_헬름아쿠아스노우'
+          moris_squad = spec.build_squad(list(snapshot.SQUADS[team]['members']))
+          compiled = compile_moris_squad(moris_squad)
+          sw = next(i for i,m in enumerate(compiled.members) if m.name == '스노우 화이트')
+          effect = next(e for e in compiled.members[sw].effects if e.name == '세븐스 드워프 : V&VI 2')
+          print('EFFECT=', effect)
+          print('CAP_DISPOSITION=', effect.capability.disposition)
+          print('CAP_BLOCKERS=', effect.capability.blockers)
+          print('POLARITY=', effect.polarity)
+          print('EXECUTABLE_NOW=', TriggerDispatcher.is_executable_effect(effect))
 
-          for team, actors in wanted.items():
-              squad = compile_moris_squad(spec.build_squad(list(snapshot.SQUADS[team]['members'])))
-              sink = SimpleDamageScoreSink(squad, EnemyStaticProfile(defense=0.0, duration=1.0))
-              print('\n=== TEAM', team, '===')
-              print('BLOCKERS=', score.static_score_blockers(squad))
-              for i, member in enumerate(squad.members):
-                  if member.name not in actors:
-                      continue
-                  print('ACTOR', i, member.name, 'weapon=', member.weapon)
-                  for effect in member.effects:
-                      if effect.name not in actors[member.name]:
-                          continue
-                      print('\nEFFECT', effect.name)
-                      print(' type/stat/value=', effect.effect_type, effect.stat, effect.value)
-                      print(' target=', repr(effect.target_spec))
-                      print(' duration/max_stack=', effect.duration, effect.max_stack)
-                      print(' params=', dict(effect.parameters))
-                      print(' triggers=', [repr(r) for r in effect.triggers])
-                      print(' conditions=', [repr(c) for c in effect.condition_rules])
-                      print(' executable=', TriggerDispatcher.is_executable_effect(effect))
-                      print(' target_runtime_supported=', effect.target_spec.runtime_supported)
-                      try: print(' direct_runtime=', dp.is_direct_damage_buff_runtime_supported(effect))
-                      except Exception as e: print(' direct_runtime ERR', repr(e))
-                      try: print(' direct_score=', score._direct_damage_buff_score_supported(squad, effect))
-                      except Exception as e: print(' direct_score ERR', repr(e))
-                      if effect.effect_type == 'damage':
-                          try: print(' damage_sink_support=', sink.supports(effect))
-                          except Exception as e: print(' damage_sink_support ERR', repr(e))
-                      for r in effect.triggers:
-                          try: print(' timing', repr(r), '=>', dp._timing_supported(r))
-                          except Exception as e: print(' timing ERR', repr(e))
-                      try: print(' possible_targets=', score._possible_ally_targets(squad, effect))
-                      except Exception as e: print(' possible_targets ERR', repr(e))
+          result = simulate(moris_squad, config={'duration': 70.0, 'rng_mode':'expected'}, verbose=True)
+          print('SIMLOG_ATTRS=', [x for x in dir(result.log) if not x.startswith('_')])
+          for attr in [x for x in dir(result.log) if not x.startswith('_')]:
+              try:
+                  rows = getattr(result.log, attr)
+                  if isinstance(rows, list):
+                      hits = [r for r in rows if '세븐스 드워프 : V&VI 2' in repr(r)]
+                      if hits:
+                          print('LOG_MATCH', attr, len(hits))
+                          for r in hits[:30]: print(' ', repr(r))
+              except Exception as e:
+                  print('LOG_ERR', attr, repr(e))
+          print('RESULT_ATTRS=', [x for x in dir(result) if not x.startswith('_')])
           PY
+      - name: Locate Moris periodic path
+        run: |
+          grep -n -E 'periodic|tick_interval|next_proc|every:|interval' calculator/timeline.py calculator/buff_manager.py | head -n 160 || true
