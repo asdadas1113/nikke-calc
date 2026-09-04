@@ -121,3 +121,10 @@ Therefore the production Fast Engine remains greenfield. These written lessons a
 - `effect_interval`/`skill_cooldown_pct`처럼 Moris periodic grid를 바꾸는 상태가 있으면 Fast의 fixed grid는 오답이 될 수 있다.
 - 따라서 narrow periodic shape certification과 `_PERIODIC_GRID_INVALIDATORS` fail-closed를 함께 유지한다.
 - 실제 Snow White finite self `crit_rate` slice는 새 scheduler 없이 기존 periodic runtime을 재사용했고, Moris successful activation 시각을 직접 대조해 검증했다.
+
+## 2026-09-05 — raw weapon-hit state는 이미 소유한 물리 boundary를 재사용할 때 가장 싸다
+
+- 모든 hit-trigger 상태가 global per-shot scheduler를 요구하는 것은 아니다.
+- dynamic charge runtime이 해당 actor의 실제 shot boundary를 이미 소유한다면, 필요한 raw hit signal만 post-shot에 노출하고 state activation 뒤 cadence sync를 수행하는 편이 Fast 설계에 맞다.
+- 핵심 ordering은 `shot/score -> hit trigger -> state activation -> cadence sync`다. triggering shot에 새 cadence 상태를 소급 적용하면 안 된다.
+- blocker 제거만 보지 말고 Moris/Fast의 실제 activation sequence와 다음 shot interval을 직접 대조하면 ordering proof가 강해진다.

@@ -11,22 +11,23 @@
 가장 먼저 읽을 문서:
 
 1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md`
-2. `fast_engine/research/PERIODIC_FINITE_SELF_CRIT_CHECKPOINT_20260905.md`
-2. `fast_engine/research/TOVE_AMMO_PCT_NAMED_EVENT_CHECKPOINT_20260905.md`
-3. `fast_engine/research/ADA_CHARGE_HOLD_CONTROL_CHECKPOINT_20260905.md`
-4. `fast_engine/research/ADA_ONE_SHOT_CHARGE_SPEED_CHECKPOINT_20260905.md`
-5. `fast_engine/research/PATTERNLESS_ENCOUNTER_EVENT_CHECKPOINT_20260905.md`
-6. `fast_engine/research/COVERAGE_FRONTIER_CHECKPOINT_20260904.md`
-7. `fast_engine/research/CROWN_SELF_STACK_HEAL_CHECKPOINT_20260904.md`
-8. `fast_engine/research/TIMING_SEMANTICS_RANKING_CHECKPOINT_20260904.md`
+2. `fast_engine/research/FULL_CHARGE_HIT_CHARGE_SPEED_CHECKPOINT_20260905.md`
+3. `fast_engine/research/PERIODIC_FINITE_SELF_CRIT_CHECKPOINT_20260905.md`
+4. `fast_engine/research/TOVE_AMMO_PCT_NAMED_EVENT_CHECKPOINT_20260905.md`
+5. `fast_engine/research/ADA_CHARGE_HOLD_CONTROL_CHECKPOINT_20260905.md`
+6. `fast_engine/research/ADA_ONE_SHOT_CHARGE_SPEED_CHECKPOINT_20260905.md`
+7. `fast_engine/research/PATTERNLESS_ENCOUNTER_EVENT_CHECKPOINT_20260905.md`
+8. `fast_engine/research/COVERAGE_FRONTIER_CHECKPOINT_20260904.md`
+9. `fast_engine/research/CROWN_SELF_STACK_HEAL_CHECKPOINT_20260904.md`
+10. `fast_engine/research/TIMING_SEMANTICS_RANKING_CHECKPOINT_20260904.md`
 
 현재 최신 production semantic commit:
 
-- `fee2fe343cf75861185dd780d9191bbf6f48da8f` — finite periodic self `crit_rate` state certification
+- `721cd9a8720766c14a814eb8973ca5cd685d7c73` — full-charge-hit permanent self `charge_speed_pct` certification
 
 직전 production semantic commit:
 
-- `47e8c47278bbd9125b42a8f08bde632638796026` — percent-ammo instant named-event emission / source certification
+- `fee2fe343cf75861185dd780d9191bbf6f48da8f` — finite periodic self `crit_rate` state certification
 
 직전 주요 production commits:
 
@@ -64,13 +65,41 @@ latest standardized public ranking은 certified universe가 2개일 때의 기�
 - pairwise accuracy: `1.0`
 - top-N recall: `1.0`
 
-이번 Tove slice 뒤에도 certified count가 `2`라 ranking probe는 재실행하지 않았다.
+이번 Cinderella full-charge-hit charge-speed slice 뒤에도 certified count가 `2`라 ranking probe는 재실행하지 않았다.
 
 optimizer production integration은 아직 하지 않는다.
 
 ---
 
-## 1A. 최신 완료 — finite periodic self crit
+## 1A. 최신 완료 — full-charge-hit self charge speed
+
+신데렐라 `무결한 유리 2`를 anchor로 raw `full_charge_hit` 뒤 영구 self `charge_speed_pct`를 좁게 generic certification했다.
+
+production:
+
+- `721cd9a8720766c14a814eb8973ca5cd685d7c73`
+
+새 global shot loop를 만들지 않았다. 기존 dynamic charge runtime의 물리 shot boundary를 재사용하며 ordering은 `shot/score -> full_charge_hit -> effect activation -> cadence sync`다.
+
+A/B run `33924314982` / job `101189364921`에서 Moris와 Fast activation sequence가 직접 일치했다. 첫 shot은 약 `1.0s`, 이후 +100% charge speed 활성화 뒤 간격은 약 `0.333333s`다.
+
+production promotion run `33924481342` / job `101189880430`:
+
+- focused new regression `3/3`
+- existing one-shot charge-speed `6/6`
+- public scope success
+- full Fast `254/254`
+- production commit/push success
+
+public cadence blocker family는 `66 -> 64`, accounting은 `23 unique / 2 certified / 21 gaps`로 유지됐다. 따라서 ranking probe는 재실행하지 않았다.
+
+상세:
+
+- `fast_engine/research/FULL_CHARGE_HIT_CHARGE_SPEED_CHECKPOINT_20260905.md`
+
+---
+
+## 1B. 직전 완료 — finite periodic self crit
 
 스노우 화이트 `세븐스 드워프 : V&VI 2`를 anchor로 fixed-grid finite self `crit_rate` periodic state를 좁게 generic certification했다.
 
@@ -262,27 +291,20 @@ Ada 두 public team에서 Ada 자체 blocker는 모두 제거됐지만 다른 bl
 
 ## 7. 다음 단일 checkpoint
 
-다음 작업은 **남은 repeated delivery/cadence blocker를 다시 shape 단위로 분류해 작은 generic slice를 선정하는 것**이다.
+다음 작업은 **Cinderella slice 이후 cadence `64` 기준으로 unique-23 frontier를 다시 shape 단위로 분류하고, 다음 작은 generic ownership을 하나만 고르는 것**이다.
 
-이미 no-patch/hold가 확정된 축은 후보에서 제외한다.
+기존 no-patch/hold 축은 그대로 제외한다.
 
-- Mihara / `squad_body_hit`
+- Mihara / executable `squad_body_hit`
 - Little Mermaid / `squad_ammo_consume`
 - Crown external heal
 - broad/cross-class weapon change
 
-진행 순서:
+인접 후보로는 all-allies reload/max-ammo recipient safety, `charge_time_fixed`, Brady `stat_applied` source proof 등이 있으나 아직 다음 production slice로 확정하지 않는다. real Moris semantic probe와 기존 runtime 재사용 가능성을 먼저 비교한다.
 
-1. 현재 unique-23 blocker frontier 재스캔
-2. 반복 effect를 stat 이름이 아니라 trigger / target / condition / recipient-safety shape로 묶기
-3. 기존 runtime이 이미 대부분 소유하고 있고 새로운 HP/global-shot chronology가 필요 없는 후보 우선
-4. real Moris semantic probe
-5. runner-only A/B
-6. focused regression
-7. public blocker delta
-8. certified count가 실제 증가할 때만 ranking validation 재실행
+certified universe가 실제 증가할 때만 ranking validation을 재실행한다.
 
-목표는 blocker 숫자를 줄이는 것이 아니라 comparison-critical 의미론을 증명할 수 있는 작은 generic ownership을 계속 늘리는 것이다.
+목표는 blocker 숫자를 줄이는 것이 아니라 comparison-critical 의미론을 증명할 수 있는 작은 generic ownership을 늘리는 것이다.
 
 ---
 
@@ -303,26 +325,12 @@ Ada 두 public team에서 Ada 자체 blocker는 모두 제거됐지만 다른 bl
 
 ## 9. CI / cleanup 계약
 
-이번 조사에 사용한 temporary workflow와 Tove patch helper는 cleanup commit `c7e55390cb8c9385e37e8237cd3d08d0a1ccb127`에서 제거했다.
+이번 Cinderella checkpoint의 production semantic commit은 `721cd9a8720766c14a814eb8973ca5cd685d7c73`이다.
 
-`.github/workflows`에는 다음만 남아 있다.
+finalizer는 `FULL_CHARGE_HIT_CHARGE_SPEED_CHECKPOINT_20260905.md`, handoff, `LESSONS.md`를 갱신하고 조사용 `tmp-frontier-shape-audit-20260905.yml`을 같은 cleanup commit에서 제거한다.
 
-- `ci.yml`
-- `pages.yml`
+cleanup 뒤 `.github/workflows`에는 `ci.yml`, `pages.yml`만 남겨야 한다.
 
-canonical CI discovery 계약도 완료됐다.
-
-- rename 검증 HEAD: `c733e810795ebb14046bda87ebdf30a698428187`
-- run: `33913678178`
-- job: `101156086964`
-- `Fast — damage`: `141/141` — 새 3개 regression 포함
-- calculator: `137/137` (1 skip)
-- optimizer: `374/374`
-- bridge: `31/31` (1 skip)
-- site: `385/385`
-- golden snapshot: `29/29`
-- workflow conclusion: `success`
-
-Tove percent-ammo named-event checkpoint는 닫혔다. 다음 재개 지점은 §7의 blocker frontier 재분류다.
+bot cleanup commit은 recursive push CI를 만들지 않으므로, user-authored checkpoint metadata commit으로 canonical CI를 다시 실행한다. 최종 run/result는 `FULL_CHARGE_HIT_CHARGE_SPEED_CHECKPOINT_20260905.md`의 canonical CI 절에 기록한다.
 
 `master`는 그대로 둔다.
