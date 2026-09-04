@@ -97,7 +97,11 @@ _PERIODIC_GRID_INVALIDATORS = frozenset({
     "force_skill_use",
 })
 
-_PATTERNLESS_UNREACHABLE_EVENT_KEYS = frozenset({"received_hit"})
+_PATTERNLESS_UNREACHABLE_EVENT_KEYS = frozenset({
+    "received_hit",
+    "enemy_death",
+    "event:part_destroy",
+})
 
 
 def _is_folded_static_self_modifier(effect) -> bool:
