@@ -20,3 +20,5 @@ jobs:
           python-version: '3.13'
       - name: Runner-only Asuka state-end stack A/B
         run: python -m fast_engine.research.tmp_nayuta_periodic_trace
+
+# diagnostic rerun marker
