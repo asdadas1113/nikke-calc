@@ -1,4 +1,4 @@
-name: tmp-asuka-state-end-install
+name: tmp-asuka-release-validation
 
 on:
   push:
@@ -7,32 +7,19 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  install:
-    if: ${{ !contains(github.event.head_commit.message || '', '[skip-asuka-install]') }}
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: fast-engine-phase2-20260901
-          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Apply narrow state-end stack patch
-        run: python -m fast_engine.research.tmp_install_asuka_state_end_stack
-      - name: Focused state-end and stack regressions
-        run: |
-          python -m unittest fast_engine.tests.test_damage_state_end_named_stack
-          python -m unittest fast_engine.tests.test_damage_gauge_runtime
-          python -m unittest fast_engine.tests.test_periodic_named_stack_delivery
-          git diff --check
-      - name: Commit validated production slice
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add fast_engine/engine/damage_runtime.py fast_engine/tests/test_damage_state_end_named_stack.py
-          git commit -m "fast: support finite state-end enemy stack damage [skip-asuka-install] [skip-asuka-annihilation]"
-          git push origin HEAD:fast-engine-phase2-20260901
+      - name: Focused semantic regression
+        run: python -m unittest fast_engine.tests.test_damage_state_end_named_stack
+      - name: Certified near-tie ranking guard
+        run: python -m unittest fast_engine.tests.test_damage_moris_frame_timing
+      - name: Public coverage frontier
+        run: python -m fast_engine.research.public_blocker_frontier
