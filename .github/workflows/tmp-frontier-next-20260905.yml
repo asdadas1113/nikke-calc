@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: '3.13'
       - name: Apply runner-only patch and public semantic probe
-        run: python .github/scripts/tmp_brady_stat_applied_ab.py
+        run: PYTHONPATH=. python .github/scripts/tmp_brady_stat_applied_ab.py
       - name: Focused regressions
         run: |
           python -m unittest -v \
