@@ -42,7 +42,7 @@ Traceback (most recent call last):
 AssertionError: -0.0012732627369900645 not greater than 0.0
 
 ----------------------------------------------------------------------
-Ran 19 tests in 13.008s
+Ran 19 tests in 10.289s
 
 FAILED (failures=1)
 PUBLIC_ACCOUNTING teams=24 certified=2 gaps=22
