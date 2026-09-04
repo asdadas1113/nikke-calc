@@ -19,6 +19,7 @@ from .damage_events import (
     expected_damage_event,
 )
 from .damage_state import DamageTermResolver
+from .dispatcher import TriggerDispatcher
 from .scheduler import EventKind, ScheduledEvent
 from .state import ENEMY
 from .targets import TargetMode
@@ -264,6 +265,123 @@ class SimpleDamageScoreSink:
             and (effect.triggers[0].event_key or "").startswith("weapon_hit:")
         )
 
+    @staticmethod
+    def _finite_self_state_end_provider_shape_supported(
+        provider: "CompiledEffect",
+    ) -> bool:
+        """Prove the narrow producer whose finite expiry emits a state_end event."""
+        return (
+            provider.effect_type == "buff"
+            and provider.target_spec.mode is TargetMode.SELF
+            and provider.duration is not None
+            and float(provider.duration) > 0.0
+            and provider.max_stack in (None, 1, 1.0)
+            and provider.tick_interval is None
+            and provider.parameters.get("duration_bullets") is None
+            and not provider.parameters
+            and bool(provider.triggers)
+            and all(rule.is_runtime_supported for rule in provider.condition_rules)
+            and TriggerDispatcher.is_executable_effect(provider)
+        )
+
+    def _finite_self_state_end_source_supported(
+        self,
+        effect: "CompiledEffect",
+    ) -> bool:
+        if not effect.triggers:
+            return False
+        for rule in effect.triggers:
+            key = rule.event_key or ""
+            if rule.mode is not TriggerMode.EVENT or not key.startswith("event:state_end:"):
+                return False
+            name = key[len("event:state_end:"):]
+            if not name:
+                return False
+            providers = [
+                provider
+                for provider in self.squad.effects
+                if provider.effect_id != effect.effect_id
+                and provider.actor == effect.actor
+                and provider.name == name
+                and self._finite_self_state_end_provider_shape_supported(provider)
+            ]
+            if len(providers) != 1:
+                return False
+        return True
+
+    @staticmethod
+    def _regular_enemy_named_stack_shape_supported(
+        provider: "CompiledEffect",
+    ) -> bool:
+        """Finite harmful enemy stack whose live count is directly observable."""
+        return (
+            provider.effect_type == "buff"
+            and (provider.stat or "") == "received_dmg_pct"
+            and (provider.polarity or "").startswith("harmful")
+            and bool(provider.name)
+            and provider.target_spec.mode is TargetMode.ENEMY
+            and provider.value is not None
+            and provider.max_stack is not None
+            and float(provider.max_stack) > 1.0
+            and provider.duration is not None
+            and float(provider.duration) > 0.0
+            and provider.tick_interval is None
+            and provider.parameters.get("duration_bullets") is None
+            and not provider.parameters
+            and bool(provider.triggers)
+            and all(rule.is_runtime_supported for rule in provider.condition_rules)
+            and TriggerDispatcher.is_executable_effect(provider)
+        )
+
+    def _regular_enemy_named_stack_provider(
+        self,
+        actor: int,
+        name: str,
+    ) -> "CompiledEffect | None":
+        providers = [
+            provider
+            for provider in self.squad.effects
+            if provider.actor == actor
+            and provider.name == name
+            and self._regular_enemy_named_stack_shape_supported(provider)
+        ]
+        return providers[0] if len(providers) == 1 else None
+
+    def _state_end_enemy_stack_damage_shape_supported(
+        self,
+        effect: "CompiledEffect",
+    ) -> bool:
+        ref = effect.parameters.get("scaling_ref")
+        return (
+            effect.effect_type == "damage"
+            and (effect.stat or "") == "bonus_damage"
+            and effect.target_spec.mode is TargetMode.ENEMY
+            and effect.parameters.get("scaling") == "stack_count"
+            and isinstance(ref, str)
+            and bool(ref)
+            and set(effect.parameters) == {"scaling", "scaling_ref"}
+            and not effect.condition_rules
+            and self._finite_self_state_end_source_supported(effect)
+            and self._regular_enemy_named_stack_provider(effect.actor, ref) is not None
+        )
+
+    def _state_end_enemy_stack_remove_shape_supported(
+        self,
+        effect: "CompiledEffect",
+    ) -> bool:
+        ref = effect.parameters.get("target_effect")
+        return (
+            effect.effect_type == "instant"
+            and (effect.stat or "") == "remove_named_buff"
+            and effect.target_spec.mode is TargetMode.ENEMY
+            and isinstance(ref, str)
+            and bool(ref)
+            and set(effect.parameters) == {"target_effect"}
+            and not effect.condition_rules
+            and self._finite_self_state_end_source_supported(effect)
+            and self._regular_enemy_named_stack_provider(effect.actor, ref) is not None
+        )
+
     def _weapon_hit_chain_shape_supported(self, source: "CompiledEffect") -> bool:
         if (
             source.effect_type != "damage"
@@ -344,7 +462,9 @@ class SimpleDamageScoreSink:
             and other.name == spec.ref
             and self._enemy_named_stack_marker_shape_supported(other)
         ]
-        return len(providers) == 1
+        if len(providers) == 1:
+            return True
+        return self._state_end_enemy_stack_damage_shape_supported(effect)
 
     def _gauge_ref_runtime_supported(self, actor: int, ref: str) -> bool:
         runtime = self.runtime
@@ -377,11 +497,14 @@ class SimpleDamageScoreSink:
             and other.name == spec.ref
             and self._enemy_named_stack_marker_shape_supported(other)
         ]
-        if len(providers) != 1:
+        provider = providers[0] if len(providers) == 1 else None
+        if provider is None and self._state_end_enemy_stack_damage_shape_supported(effect):
+            provider = self._regular_enemy_named_stack_provider(effect.actor, spec.ref)
+        if provider is None:
             return False
         if self.runtime is None:
             return True
-        return self.runtime.dispatcher.can_activate_effect(providers[0])
+        return self.runtime.dispatcher.can_activate_effect(provider)
 
     @staticmethod
     def _state_effect_patternless_unreachable(effect: "CompiledEffect") -> bool:
@@ -477,6 +600,14 @@ class SimpleDamageScoreSink:
         return False
 
     def supports_state_operation(self, effect: "CompiledEffect") -> bool:
+        if self._state_end_enemy_stack_remove_shape_supported(effect):
+            name = str(effect.parameters.get("target_effect") or "")
+            provider = self._regular_enemy_named_stack_provider(effect.actor, name)
+            if provider is None:
+                return False
+            if self.runtime is None:
+                return True
+            return self.runtime.dispatcher.can_activate_effect(provider)
         if not self._state_operation_shape_supported(effect):
             return False
         name = str(effect.parameters.get("target_effect") or "")
@@ -558,15 +689,19 @@ class SimpleDamageScoreSink:
             return False
         if not effect.triggers:
             return False
+        state_end_stack = self._state_end_enemy_stack_damage_shape_supported(effect)
         for rule in effect.triggers:
             if rule.mode is TriggerMode.PERIODIC:
                 if rule.interval is None or float(rule.interval) <= 0.0:
                     return False
                 continue
             if rule.event_key not in _SAFE_EVENT_KEYS:
+                key = rule.event_key or ""
+                if state_end_stack and key.startswith("event:state_end:"):
+                    continue
                 if not (
-                    (rule.event_key or "").startswith("weapon_hit:")
-                    and self._weapon_hit_consumer_source_proven(effect, rule.event_key or "")
+                    key.startswith("weapon_hit:")
+                    and self._weapon_hit_consumer_source_proven(effect, key)
                 ):
                     return False
             if rule.event_key == "core_hit" and not is_static_expected_core_count_rule(rule):
