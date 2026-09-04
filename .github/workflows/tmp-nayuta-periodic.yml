@@ -137,7 +137,7 @@ certified membership 집합은 변하지 않아 full public ranking validation �
               coverage.write_text(text.rstrip() + coverage_append + '\n', encoding='utf-8')
           PY
 
-          git rm .github/workflows/tmp-* fast_engine/research/tmp_*
+          git ls-files '.github/workflows/tmp-*.yml' 'fast_engine/research/tmp_*.py' -z | xargs -0 -r git rm -f --
           git diff --check
       - name: Commit clean checkpoint
         run: |
