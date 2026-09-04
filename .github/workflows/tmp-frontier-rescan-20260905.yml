@@ -14,62 +14,55 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Find source-proof-only gaps
+      - name: Compare bounded frontier candidates
         run: |
           python - <<'PY'
-          from collections import defaultdict
           from context import snapshot, spec
           from fast_engine.engine.compiler import compile_moris_squad
           import fast_engine.engine.score as score
+          import fast_engine.engine.damage_policy as dp
           from fast_engine.engine.dispatcher import TriggerDispatcher
+          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
+          from fast_engine.engine.model import EnemyStaticProfile
 
-          seen = set()
-          rows = []
-          for team, entry in snapshot.SQUADS.items():
-              if team.startswith('지그_'):
-                  continue
-              members = tuple(entry['members'])
-              if members in seen:
-                  continue
-              seen.add(members)
-              squad = compile_moris_squad(spec.build_squad(list(members)))
-              blockers = set(score.static_score_blockers(squad))
-              for effect in squad.effects:
-                  actor = squad.members[effect.actor].name
-                  normal = f'normal_delivery:{actor}:{effect.name}:{effect.stat}'
-                  state = f'skill_state_delivery:{actor}:{effect.name}:{effect.stat}'
-                  cadence = f'cadence:{actor}:{effect.name}:{effect.stat}'
-                  if normal in blockers or state in blockers:
-                      try: dd = score._direct_damage_buff_score_supported(squad, effect)
-                      except Exception: dd = False
-                      if dd:
-                          rows.append(('DELIVERY_RUNTIME_OK', team, actor, effect, normal in blockers, state in blockers))
-                  if cadence in blockers:
-                      stat = effect.stat or ''
-                      helper = None
-                      if stat in {'charge_speed_pct','charge_speed_caster_based_pct'}:
-                          helper = getattr(score, '_is_dynamic_charge_score_supported', None)
-                      elif stat == 'reload_speed_pct':
-                          helper = getattr(score, '_is_dynamic_reload_score_supported', None)
-                      elif stat in {'max_ammo_pct','max_ammo_flat'}:
-                          helper = getattr(score, '_is_dynamic_max_ammo_score_supported', None)
-                      elif stat in {'ammo_charge_pct','ammo_charge_flat'}:
-                          helper = getattr(score, '_is_dynamic_ammo_charge_score_supported', None)
-                      if helper is not None:
-                          try: ok = helper(squad, effect)
-                          except Exception: ok = False
-                          if ok:
-                              rows.append(('CADENCE_HELPER_OK', team, actor, effect, True, False))
+          wanted = {
+              '레이드_네온벨벳': {'네온 : 비전 아이': {'초화력'}},
+              '레이드_일레그': {'일레그 : 붐 앤 쇼크': {'헬로 고스트','헬로 고스트 2','고스트 버스터 2'}},
+              '레이드_소다': {'소다 : 트윙클링 바니': {'비기너즈 베네핏 I','비기너즈 베네핏 II'}},
+              '레이드_헬름아쿠아스노우': {'스노우 화이트': {'세븐스 드워프 : V&VI 2','세븐스 드워프 : I 2'}, '헬름 : 아쿠아마린': {'이지스 캐논 견제 사격 2'}},
+          }
 
-          print('ROWS=', len(rows))
-          for kind, team, actor, effect, a, b in rows:
-              print('\nROW', kind, team, actor, effect.name, effect.stat, 'normal=', a, 'state=', b)
-              print(' type=', effect.effect_type, 'value=', effect.value, 'duration=', effect.duration, 'max_stack=', effect.max_stack)
-              print(' target=', repr(effect.target_spec))
-              print(' triggers=', [repr(r) for r in effect.triggers])
-              print(' conditions=', [repr(c) for c in effect.condition_rules])
-              print(' params=', dict(effect.parameters))
-              print(' executable=', TriggerDispatcher.is_executable_effect(effect))
-              try: print(' targets=', score._possible_ally_targets(squad, effect))
-              except Exception as e: print(' targets_err=', repr(e))
+          for team, actors in wanted.items():
+              squad = compile_moris_squad(spec.build_squad(list(snapshot.SQUADS[team]['members'])))
+              sink = SimpleDamageScoreSink(squad, EnemyStaticProfile(defense=0.0, duration=1.0))
+              print('\n=== TEAM', team, '===')
+              print('BLOCKERS=', score.static_score_blockers(squad))
+              for i, member in enumerate(squad.members):
+                  if member.name not in actors:
+                      continue
+                  print('ACTOR', i, member.name, 'weapon=', member.weapon)
+                  for effect in member.effects:
+                      if effect.name not in actors[member.name]:
+                          continue
+                      print('\nEFFECT', effect.name)
+                      print(' type/stat/value=', effect.effect_type, effect.stat, effect.value)
+                      print(' target=', repr(effect.target_spec))
+                      print(' duration/max_stack=', effect.duration, effect.max_stack)
+                      print(' params=', dict(effect.parameters))
+                      print(' triggers=', [repr(r) for r in effect.triggers])
+                      print(' conditions=', [repr(c) for c in effect.condition_rules])
+                      print(' executable=', TriggerDispatcher.is_executable_effect(effect))
+                      print(' target_runtime_supported=', effect.target_spec.runtime_supported)
+                      try: print(' direct_runtime=', dp.is_direct_damage_buff_runtime_supported(effect))
+                      except Exception as e: print(' direct_runtime ERR', repr(e))
+                      try: print(' direct_score=', score._direct_damage_buff_score_supported(squad, effect))
+                      except Exception as e: print(' direct_score ERR', repr(e))
+                      if effect.effect_type == 'damage':
+                          try: print(' damage_sink_support=', sink.supports(effect))
+                          except Exception as e: print(' damage_sink_support ERR', repr(e))
+                      for r in effect.triggers:
+                          try: print(' timing', repr(r), '=>', dp._timing_supported(r))
+                          except Exception as e: print(' timing ERR', repr(e))
+                      try: print(' possible_targets=', score._possible_ally_targets(squad, effect))
+                      except Exception as e: print(' possible_targets ERR', repr(e))
           PY
