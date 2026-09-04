@@ -18,79 +18,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Inspect actual public Ada compiled shape
+      - name: Inspect Moris one-shot lifetime source
         run: |
-          python - <<'PY'
-          from context import snapshot, spec
-          from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.score import static_score_blockers
-
-          found = []
-          seen = set()
-          for source_name, case in snapshot.SQUADS.items():
-              members = tuple(str(x) for x in case.get('members', ()))
-              if len(members) != 5 or any(x.startswith('test_') for x in members):
-                  continue
-              squad = spec.build_squad(list(members))
-              compiled = compile_moris_squad(squad)
-              matches = [e for e in compiled.effects if e.name in {'특수 개조', '특수 개조 2'}]
-              if not matches:
-                  continue
-              key = members
-              if key in seen:
-                  continue
-              seen.add(key)
-              found.append((source_name, members, compiled, matches))
-
-          print('ADA_PUBLIC_UNIQUE_TEAMS', len(found))
-          for source_name, members, compiled, matches in found:
-              print('SOURCE', source_name)
-              print('MEMBERS', members)
-              for effect in matches:
-                  member = compiled.members[effect.actor]
-                  print('ACTOR', effect.actor, member.name)
-                  print('WEAPON', member.weapon_type, member.weapon)
-                  print('EFFECT', effect.name, effect.effect_type, effect.stat, effect.value, effect.target_spec.mode.value, effect.parameters)
-                  print('TRIGGERS', [(r.event_key, r.mode.value) for r in effect.triggers])
-                  print('CAPABILITY', effect.capability.disposition.value, effect.capability.blockers)
-              blockers = static_score_blockers(compiled)
-              print('ADA_BLOCKERS', [b for b in blockers if '특수 개조' in b])
-              print('CONTROL_BLOCKERS', [b for b in blockers if b.startswith('control:')])
-              print('ALL_BLOCKERS_COUNT', len(blockers))
-          assert found, 'no public Ada shape found'
-          PY
-      - name: Short Moris verbose trace around first burst
-        run: |
-          python - <<'PY'
-          from context import snapshot, spec
-          from calculator.timeline import DEFAULT_ENEMY, simulate
-
-          target = None
-          for source_name, case in snapshot.SQUADS.items():
-              members = tuple(str(x) for x in case.get('members', ()))
-              if len(members) != 5:
-                  continue
-              squad = spec.build_squad(list(members))
-              # Parsed effect names are easiest to inspect from built character skills.
-              if any('특수 개조' in str(ch) for ch in squad):
-                  target = (source_name, members, squad)
-                  break
-          if target is None:
-              # Fall back to the known public compiled-effect discovery path.
-              from fast_engine.engine.compiler import compile_moris_squad
-              for source_name, case in snapshot.SQUADS.items():
-                  members = tuple(str(x) for x in case.get('members', ()))
-                  if len(members) != 5:
-                      continue
-                  squad = spec.build_squad(list(members))
-                  compiled = compile_moris_squad(squad)
-                  if any(e.name in {'특수 개조', '특수 개조 2'} for e in compiled.effects):
-                      target = (source_name, members, squad)
-                      break
-          assert target is not None
-          source_name, members, squad = target
-          print('TRACE_SOURCE', source_name, members)
-          config = spec.build_config(squad, {'duration': 8.0, 'first_burst_time': 3.0, 'rng_mode': 'expected'})
-          result = simulate(squad, config=config, enemy=dict(DEFAULT_ENEMY), seed=42, verbose=True)
-          print('TRACE_TOTAL', result.squad_total)
-          PY
+          echo '=== calculator lifetime / charge references ==='
+          grep -n -C 14 -E 'duration_bullets|charge_speed_pct|charge_time' calculator/timeline.py calculator/buff_manager.py | head -n 1200 || true
+          echo '=== fast capability / score references ==='
+          grep -n -C 24 -E 'field:duration_bullets|is_runtime_executable_effect|state_end_timing|_valid_dynamic_bullet_lifetime|_is_dynamic_charge_score_supported|direct_damage_buff_runtime' fast_engine/engine/dispatcher.py fast_engine/engine/score.py | head -n 1600 || true
