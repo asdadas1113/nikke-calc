@@ -26,29 +26,23 @@ jobs:
         run: python -m fast_engine.research.tmp_encounter_unreachable_probe
       - name: Apply runner-only patternless encounter patch
         run: python -m fast_engine.research.tmp_apply_patternless_encounter
-      - name: Filesystem after patch
-        run: |
-          echo '--- board files after patch ---'
-          find . -name '*patternless*board*' -o -name 'test_damage_patternless_board.py'
-          echo '--- stale test string after patch ---'
-          grep -R -n --exclude-dir=.git 'truly_unsupported_dynamic_recipient' . || true
       - name: Validate narrow blocker removal
         run: python -m fast_engine.research.tmp_validate_patternless_encounter
-      - name: Filesystem after validation imports
-        run: |
-          echo '--- board files after validation ---'
-          find . -name '*patternless*board*' -o -name 'test_damage_patternless_board.py'
-          echo '--- stale test string after validation ---'
-          grep -R -n --exclude-dir=.git 'truly_unsupported_dynamic_recipient' . || true
       - name: Patched frontier
         run: python -m fast_engine.research.tmp_next_frontier_probe
-      - name: Filesystem before pytest
+      - name: Inspect stale board test provenance
         run: |
-          echo '--- board files before pytest ---'
-          find . -name '*patternless*board*' -o -name 'test_damage_patternless_board.py'
-          echo '--- stale test string before pytest ---'
-          grep -R -n --exclude-dir=.git 'truly_unsupported_dynamic_recipient' . || true
-          echo '--- git status ---'
-          git status --short
+          echo '--- ls-files stage/type/verbose ---'
+          git ls-files --stage fast_engine/tests/test_damage_patternless_board.py || true
+          git ls-files -t fast_engine/tests/test_damage_patternless_board.py || true
+          git ls-files -v fast_engine/tests/test_damage_patternless_board.py || true
+          echo '--- check-ignore ---'
+          git check-ignore -v fast_engine/tests/test_damage_patternless_board.py || true
+          echo '--- stat ---'
+          stat fast_engine/tests/test_damage_patternless_board.py || true
+          echo '--- body 220-270 ---'
+          sed -n '220,270p' fast_engine/tests/test_damage_patternless_board.py || true
+          echo '--- status ---'
+          git status --short --ignored fast_engine/tests/test_damage_patternless_board.py || true
       - name: Fast regression suite
         run: python -m pytest fast_engine/tests -q
