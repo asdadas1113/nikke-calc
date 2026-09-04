@@ -23,4 +23,4 @@ jobs:
         with:
           python-version: '3.13'
       - name: Run Tove pct instant named-event A/B
-        run: python fast_engine/research/tmp_tove_named_event_ab.py
+        run: PYTHONPATH=. python fast_engine/research/tmp_tove_named_event_ab.py
