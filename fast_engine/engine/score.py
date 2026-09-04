@@ -131,7 +131,9 @@ def _is_dynamic_charge_score_supported(squad: CompiledSquad, effect) -> bool:
         return True
     if effect.effect_type != "buff" or not _valid_dynamic_bullet_lifetime(effect):
         return False
-    return TriggerDispatcher.is_executable_effect(effect)
+    if not TriggerDispatcher.is_executable_effect(effect):
+        return False
+    return _named_buff_event_dependency_score_safe(squad, effect)
 
 
 def _possible_ally_targets(squad: CompiledSquad, effect) -> tuple[int, ...]:
@@ -745,6 +747,10 @@ def _named_buff_event_dependency_score_safe(squad: CompiledSquad, effect) -> boo
     for key in keys:
         if key == "event:heal_received":
             if not TriggerDispatcher.heal_received_dependency_score_safe(squad, effect):
+                return False
+            continue
+        if TriggerDispatcher._stat_applied_event_stat(key) is not None:
+            if not TriggerDispatcher.stat_applied_dependency_score_safe(squad, effect, key):
                 return False
             continue
         name = key[len("event:"):]

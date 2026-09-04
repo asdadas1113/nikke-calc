@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
 
 _INTERNAL_BULLET_CONSUME_EVENT = "__fast_consume_dynamic_bullet_lifetime__"
+_STAT_APPLIED_EVENT_STATS = frozenset({"dot_dmg_pct", "split_dmg_pct"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -945,6 +946,102 @@ class TriggerDispatcher:
         )
 
     @staticmethod
+    def _stat_applied_event_stat(key: str) -> str | None:
+        prefix = "event:stat_applied:"
+        if not key.startswith(prefix):
+            return None
+        stat = key[len(prefix):]
+        return stat if stat in _STAT_APPLIED_EVENT_STATS else None
+
+    @classmethod
+    def _stat_applied_charge_speed_shape_supported(cls, effect: "CompiledEffect") -> bool:
+        """Certify one finite self charge-speed state driven by recipient stat application."""
+        if not (
+            effect.capability.disposition is CapabilityDisposition.PLANNED
+            and set(effect.capability.blockers) == {"timing:named_event"}
+            and effect.effect_type == "buff"
+            and (effect.stat or "") == "charge_speed_pct"
+            and effect.target_spec.mode is TargetMode.SELF
+            and effect.value is not None
+            and float(effect.value) > -100.0
+            and effect.duration is not None
+            and float(effect.duration) > 0.0
+            and effect.max_stack in (None, 1, 1.0)
+            and effect.max_trigger is None
+            and effect.tick_interval is None
+            and not effect.parameters
+            and len(effect.triggers) == 1
+        ):
+            return False
+        rule = effect.triggers[0]
+        if rule.mode is not TriggerMode.EVENT or cls._stat_applied_event_stat(rule.event_key or "") is None:
+            return False
+        return (
+            not effect.condition_rules
+            or (
+                len(effect.condition_rules) == 1
+                and effect.condition_rules[0].mode is ConditionMode.NOT_SELF_STATE
+                and bool(effect.condition_rules[0].key)
+            )
+        )
+
+    @classmethod
+    def stat_applied_dependency_score_safe(
+        cls, squad: "CompiledSquad", effect: "CompiledEffect", key: str
+    ) -> bool:
+        """Prove recipient-scoped stat_applied source ownership without guessing."""
+        stat = cls._stat_applied_event_stat(key)
+        if stat is None:
+            return False
+        owner = effect.actor
+        providers = tuple(
+            provider
+            for provider in squad.effects
+            if provider.effect_id != effect.effect_id
+            and (provider.stat or "") == stat
+            and owner in possible_ally_targets(squad, provider)
+        )
+        if not providers:
+            return False
+        for provider in providers:
+            if (
+                provider.effect_type != "buff"
+                or not provider.target_spec.runtime_supported
+                or cls._named_event_keys(provider)
+                or not cls.is_executable_effect(provider)
+            ):
+                return False
+
+        # First slice may keep a NOT_SELF_STATE gate only when every matching
+        # state is another stat_applied charge-speed branch whose source stat is
+        # provably absent for this recipient. This makes the condition immutable.
+        for condition in effect.condition_rules:
+            if condition.mode is not ConditionMode.NOT_SELF_STATE or not condition.key:
+                return False
+            state_effects = tuple(
+                candidate
+                for candidate in squad.members[owner].effects
+                if candidate.effect_id != effect.effect_id and candidate.name == condition.key
+            )
+            for state_effect in state_effects:
+                if not cls._stat_applied_charge_speed_shape_supported(state_effect):
+                    return False
+                state_keys = cls._named_event_keys(state_effect)
+                if len(state_keys) != 1:
+                    return False
+                opposite_stat = cls._stat_applied_event_stat(state_keys[0])
+                if opposite_stat is None:
+                    return False
+                if any(
+                    candidate.effect_id != state_effect.effect_id
+                    and (candidate.stat or "") == opposite_stat
+                    and owner in possible_ally_targets(squad, candidate)
+                    for candidate in squad.effects
+                ):
+                    return False
+        return True
+
+    @staticmethod
     def _charge_speed_bullet_lifetime_shape_supported(effect: "CompiledEffect") -> bool:
         """Certify one-shot self charge-speed state from burst cast."""
         if (
@@ -987,6 +1084,7 @@ class TriggerDispatcher:
             or TriggerDispatcher._named_duration_extend_shape_supported(effect)
             or TriggerDispatcher._on_attack_charge_speed_shape_supported(effect)
             or TriggerDispatcher._full_charge_hit_permanent_self_charge_speed_shape_supported(effect)
+            or TriggerDispatcher._stat_applied_charge_speed_shape_supported(effect)
             or TriggerDispatcher._charge_overflow_conversion_shape_supported(effect)
         ):
             return True
@@ -1032,6 +1130,10 @@ class TriggerDispatcher:
         for key in keys:
             if key == "event:heal_received":
                 if not self.heal_received_dependency_score_safe(self.squad, effect):
+                    return False
+                continue
+            if self._stat_applied_event_stat(key) is not None:
+                if not self.stat_applied_dependency_score_safe(self.squad, effect, key):
                     return False
                 continue
             name = key[len("event:"):]
@@ -1508,6 +1610,19 @@ class TriggerDispatcher:
                     audience = tuple(range(len(self.squad.members)))
                 for observer in audience:
                     self.dispatch(BurstSignal(now, f"event:{effect.name}", observer, observer))
+            stat_event_name = f"stat_applied:{stat}"
+            if (
+                activated_group
+                and stat in _STAT_APPLIED_EVENT_STATS
+                and stat_event_name in self._named_event_names_needed
+            ):
+                from .burst import BurstSignal
+                for target in targets:
+                    if target != ENEMY:
+                        observer = int(target)
+                        self.dispatch(
+                            BurstSignal(now, f"event:{stat_event_name}", observer, observer)
+                        )
             if stat in self._SHIELD_STATS:
                 from .burst import BurstSignal
                 actor_targets = tuple(int(target) for target in targets)
