@@ -4,13 +4,14 @@ on:
   push:
     branches:
       - fast-engine-phase2-20260901
+    paths:
+      - .github/workflows/tmp-frontier-next-20260905.yml
 
 permissions:
   contents: write
 
 jobs:
   promote-brady:
-    if: startsWith(github.event.head_commit.message, 'tmp: promote Brady stat-applied')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
