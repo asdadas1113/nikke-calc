@@ -1,0 +1,22 @@
+name: tmp-nayuta-periodic
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trace:
+    if: ${{ !contains(github.event.head_commit.message || '', '[skip-nayuta-periodic]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Trace Moris Nayuta periodic semantics
+        run: python -m fast_engine.research.tmp_nayuta_periodic_trace
