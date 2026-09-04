@@ -26,9 +26,29 @@ jobs:
         run: python -m fast_engine.research.tmp_encounter_unreachable_probe
       - name: Apply runner-only patternless encounter patch
         run: python -m fast_engine.research.tmp_apply_patternless_encounter
+      - name: Filesystem after patch
+        run: |
+          echo '--- board files after patch ---'
+          find . -name '*patternless*board*' -o -name 'test_damage_patternless_board.py'
+          echo '--- stale test string after patch ---'
+          grep -R -n --exclude-dir=.git 'truly_unsupported_dynamic_recipient' . || true
       - name: Validate narrow blocker removal
         run: python -m fast_engine.research.tmp_validate_patternless_encounter
+      - name: Filesystem after validation imports
+        run: |
+          echo '--- board files after validation ---'
+          find . -name '*patternless*board*' -o -name 'test_damage_patternless_board.py'
+          echo '--- stale test string after validation ---'
+          grep -R -n --exclude-dir=.git 'truly_unsupported_dynamic_recipient' . || true
       - name: Patched frontier
         run: python -m fast_engine.research.tmp_next_frontier_probe
+      - name: Filesystem before pytest
+        run: |
+          echo '--- board files before pytest ---'
+          find . -name '*patternless*board*' -o -name 'test_damage_patternless_board.py'
+          echo '--- stale test string before pytest ---'
+          grep -R -n --exclude-dir=.git 'truly_unsupported_dynamic_recipient' . || true
+          echo '--- git status ---'
+          git status --short
       - name: Fast regression suite
         run: python -m pytest fast_engine/tests -q
