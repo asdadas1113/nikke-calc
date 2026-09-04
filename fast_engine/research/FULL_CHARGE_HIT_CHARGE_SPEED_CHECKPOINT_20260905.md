@@ -144,4 +144,8 @@ permanent regression:
 
 ## 8. canonical CI
 
-docs/cleanup 뒤 clean HEAD에서 canonical CI를 user-authored metadata commit으로 다시 실행한다. 최종 run/result는 이 문서에 후속 기록한다.
+docs/cleanup finalizer HEAD:
+
+- `1dd06b721049c6402e0579448307ec103774d302`
+
+이 HEAD에서 temporary workflow가 제거됐고 `.github/workflows`에는 `ci.yml`, `pages.yml`만 남았다. 이 user-authored metadata commit으로 동일 production code와 clean workflow tree에 대한 canonical CI를 다시 실행한다. 최종 run/result는 후속 기록한다.
