@@ -128,3 +128,10 @@ Therefore the production Fast Engine remains greenfield. These written lessons a
 - dynamic charge runtime이 해당 actor의 실제 shot boundary를 이미 소유한다면, 필요한 raw hit signal만 post-shot에 노출하고 state activation 뒤 cadence sync를 수행하는 편이 Fast 설계에 맞다.
 - 핵심 ordering은 `shot/score -> hit trigger -> state activation -> cadence sync`다. triggering shot에 새 cadence 상태를 소급 적용하면 안 된다.
 - blocker 제거만 보지 말고 Moris/Fast의 실제 activation sequence와 다음 shot interval을 직접 대조하면 ordering proof가 강해진다.
+
+## 2026-09-05 — recipient semantic event는 consumer shape보다 source proof가 우선이다
+
+- `event:stat_applied:*`처럼 provider 적용 결과로 생기는 이벤트는 consumer가 구조적으로 executable이라는 이유만으로 score-safe가 아니다. 실제 recipient에게 도달 가능한 모든 source provider를 증명해야 한다.
+- runtime source proof와 score source proof를 같은 conservative helper로 공유하면 한쪽만 broad-enable되는 drift를 줄일 수 있다.
+- negative state condition을 고정값으로 취급하려면 반대 state의 source가 해당 recipient에 도달할 수 없음을 증명해야 한다. 반대 source가 하나라도 가능하면 fail closed가 맞다.
+- dynamic cadence path도 named-event consumer라면 structural executability 뒤 source certification을 반드시 통과해야 한다.

@@ -11,23 +11,24 @@
 가장 먼저 읽을 문서:
 
 1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md`
-2. `fast_engine/research/FULL_CHARGE_HIT_CHARGE_SPEED_CHECKPOINT_20260905.md`
-3. `fast_engine/research/PERIODIC_FINITE_SELF_CRIT_CHECKPOINT_20260905.md`
-4. `fast_engine/research/TOVE_AMMO_PCT_NAMED_EVENT_CHECKPOINT_20260905.md`
-5. `fast_engine/research/ADA_CHARGE_HOLD_CONTROL_CHECKPOINT_20260905.md`
-6. `fast_engine/research/ADA_ONE_SHOT_CHARGE_SPEED_CHECKPOINT_20260905.md`
-7. `fast_engine/research/PATTERNLESS_ENCOUNTER_EVENT_CHECKPOINT_20260905.md`
-8. `fast_engine/research/COVERAGE_FRONTIER_CHECKPOINT_20260904.md`
-9. `fast_engine/research/CROWN_SELF_STACK_HEAL_CHECKPOINT_20260904.md`
-10. `fast_engine/research/TIMING_SEMANTICS_RANKING_CHECKPOINT_20260904.md`
+2. `fast_engine/research/STAT_APPLIED_CHARGE_SPEED_CHECKPOINT_20260905.md`
+3. `fast_engine/research/FULL_CHARGE_HIT_CHARGE_SPEED_CHECKPOINT_20260905.md`
+4. `fast_engine/research/PERIODIC_FINITE_SELF_CRIT_CHECKPOINT_20260905.md`
+5. `fast_engine/research/TOVE_AMMO_PCT_NAMED_EVENT_CHECKPOINT_20260905.md`
+6. `fast_engine/research/ADA_CHARGE_HOLD_CONTROL_CHECKPOINT_20260905.md`
+7. `fast_engine/research/ADA_ONE_SHOT_CHARGE_SPEED_CHECKPOINT_20260905.md`
+8. `fast_engine/research/PATTERNLESS_ENCOUNTER_EVENT_CHECKPOINT_20260905.md`
+9. `fast_engine/research/COVERAGE_FRONTIER_CHECKPOINT_20260904.md`
+10. `fast_engine/research/CROWN_SELF_STACK_HEAL_CHECKPOINT_20260904.md`
+11. `fast_engine/research/TIMING_SEMANTICS_RANKING_CHECKPOINT_20260904.md`
 
 현재 최신 production semantic commit:
 
-- `721cd9a8720766c14a814eb8973ca5cd685d7c73` — full-charge-hit permanent self `charge_speed_pct` certification
+- `8880049678c9270de8d7b98c456b93fa00a67502` — recipient-scoped `stat_applied` finite self `charge_speed_pct` certification
 
 직전 production semantic commit:
 
-- `fee2fe343cf75861185dd780d9191bbf6f48da8f` — finite periodic self `crit_rate` state certification
+- `721cd9a8720766c14a814eb8973ca5cd685d7c73` — full-charge-hit permanent self `charge_speed_pct` certification
 
 직전 주요 production commits:
 
@@ -57,7 +58,7 @@ Fast-certified real public memberships:
 - certified: `2`
 - coverage gaps: `21`
 
-latest standardized public ranking은 certified universe가 2개일 때의 기존 결과를 유지한다.
+latest standardized public ranking은 Brady stat-applied candidate gate에서 실제 재실행했고 certified universe는 여전히 2개다.
 
 - clean relative error median: `+0.0626832%`
 - min: `+0.0349533%`
@@ -65,13 +66,46 @@ latest standardized public ranking은 certified universe가 2개일 때의 기�
 - pairwise accuracy: `1.0`
 - top-N recall: `1.0`
 
-이번 Cinderella full-charge-hit charge-speed slice 뒤에도 certified count가 `2`라 ranking probe는 재실행하지 않았다.
+Brady stat-applied gate run `33929600782`에서 ranking probe를 재실행했고 수치가 유지됐다. 최신 cadence blocker family는 `63`이다.
 
 optimizer production integration은 아직 하지 않는다.
 
 ---
 
-## 1A. 최신 완료 — full-charge-hit self charge speed
+## 1A. 최신 완료 — recipient stat-applied charge speed
+
+Brady `나누고 싶은 맛`을 anchor로 recipient-scoped `event:stat_applied:split_dmg_pct` 뒤 finite self `charge_speed_pct`를 좁게 generic certification했다.
+
+production:
+
+- `8880049678c9270de8d7b98c456b93fa00a67502`
+
+Moris는 `dot_dmg_pct`/`split_dmg_pct` buff가 실제 ally recipient에게 적용된 직후 같은 시각 recipient-scoped `stat_applied` event를 notify한다. Fast도 기존 actor-scoped dispatcher를 재사용하며, source provider가 해당 recipient에게 실제로 도달 가능하고 모든 가능한 source가 executable임을 별도 proof한다.
+
+public `레이드_앨리스브래디`에서는 split provider가 있고 dot provider가 없으므로 `not_self_state:머물고 싶은 맛`을 immutable true로 증명할 수 있다. synthetic opposite source를 추가하면 즉시 fail closed한다. Brady의 dot branch와 두 opposing remove effect는 계속 닫혀 있다.
+
+A/B run `33929600782` / job `101205337651`:
+
+- Fast/Moris split activation 5개 시각 exact match
+- focused success
+- full Fast `254/254`
+- standardized ranking probe success
+- cadence blocker family `64 -> 63`
+
+production promotion run `33929914438` / job `101206236343`:
+
+- focused production `33/33`
+- full Fast `258/258`
+- production diff whitelist success
+- production commit/push success
+
+상세:
+
+- `fast_engine/research/STAT_APPLIED_CHARGE_SPEED_CHECKPOINT_20260905.md`
+
+---
+
+## 1B. 직전 완료 — full-charge-hit self charge speed
 
 신데렐라 `무결한 유리 2`를 anchor로 raw `full_charge_hit` 뒤 영구 self `charge_speed_pct`를 좁게 generic certification했다.
 
@@ -99,7 +133,7 @@ public cadence blocker family는 `66 -> 64`, accounting은 `23 unique / 2 certif
 
 ---
 
-## 1B. 직전 완료 — finite periodic self crit
+## 1C. 그 이전 완료 — finite periodic self crit
 
 스노우 화이트 `세븐스 드워프 : V&VI 2`를 anchor로 fixed-grid finite self `crit_rate` periodic state를 좁게 generic certification했다.
 
@@ -291,7 +325,7 @@ Ada 두 public team에서 Ada 자체 blocker는 모두 제거됐지만 다른 bl
 
 ## 7. 다음 단일 checkpoint
 
-다음 작업은 **Cinderella slice 이후 cadence `64` 기준으로 unique-23 frontier를 다시 shape 단위로 분류하고, 다음 작은 generic ownership을 하나만 고르는 것**이다.
+다음 작업은 **Brady slice 이후 cadence `63` 기준으로 unique-23 frontier를 다시 shape 단위로 분류하고, 다음 작은 generic ownership을 하나만 고르는 것**이다.
 
 기존 no-patch/hold 축은 그대로 제외한다.
 
@@ -299,10 +333,11 @@ Ada 두 public team에서 Ada 자체 blocker는 모두 제거됐지만 다른 bl
 - Little Mermaid / `squad_ammo_consume`
 - Crown external heal
 - broad/cross-class weapon change
+- opposite-source가 가능한 Brady mutual-exclusion/remove 확장
 
-인접 후보로는 all-allies reload/max-ammo recipient safety, `charge_time_fixed`, Brady `stat_applied` source proof 등이 있으나 아직 다음 production slice로 확정하지 않는다. real Moris semantic probe와 기존 runtime 재사용 가능성을 먼저 비교한다.
+직전 frontier에서 all-allies reload/max-ammo는 unsafe recipient와 결합돼 있었고 Snow White `charge_time_fixed`는 weapon-change와 결합돼 있었다. 따라서 다음 후보를 이 둘 중 하나로 미리 고정하지 말고 cadence-63 frontier를 fresh audit한다.
 
-certified universe가 실제 증가할 때만 ranking validation을 재실행한다.
+다음 production slice도 real Moris semantic probe, existing runtime reuse, public source scope, negative fail-closed case를 먼저 증명한다. certified count와 무관하게 comparison-critical semantics를 건드리면 standardized ranking probe를 재실행해도 된다.
 
 목표는 blocker 숫자를 줄이는 것이 아니라 comparison-critical 의미론을 증명할 수 있는 작은 generic ownership을 늘리는 것이다.
 
@@ -325,12 +360,16 @@ certified universe가 실제 증가할 때만 ranking validation을 재실행한
 
 ## 9. CI / cleanup 계약
 
-이번 Cinderella checkpoint의 production semantic commit은 `721cd9a8720766c14a814eb8973ca5cd685d7c73`이다.
+이번 Brady checkpoint의 production semantic commit은 `8880049678c9270de8d7b98c456b93fa00a67502`다.
 
-finalizer는 `FULL_CHARGE_HIT_CHARGE_SPEED_CHECKPOINT_20260905.md`, handoff, `LESSONS.md`를 갱신하고 조사용 `tmp-frontier-shape-audit-20260905.yml`을 같은 cleanup commit에서 제거한다.
+finalizer는 `STAT_APPLIED_CHARGE_SPEED_CHECKPOINT_20260905.md`, handoff, `LESSONS.md`를 갱신하고 다음 조사용 파일을 같은 cleanup commit에서 제거한다.
+
+- `.github/workflows/tmp-frontier-next-20260905.yml`
+- `.github/scripts/tmp_brady_stat_applied_ab.py`
+- `.github/scripts/tmp_brady_write_tests.py`
 
 cleanup 뒤 `.github/workflows`에는 `ci.yml`, `pages.yml`만 남겨야 한다.
 
-bot cleanup commit은 recursive push CI를 만들지 않으므로, user-authored checkpoint metadata commit으로 canonical CI를 다시 실행한다. 최종 run/result는 `FULL_CHARGE_HIT_CHARGE_SPEED_CHECKPOINT_20260905.md`의 canonical CI 절에 기록한다.
+bot cleanup commit은 recursive push CI를 만들지 않으므로, user-authored checkpoint metadata commit으로 canonical CI를 다시 실행한다. 최종 run/result는 `STAT_APPLIED_CHARGE_SPEED_CHECKPOINT_20260905.md`의 canonical CI 절에 기록한다.
 
 `master`는 그대로 둔다.
