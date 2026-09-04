@@ -114,3 +114,10 @@ It proved feasibility, not generality:
 The greenfield Fast runtime has since reinforced that conclusion: 180-second five-person score tests are already in the tens-of-milliseconds range on CI fixtures while preserving increasingly broad Moris semantics.
 
 Therefore the production Fast Engine remains greenfield. These written lessons are the only retained project dependency from the old controlled research prototype.
+
+## 2026-09-05 — periodic direct state는 scheduler보다 grid mutation proof가 중요하다
+
+- 기존 periodic deadline scheduler가 Moris outer-tick 관측과 맞더라도 새 damage-facing stat을 바로 열면 안 된다.
+- `effect_interval`/`skill_cooldown_pct`처럼 Moris periodic grid를 바꾸는 상태가 있으면 Fast의 fixed grid는 오답이 될 수 있다.
+- 따라서 narrow periodic shape certification과 `_PERIODIC_GRID_INVALIDATORS` fail-closed를 함께 유지한다.
+- 실제 Snow White finite self `crit_rate` slice는 새 scheduler 없이 기존 periodic runtime을 재사용했고, Moris successful activation 시각을 직접 대조해 검증했다.

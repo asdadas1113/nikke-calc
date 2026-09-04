@@ -11,6 +11,7 @@
 가장 먼저 읽을 문서:
 
 1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md`
+2. `fast_engine/research/PERIODIC_FINITE_SELF_CRIT_CHECKPOINT_20260905.md`
 2. `fast_engine/research/TOVE_AMMO_PCT_NAMED_EVENT_CHECKPOINT_20260905.md`
 3. `fast_engine/research/ADA_CHARGE_HOLD_CONTROL_CHECKPOINT_20260905.md`
 4. `fast_engine/research/ADA_ONE_SHOT_CHARGE_SPEED_CHECKPOINT_20260905.md`
@@ -20,6 +21,10 @@
 8. `fast_engine/research/TIMING_SEMANTICS_RANKING_CHECKPOINT_20260904.md`
 
 현재 최신 production semantic commit:
+
+- `fee2fe343cf75861185dd780d9191bbf6f48da8f` — finite periodic self `crit_rate` state certification
+
+직전 production semantic commit:
 
 - `47e8c47278bbd9125b42a8f08bde632638796026` — percent-ammo instant named-event emission / source certification
 
@@ -62,6 +67,36 @@ latest standardized public ranking은 certified universe가 2개일 때의 기�
 이번 Tove slice 뒤에도 certified count가 `2`라 ranking probe는 재실행하지 않았다.
 
 optimizer production integration은 아직 하지 않는다.
+
+---
+
+## 1A. 최신 완료 — finite periodic self crit
+
+스노우 화이트 `세븐스 드워프 : V&VI 2`를 anchor로 fixed-grid finite self `crit_rate` periodic state를 좁게 generic certification했다.
+
+production:
+
+- `fee2fe343cf75861185dd780d9191bbf6f48da8f`
+
+지원 shape는 self / beneficial `crit_rate` / finite duration / one stack / exactly one `during_full_burst` condition / exactly one fixed periodic trigger다. 기존 periodic scheduler와 ActiveEffectStore를 재사용하며 새 frame loop를 만들지 않았다.
+
+Moris 70s trace의 successful activation 3개와 Fast가 정확히 같은 outer-tick 시각을 냈다: `30.016666666666243`, `45.016666666665394`, `60.01666666666454`.
+
+runner-only A/B run `33922544009` / job `101183863415`:
+
+- focused `3/3`
+- existing periodic `8/8`
+- full Fast `251/251`
+- public helper match exactly one effect
+- public `23 unique / 2 certified / 21 gaps`
+
+promotion run `33922753827` / job `101184510974`도 focused / public scope / full Fast / commit 모두 success.
+
+제거된 blocker는 `레이드_헬름아쿠아스노우`의 Snow White periodic crit normal/skill delivery 2개뿐이다. Helm Aqua periodic enemy state와 Snow White weapon-change/pierce blocker는 그대로 남겼다.
+
+상세:
+
+- `fast_engine/research/PERIODIC_FINITE_SELF_CRIT_CHECKPOINT_20260905.md`
 
 ---
 
