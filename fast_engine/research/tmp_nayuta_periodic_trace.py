@@ -170,17 +170,21 @@ def main() -> None:
             return False
         return sink.runtime is None or sink.runtime.dispatcher.can_activate_effect(provider)
 
-    def activate(sink, effect, signal):
+    def activate(sink, effect, *, now, targets, context):
         if effect.actor == actor and effect.name == "섬멸":
             assert sink.runtime is not None
             stack = sink.runtime.dispatcher.effects.named_stack(
-                ENEMY, STACK_NAME, now=signal.time
+                ENEMY, STACK_NAME, now=now
             )
             before = sink.char_total[actor]
-            out = original_activate(sink, effect, signal)
-            trace.append(("damage", float(signal.time), float(stack), sink.char_total[actor] - before))
+            out = original_activate(
+                sink, effect, now=now, targets=targets, context=context
+            )
+            trace.append(("damage", float(now), float(stack), sink.char_total[actor] - before))
             return out
-        return original_activate(sink, effect, signal)
+        return original_activate(
+            sink, effect, now=now, targets=targets, context=context
+        )
 
     def activate_state_operation(sink, effect, *, now, targets):
         if effect.actor == actor and effect.name == "섬멸 2":
