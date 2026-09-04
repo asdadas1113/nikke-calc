@@ -97,7 +97,7 @@ jobs:
                       'target': effect.target,
                       'target_mode': effect.target_spec.mode.value,
                       'possible_targets_static_owner': list(score._possible_ally_targets(squad, effect)),
-                      'conditions': [(c.kind.value, c.op, c.value, c.ref) for c in effect.condition_rules],
+                      'conditions': [repr(c) for c in effect.condition_rules],
                       'parameters': dict(effect.parameters),
                       'triggers': [
                           (r.event_key, r.mode.value, r.threshold, r.trigger_count_reducible, r.raw)
@@ -133,5 +133,6 @@ jobs:
               print('cadence_mutators_targeting_mihara', mutators)
           PY
       - name: Locate Moris squad-body-hit semantics
+        if: always()
         run: |
-          grep -R -n -E "squad_body_hit|target_owner_actor|notify_team_hit" calculator context fast_engine | head -120 || true
+          grep -R -n -E "squad_body_hit|target_owner_actor|notify_team_hit" calculator context fast_engine | head -160 || true
