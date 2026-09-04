@@ -33,12 +33,12 @@ jobs:
           def dump_effect(squad, effect):
               print('EFFECT', effect.actor, squad.members[effect.actor].name, effect.name)
               print('  type/stat/value=', effect.effect_type, effect.stat, effect.value)
-              print('  target=', effect.target_spec)
+              print('  target=', repr(effect.target_spec))
               print('  duration/max_stack=', effect.duration, effect.max_stack)
               print('  params=', dict(effect.parameters))
-              print('  triggers=', [(r.mode.value, r.event_key, r.threshold, r.trigger_count_reducible) for r in effect.triggers])
-              print('  conditions=', [(c.mode.value, c.key, c.value) for c in effect.condition_rules])
-              print('  capability=', effect.capability.value, 'blockers=', effect.blockers)
+              print('  triggers=', [repr(r) for r in effect.triggers])
+              print('  conditions=', [repr(c) for c in effect.condition_rules])
+              print('  capability=', repr(effect.capability), 'blockers=', effect.blockers)
               print('  executable=', TriggerDispatcher.is_executable_effect(effect))
               try: print('  possible_targets=', score._possible_ally_targets(squad, effect))
               except Exception as e: print('  possible_targets_err=', repr(e))
@@ -63,5 +63,8 @@ jobs:
                   except Exception as e: print('  rapid_safe_err=', repr(e))
                   for effect in member.effects:
                       if effect.name in names:
-                          dump_effect(squad, effect)
+                          try:
+                              dump_effect(squad, effect)
+                          except Exception as e:
+                              print('  EFFECT_DUMP_ERR=', effect.name, repr(e))
           PY
