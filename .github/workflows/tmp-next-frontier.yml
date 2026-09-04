@@ -1,0 +1,21 @@
+name: tmp-next-frontier
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+    paths:
+      - 'fast_engine/research/tmp_next_frontier_probe.py'
+      - '.github/workflows/tmp-next-frontier.yml'
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run post-Asuka frontier shape probe
+        run: python -m fast_engine.research.tmp_next_frontier_probe
