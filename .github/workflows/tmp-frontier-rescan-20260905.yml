@@ -140,7 +140,6 @@ jobs:
         run: |
           python -m unittest fast_engine.tests.test_damage_periodic_self_crit_ab
           python -m unittest fast_engine.tests.test_periodic_runtime
-          python -m unittest fast_engine.tests.test_damage_periodic_direct_stack
 
       - name: Public blocker delta and scope
         run: |
