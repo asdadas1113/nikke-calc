@@ -1,74 +1,104 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 
+from calculator.buff_manager import BuffManager
+from calculator.timeline import DEFAULT_ENEMY, simulate
 from context import spec
-from fast_engine.engine.compiler import compile_moris_squad
-from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
-from fast_engine.engine.dispatcher import TriggerDispatcher
-from fast_engine.engine.model import EnemyStaticProfile
-from fast_engine.engine.score import static_score_blockers
 
 from .public_ranking_probe import _source_corpus
 
 TARGET_SOURCE = "레이드_델타"
 ACTOR_NAME = "아스카 : WILLE"
-INTERESTING = {
-    "안티 AT 필드",
-    "안티 AT 필드 2",
-    "섬멸 태세",
-    "섬멸 태세 2",
-    "섬멸 태세 3",
-    "섬멸",
-    "섬멸 2",
-    "긴급 수복 2",
-    "긴급 수복 3",
-    "긴급 수복 4",
-    "긴급 수복 5",
-}
+STATE_NAME = "안티 AT 필드"
+
+
+def _enemy_stack(manager: BuffManager) -> int:
+    return max(
+        (
+            int(ab.stack)
+            for ab in manager._active
+            if ab.caster == ACTOR_NAME
+            and ab.effect.get("name") == STATE_NAME
+            and "__enemy__" in (ab.target_chars or [])
+        ),
+        default=0,
+    )
 
 
 def main() -> None:
     rows = [(members, source) for members, source in _source_corpus() if source == TARGET_SOURCE]
-    print("MATCH=" + json.dumps(rows, ensure_ascii=False))
     assert len(rows) == 1, rows
-
     members, source = rows[0]
     raw = spec.build_squad(list(members))
-    compiled = compile_moris_squad(raw)
-    blockers = static_score_blockers(compiled)
-    print(f"CASE={source} members={members}")
-    print("BLOCKERS=" + json.dumps(blockers, ensure_ascii=False))
-    assert ACTOR_NAME in members, members
-    actor = members.index(ACTOR_NAME)
-    sink = SimpleDamageScoreSink(compiled, EnemyStaticProfile(defense=31784.0, duration=180.0))
 
-    for effect in compiled.members[actor].effects:
-        if effect.name not in INTERESTING:
-            continue
-        print("EFFECT=" + repr((
-            effect.effect_id,
-            effect.name,
-            effect.effect_type,
-            effect.stat,
-            effect.target,
-            repr(effect.target_spec),
-            tuple((r.raw, r.mode.value, r.event_key, r.interval, r.threshold) for r in effect.triggers),
-            tuple(repr(r) for r in effect.condition_rules),
-            effect.duration,
-            effect.max_stack,
-            dict(effect.parameters),
-            effect.capability.disposition.value,
-            effect.capability.blockers,
-            TriggerDispatcher.is_executable_effect(effect),
-            sink.supports(effect) if effect.effect_type == "damage" else None,
-        )))
+    original_activate = BuffManager._activate
+    order: list[tuple[str, str, float, int]] = []
 
-    annihilation = next(effect for effect in compiled.members[actor].effects if effect.name == "섬멸")
-    remove = next(effect for effect in compiled.members[actor].effects if effect.name == "섬멸 2")
-    print("ANNIHILATION_SUPPORTED=" + repr(sink.supports(annihilation)))
-    print("REMOVE_EXECUTABLE=" + repr(TriggerDispatcher.is_executable_effect(remove)))
-    print("ANNIHILATION_BLOCKERS=" + json.dumps([b for b in blockers if "아스카" in b or "섬멸" in b], ensure_ascii=False))
+    def activate(manager, eff, caster, t, *args, **kwargs):
+        name = eff.get("name")
+        if caster == ACTOR_NAME and name in {"섬멸", "섬멸 2"}:
+            order.append(("before", str(name), float(t), _enemy_stack(manager)))
+            out = original_activate(manager, eff, caster, t, *args, **kwargs)
+            order.append(("after", str(name), float(t), _enemy_stack(manager)))
+            return out
+        return original_activate(manager, eff, caster, t, *args, **kwargs)
+
+    config = spec.build_config(raw, {
+        "duration": 25.0,
+        "first_burst_time": 3.0,
+        "rng_mode": "expected",
+    })
+    with patch.object(BuffManager, "_activate", new=activate):
+        result = simulate(
+            raw,
+            config=config,
+            enemy=dict(DEFAULT_ENEMY),
+            seed=42,
+            verbose=True,
+        )
+
+    hits = [
+        (float(hit.t), int(hit.damage), hit.hit_tag, hit.skill_name)
+        for hit in result.hits
+        if hit.caster == ACTOR_NAME and hit.skill_name == "섬멸"
+    ]
+    burst = [] if result.log is None else [
+        (float(row.t), row.event, row.caster)
+        for row in result.log.burst_log
+        if row.caster == ACTOR_NAME or row.event.startswith("full_burst")
+    ]
+    field_events = [] if result.log is None else [
+        (float(row.t), row.kind, row.name, row.caster, row.target, row.stack, row.max_stack)
+        for row in result.log.buff_events
+        if row.name in {STATE_NAME, "섬멸 태세"}
+    ]
+
+    print(f"SOURCE={source} MEMBERS={members}")
+    print("BURST=" + repr(burst))
+    print("ORDER=" + repr(order))
+    print("ANNIHILATION_HITS=" + repr(hits))
+    print("FIELD_EVENTS=" + repr(field_events))
+
+    assert order, "Asuka WILLE did not cast/expire annihilation stance"
+    first_t = order[0][2]
+    first = [row for row in order if abs(row[2] - first_t) < 1e-9]
+    print("FIRST_STATE_END_ORDER=" + repr(first))
+    first_hit = next((row for row in hits if abs(row[0] - first_t) < 1e-9), None)
+    print("FIRST_STATE_END_HIT=" + repr(first_hit))
+
+    # Moris semantic contract: damage reads the accumulated enemy stack, then
+    # the immediately following remove_named_buff clears the named state.
+    assert first[0][0:2] == ("before", "섬멸"), first
+    assert first[0][3] > 0, first
+    assert first[1][0:2] == ("after", "섬멸"), first
+    assert first[1][3] == first[0][3], first
+    assert first[2][0:2] == ("before", "섬멸 2"), first
+    assert first[2][3] == first[0][3], first
+    assert first[3][0:2] == ("after", "섬멸 2"), first
+    assert first[3][3] == 0, first
+    assert first_hit is not None, (first, hits)
 
 
 if __name__ == "__main__":
