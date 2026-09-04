@@ -7,6 +7,8 @@ on:
     paths:
       - 'fast_engine/research/tmp_next_frontier_probe.py'
       - 'fast_engine/research/tmp_encounter_unreachable_probe.py'
+      - 'fast_engine/research/tmp_apply_patternless_encounter.py'
+      - 'fast_engine/research/tmp_validate_patternless_encounter.py'
       - '.github/workflows/tmp-next-frontier.yml'
   workflow_dispatch:
 
@@ -18,7 +20,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Run post-Asuka frontier shape probe
+      - name: Baseline post-Asuka frontier
         run: python -m fast_engine.research.tmp_next_frontier_probe
-      - name: Probe patternless encounter-event reachability
+      - name: Probe Moris encounter-event reachability
         run: python -m fast_engine.research.tmp_encounter_unreachable_probe
+      - name: Apply runner-only patternless encounter patch
+        run: python -m fast_engine.research.tmp_apply_patternless_encounter
+      - name: Validate narrow blocker removal
+        run: python -m fast_engine.research.tmp_validate_patternless_encounter
+      - name: Patched frontier
+        run: python -m fast_engine.research.tmp_next_frontier_probe
+      - name: Fast regression suite
+        run: python -m pytest fast_engine/tests -q
