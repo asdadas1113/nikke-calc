@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 jobs:
-  promote:
+  finalize-docs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,208 +19,207 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-
-      - name: Apply production candidate
+      - name: Write checkpoint and handoff update
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          p = Path('fast_engine/engine/dispatcher.py')
-          s = p.read_text(encoding='utf-8')
-          anchor = '''    @staticmethod\n    def _periodic_timing_is_only_blocker(effect: "CompiledEffect") -> bool:\n'''
-          helper = '''    @staticmethod\n    def _periodic_finite_self_crit_shape_supported(\n        effect: "CompiledEffect",\n    ) -> bool:\n        """Certify a fixed-grid finite one-stack self crit buff during full burst."""\n        return (\n            effect.capability.disposition is CapabilityDisposition.PLANNED\n            and set(effect.capability.blockers) == {\n                "category:hit_formula",\n                "stat:crit_rate",\n                "timing:periodic",\n                "condition:simple_runtime",\n            }\n            and effect.effect_type == "buff"\n            and bool(effect.name)\n            and (effect.stat or "") == "crit_rate"\n            and effect.polarity == "beneficial"\n            and effect.target_spec.mode is TargetMode.SELF\n            and effect.value is not None\n            and float(effect.value) >= 0.0\n            and effect.duration is not None\n            and float(effect.duration) > 0.0\n            and effect.max_stack in (1, 1.0)\n            and effect.max_trigger is None\n            and effect.tick_interval is None\n            and not effect.parameters\n            and len(effect.condition_rules) == 1\n            and effect.condition_rules[0].mode is ConditionMode.DURING_FULL_BURST\n            and len(effect.triggers) == 1\n            and effect.triggers[0].mode is TriggerMode.PERIODIC\n            and effect.triggers[0].interval is not None\n            and float(effect.triggers[0].interval) > 0.0\n        )\n\n'''
-          if helper.strip() not in s:
-              if anchor not in s:
-                  raise SystemExit('dispatcher insertion anchor not found')
-              s = s.replace(anchor, helper + anchor, 1)
-          old = '''            TriggerDispatcher._periodic_permanent_self_direct_stack_shape_supported(effect)\n            or TriggerDispatcher._self_stack_reach_marker_shape_supported(effect)\n'''
-          new = '''            TriggerDispatcher._periodic_permanent_self_direct_stack_shape_supported(effect)\n            or TriggerDispatcher._periodic_finite_self_crit_shape_supported(effect)\n            or TriggerDispatcher._self_stack_reach_marker_shape_supported(effect)\n'''
-          if new not in s:
-              if old not in s:
-                  raise SystemExit('dispatcher executable anchor not found')
-              s = s.replace(old, new, 1)
-          p.write_text(s, encoding='utf-8')
+          checkpoint = Path('fast_engine/research/PERIODIC_FINITE_SELF_CRIT_CHECKPOINT_20260905.md')
+          checkpoint.write_text('''# Fast Engine — finite periodic self-crit checkpoint (2026-09-05)
 
-          p = Path('fast_engine/engine/score.py')
-          s = p.read_text(encoding='utf-8')
-          old = '''def _is_score_safe_fixed_periodic(effect) -> bool:\n    if TriggerDispatcher._periodic_permanent_self_direct_stack_shape_supported(effect):\n        return True\n'''
-          new = '''def _is_score_safe_fixed_periodic(effect) -> bool:\n    if (\n        TriggerDispatcher._periodic_permanent_self_direct_stack_shape_supported(effect)\n        or TriggerDispatcher._periodic_finite_self_crit_shape_supported(effect)\n    ):\n        return True\n'''
-          if new not in s:
-              if old not in s:
-                  raise SystemExit('score periodic anchor not found')
-              s = s.replace(old, new, 1)
-          p.write_text(s, encoding='utf-8')
+## 1. 목적
+
+public coverage frontier를 다시 스캔한 결과, 남은 blocker 중 단순 score proof 누락은 없었다. 다음 작은 generic slice로 기존 Fast periodic scheduler를 그대로 재사용할 수 있는 **고정 주기 finite self `crit_rate` 상태**를 선택했다.
+
+실데이터 anchor는 스노우 화이트 `세븐스 드워프 : V&VI 2`다.
+
+- effect: `buff`
+- stat: `crit_rate +26.1`
+- target: `self`
+- duration: `10s`
+- max stack: `1`
+- timing: `every:15s`
+- condition: `during_full_burst`
+
+목표는 스노우 화이트 이름을 특별취급하는 것이 아니라, 이 좁은 periodic shape만 generic하게 runtime/score ownership하는 것이다.
+
+## 2. Moris 의미론
+
+`calculator/buff_manager.py`의 `every:Ns` 처리는 battle start 시 즉시 발동하지 않는다. 첫 deadline은 interval 뒤에 생기며 deadline에 도달할 때 condition을 검사하고, 조건이 참이면 효과를 활성화한 뒤 다음 deadline을 같은 grid에서 예약한다.
+
+표준 `레이드_헬름아쿠아스노우`, 70초 expected simulation에서 `세븐스 드워프 : V&VI 2`는 다음 outer-tick 관측 시각에 활성화됐다.
+
+- `30.016666666666243`
+- `45.016666666665394`
+- `60.01666666666454`
+
+15초 nominal deadline에서는 full burst 조건이 거짓이라 발동하지 않는다.
+
+Moris는 periodic interval을 다음 상태로 바꿀 수 있다.
+
+- `skill_cooldown_pct`
+- `effect_interval`
+
+Fast score에는 이미 이를 포함한 `_PERIODIC_GRID_INVALIDATORS` (`effect_interval`, `skill_cooldown_pct`, `skill_cooldown_reduce_pct`, `force_skill_use`)가 존재한다. 이번 slice도 그 fail-closed 계약을 그대로 통과해야 한다.
+
+## 3. Fast 구현
+
+production commit:
+
+- `fee2fe343cf75861185dd780d9191bbf6f48da8f` — `fast: certify finite periodic self crit state`
+
+### Dispatcher
+
+`_periodic_finite_self_crit_shape_supported()`를 추가했다. 지원 범위는 정확히 다음으로 제한한다.
+
+- capability `PLANNED`
+- blocker set exactly:
+  - `category:hit_formula`
+  - `stat:crit_rate`
+  - `timing:periodic`
+  - `condition:simple_runtime`
+- `buff`
+- stat exactly `crit_rate`
+- beneficial, non-negative value
+- target exactly `SELF`
+- finite positive duration
+- `max_stack == 1`
+- no `max_trigger`
+- no `tick_interval`
+- no parameters
+- condition exactly one `DURING_FULL_BURST`
+- trigger exactly one positive fixed `PERIODIC`
+
+새 scheduler나 frame loop는 만들지 않았다. 기존 periodic deadline scheduler, condition runtime, `ActiveEffectStore`를 그대로 사용한다.
+
+### Score
+
+`_is_score_safe_fixed_periodic()`가 위 narrow shape를 인정하도록 확장했다.
+
+periodic-grid invalidator가 팀에 있으면 기존 `periodic_grid:*` blocker가 계속 생기므로 동적으로 변하는 periodic interval을 고정 grid로 잘못 인증하지 않는다.
+
+## 4. runner-only A/B
+
+최종 A/B:
+
+- workflow run: `33922544009`
+- job: `101183863415`
+
+검증 결과:
+
+- 새 focused regression: `3/3`
+- 기존 periodic runtime regression: `8/8`
+- Fast/Moris successful activation time 3개가 9 decimal places까지 일치
+- public scope helper match는 정확히 1개:
+  - `레이드_헬름아쿠아스노우 / 스노우 화이트 / 세븐스 드워프 : V&VI 2 / crit_rate`
+- full Fast regression: `251/251`
+
+첫 A/B 실패는 존재하지 않는 임시 회귀 모듈명을 호출한 harness 오류였고, candidate semantic test 자체는 그 run에서도 이미 통과했다. 호출을 제거한 뒤 전체 gate가 초록으로 닫혔다.
+
+## 5. production promotion
+
+promotion workflow:
+
+- run: `33922753827`
+- job: `101184510974`
+
+결과:
+
+- focused regression: success
+- public scope gate: success
+- full Fast regression: success
+- production commit/push: success
+
+permanent regression:
+
+- `fast_engine/tests/test_damage_periodic_self_crit.py`
+
+파일명을 `test_damage*.py` 계약에 맞춰 canonical Fast damage discovery에 직접 포함시켰다.
+
+## 6. public blocker delta
+
+`레이드_헬름아쿠아스노우`에서 다음 두 blocker만 제거된다.
+
+- `normal_delivery:스노우 화이트:세븐스 드워프 : V&VI 2:crit_rate`
+- `skill_state_delivery:스노우 화이트:세븐스 드워프 : V&VI 2:crit_rate`
+
+다음은 그대로 남긴다.
+
+- Helm Aqua `이지스 캐논 견제 사격 2:received_dmg_pct` periodic enemy state
+- Snow White `세븐스 드워프 : I` weapon change
+- Snow White `세븐스 드워프 : I 2:pierce_enabled`
+
+표준 public accounting은 여전히:
+
+- source cases: `24`
+- unique ordered memberships: `23`
+- certified: `2`
+- gaps: `21`
+
+certified universe가 늘지 않았으므로 standardized ranking probe는 재실행하지 않았다.
+
+## 7. fail-closed 유지
+
+이번 checkpoint는 다음을 지원한다고 주장하지 않는다.
+
+- periodic enemy/same-target stacking
+- arbitrary periodic direct-damage stats
+- arbitrary periodic conditions
+- periodic interval mutation
+- gauge-driven periodic effects
+- `on_attack` chronology
+- weapon change
+- multi-target dynamic target selection
+
+특히 인접한 Helm Aqua periodic enemy `received_dmg_pct`는 target/stack/condition 의미론을 별도로 검증해야 하므로 이번 slice에 포함하지 않았다.
+''', encoding='utf-8')
+
+          handoff = Path('fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md')
+          text = handoff.read_text(encoding='utf-8')
+          old_prod = '- `47e8c47278bbd9125b42a8f08bde632638796026` — percent-ammo instant named-event emission / source certification'
+          new_prod = '- `fee2fe343cf75861185dd780d9191bbf6f48da8f` — finite periodic self `crit_rate` state certification\n\n직전 production semantic commit:\n\n- `47e8c47278bbd9125b42a8f08bde632638796026` — percent-ammo instant named-event emission / source certification'
+          if old_prod not in text:
+              raise SystemExit('handoff production anchor missing')
+          text = text.replace(old_prod, new_prod, 1)
+
+          list_anchor = '1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md`\n'
+          if 'PERIODIC_FINITE_SELF_CRIT_CHECKPOINT_20260905.md' not in text:
+              text = text.replace(
+                  list_anchor,
+                  list_anchor + '2. `fast_engine/research/PERIODIC_FINITE_SELF_CRIT_CHECKPOINT_20260905.md`\n',
+                  1,
+              )
+
+          section_anchor = '---\n\n## 2. 최신 완료 — percent-ammo instant named event\n'
+          latest = '''---\n\n## 1A. 최신 완료 — finite periodic self crit\n\n스노우 화이트 `세븐스 드워프 : V&VI 2`를 anchor로 fixed-grid finite self `crit_rate` periodic state를 좁게 generic certification했다.\n\nproduction:\n\n- `fee2fe343cf75861185dd780d9191bbf6f48da8f`\n\n지원 shape는 self / beneficial `crit_rate` / finite duration / one stack / exactly one `during_full_burst` condition / exactly one fixed periodic trigger다. 기존 periodic scheduler와 ActiveEffectStore를 재사용하며 새 frame loop를 만들지 않았다.\n\nMoris 70s trace의 successful activation 3개와 Fast가 정확히 같은 outer-tick 시각을 냈다.\n\n- `30.016666666666243`\n- `45.016666666665394`\n- `60.01666666666454`\n\nrunner-only A/B run `33922544009` / job `101183863415`:\n\n- focused `3/3`\n- existing periodic `8/8`\n- full Fast `251/251`\n- public helper match exactly one effect\n- public `23 unique / 2 certified / 21 gaps`\n\npromotion run `33922753827` / job `101184510974`도 focused / public scope / full Fast / commit 모두 success.\n\n제거된 blocker는 `레이드_헬름아쿠아스노우`의 Snow White periodic crit normal/skill delivery 2개뿐이다. Helm Aqua periodic enemy state와 Snow White weapon-change/pierce blocker는 그대로 남겼다.\n\n상세:\n\n- `fast_engine/research/PERIODIC_FINITE_SELF_CRIT_CHECKPOINT_20260905.md`\n\n---\n\n## 2. 최신 완료 — percent-ammo instant named event\n'''
+          if '## 1A. 최신 완료 — finite periodic self crit' not in text:
+              if section_anchor not in text:
+                  raise SystemExit('handoff section anchor missing')
+              text = text.replace(section_anchor, latest, 1)
+
+          cleanup_anchor = '`.github/workflows`에는 다음만 남긴다.\n'
+          note = 'finite periodic self-crit checkpoint 문서화 뒤 현재 `tmp-frontier-rescan-20260905.yml`도 제거하고 최종 canonical CI를 다시 확인한다.\n\n'
+          if note not in text:
+              text = text.replace(cleanup_anchor, note + cleanup_anchor, 1)
+          handoff.write_text(text, encoding='utf-8')
+
+          lessons = Path('fast_engine/research/LESSONS.md')
+          lessons_text = lessons.read_text(encoding='utf-8')
+          lesson = '''\n\n## 2026-09-05 — periodic direct state는 scheduler보다 grid mutation proof가 중요하다\n\n- 기존 periodic deadline scheduler가 Moris outer-tick 관측과 맞더라도 새 damage-facing stat을 바로 열면 안 된다.\n- `effect_interval`/`skill_cooldown_pct`처럼 Moris periodic grid를 바꾸는 상태가 있으면 Fast의 fixed grid는 오답이 될 수 있다.\n- 따라서 narrow periodic shape certification과 `_PERIODIC_GRID_INVALIDATORS` fail-closed를 함께 유지한다.\n- 실제 Snow White finite self `crit_rate` slice는 새 scheduler 없이 기존 periodic runtime을 재사용했고, Moris successful activation 시각을 직접 대조해 검증했다.\n'''
+          if 'periodic direct state는 scheduler보다 grid mutation proof가 중요하다' not in lessons_text:
+              lessons.write_text(lessons_text.rstrip() + lesson + '\n', encoding='utf-8')
           PY
 
-      - name: Write permanent regression
+      - name: Validate docs and permanent regression
         run: |
-          cat > fast_engine/tests/test_damage_periodic_self_crit.py <<'PY'
-          from __future__ import annotations
-
-          import unittest
-          from unittest.mock import patch
-
-          from calculator.timeline import simulate
-          from context import snapshot, spec
-          from fast_engine.engine.burst import compile_burst_policy
-          from fast_engine.engine.burst_runtime import BurstRuntime
-          from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.engine.score import static_score_blockers
-
-
-          class PeriodicFiniteSelfCritTests(unittest.TestCase):
-              TEAM = '레이드_헬름아쿠아스노우'
-
-              def _compiled(self):
-                  moris = spec.build_squad(list(snapshot.SQUADS[self.TEAM]['members']))
-                  compiled = compile_moris_squad(moris)
-                  sw = next(i for i, m in enumerate(compiled.members) if m.name == '스노우 화이트')
-                  effect = next(
-                      e for e in compiled.members[sw].effects
-                      if e.name == '세븐스 드워프 : V&VI 2'
-                  )
-                  return moris, compiled, effect
-
-              def test_real_shape_removes_only_periodic_crit_delivery_blockers(self):
-                  _moris, compiled, effect = self._compiled()
-                  self.assertTrue(
-                      TriggerDispatcher._periodic_finite_self_crit_shape_supported(effect)
-                  )
-                  blockers = set(static_score_blockers(compiled))
-                  self.assertNotIn(
-                      'normal_delivery:스노우 화이트:세븐스 드워프 : V&VI 2:crit_rate',
-                      blockers,
-                  )
-                  self.assertNotIn(
-                      'skill_state_delivery:스노우 화이트:세븐스 드워프 : V&VI 2:crit_rate',
-                      blockers,
-                  )
-                  self.assertIn(
-                      'weapon_change:스노우 화이트:세븐스 드워프 : I', blockers
-                  )
-                  self.assertIn(
-                      'normal_delivery:스노우 화이트:세븐스 드워프 : I 2:pierce_enabled',
-                      blockers,
-                  )
-                  self.assertIn(
-                      'normal_delivery:헬름 : 아쿠아마린:이지스 캐논 견제 사격 2:received_dmg_pct',
-                      blockers,
-                  )
-
-              def test_fast_activation_times_match_moris_outer_tick_observation(self):
-                  moris_squad, compiled, effect = self._compiled()
-                  duration = 70.0
-                  policy = compile_burst_policy(
-                      moris_squad, compiled, {'duration': duration}
-                  )
-                  fast_times = []
-                  original = TriggerDispatcher.dispatch_periodic
-
-                  def traced(dispatcher, effect_id, rule_index, *, time, context):
-                      result = original(
-                          dispatcher,
-                          effect_id,
-                          rule_index,
-                          time=time,
-                          context=context,
-                      )
-                      if (
-                          effect_id == effect.effect_id
-                          and effect_id in result.activated_effect_ids
-                      ):
-                          fast_times.append(time)
-                      return result
-
-                  with patch.object(TriggerDispatcher, 'dispatch_periodic', new=traced):
-                      BurstRuntime(compiled, policy).run(duration=duration)
-
-                  moris = simulate(
-                      moris_squad,
-                      config={'duration': duration, 'rng_mode': 'expected'},
-                      verbose=True,
-                  )
-                  moris_times = [
-                      row.t
-                      for row in moris.log.buff_events
-                      if row.kind == 'activate'
-                      and row.name == '세븐스 드워프 : V&VI 2'
-                  ]
-                  self.assertEqual(len(fast_times), 3, fast_times)
-                  self.assertEqual(len(moris_times), 3, moris_times)
-                  for actual, expected in zip(fast_times, moris_times):
-                      self.assertAlmostEqual(actual, expected, places=9)
-
-              def test_other_periodic_shapes_remain_fail_closed(self):
-                  _moris, compiled, _effect = self._compiled()
-                  helm = next(
-                      i for i, m in enumerate(compiled.members)
-                      if m.name == '헬름 : 아쿠아마린'
-                  )
-                  enemy_stack = next(
-                      e for e in compiled.members[helm].effects
-                      if e.name == '이지스 캐논 견제 사격 2'
-                  )
-                  self.assertFalse(
-                      TriggerDispatcher._periodic_finite_self_crit_shape_supported(
-                          enemy_stack
-                      )
-                  )
-                  self.assertFalse(TriggerDispatcher.is_executable_effect(enemy_stack))
-
-
-          if __name__ == '__main__':
-              unittest.main()
-          PY
-
-      - name: Focused regression
-        run: |
+          python -m context.doclint
           python -m unittest fast_engine.tests.test_damage_periodic_self_crit
           python -m unittest fast_engine.tests.test_periodic_runtime
-
-      - name: Public scope gate
-        run: |
-          python - <<'PY'
-          from context import snapshot, spec
-          from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.engine.score import static_score_blockers
-
-          seen = set()
-          certified = 0
-          matches = []
-          for team, entry in snapshot.SQUADS.items():
-              if team.startswith('지그_'):
-                  continue
-              members = tuple(entry['members'])
-              if members in seen:
-                  continue
-              seen.add(members)
-              squad = compile_moris_squad(spec.build_squad(list(members)))
-              blockers = static_score_blockers(squad)
-              if not blockers:
-                  certified += 1
-              for effect in squad.effects:
-                  if TriggerDispatcher._periodic_finite_self_crit_shape_supported(effect):
-                      matches.append(
-                          (team, squad.members[effect.actor].name, effect.name, effect.stat)
-                      )
-          assert len(seen) == 23, len(seen)
-          assert certified == 2, certified
-          assert matches == [
-              ('레이드_헬름아쿠아스노우', '스노우 화이트', '세븐스 드워프 : V&VI 2', 'crit_rate')
-          ], matches
-          print('PUBLIC_SCOPE_OK', len(seen), certified, len(seen) - certified, matches)
-          PY
-
-      - name: Full Fast regression
-        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
-
-      - name: Commit production
+      - name: Commit docs
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add fast_engine/engine/dispatcher.py fast_engine/engine/score.py fast_engine/tests/test_damage_periodic_self_crit.py
+          git add fast_engine/research/PERIODIC_FINITE_SELF_CRIT_CHECKPOINT_20260905.md fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md fast_engine/research/LESSONS.md
           git diff --cached --check
-          git commit -m "fast: certify finite periodic self crit state"
+          git commit -m "docs: record finite periodic self crit checkpoint"
           git push origin HEAD:fast-engine-phase2-20260901
