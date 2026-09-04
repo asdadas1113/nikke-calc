@@ -978,12 +978,26 @@ class TriggerDispatcher:
                 provider
                 for provider in self._effect_table
                 if provider.effect_id != effect.effect_id
-                and provider.effect_type == "buff"
                 and provider.name == name
             )
             if not providers:
                 return False
             for provider in providers:
+                if provider.effect_type == "instant":
+                    if (
+                        provider.actor != effect.actor
+                        or (provider.stat or "") != "ammo_charge_pct"
+                        or provider.value is None
+                        or float(provider.value) < 0.0
+                        or any(rule.event_key == "battle_start" for rule in provider.triggers)
+                        or not provider.target_spec.runtime_supported
+                        or not possible_ally_targets(self.squad, provider)
+                        or not self.is_executable_effect(provider)
+                    ):
+                        return False
+                    continue
+                if provider.effect_type != "buff":
+                    return False
                 if self._named_event_keys(provider):
                     return False
                 if provider.parameters.get("event_scope") not in (None, "", "squad", "recipients"):
@@ -1285,6 +1299,16 @@ class TriggerDispatcher:
                 actor_targets = tuple(int(target) for target in targets)
                 if not self._ammo_charge_sink(stat, actor_targets, value, now):
                     return False
+                # Moris emits event:{name} after successful percent refill only.
+                if (
+                    stat == "ammo_charge_pct"
+                    and effect.name
+                    and effect.name in self._named_event_names_needed
+                ):
+                    from .burst import BurstSignal
+                    self.dispatch(
+                        BurstSignal(now, f"event:{effect.name}", effect.actor, effect.actor)
+                    )
             elif stat == "force_reload":
                 if self._force_reload_sink is None or any(target == ENEMY for target in targets):
                     return False

@@ -396,10 +396,21 @@ def _ammo_charge_named_event_safe(squad: CompiledSquad, effect) -> bool:
     if not effect.name:
         return True
     event_key = f"event:{effect.name}"
-    return not any(
-        other.effect_id != effect.effect_id
-        and any(rule.event_key == event_key for rule in other.triggers)
+    consumers = tuple(
+        other
         for other in squad.effects
+        if other.effect_id != effect.effect_id
+        and any(rule.event_key == event_key for rule in other.triggers)
+    )
+    if not consumers:
+        return True
+    if (effect.stat or "") != "ammo_charge_pct":
+        return False
+    return all(
+        consumer.actor == effect.actor
+        and consumer.effect_type == "buff"
+        and is_direct_damage_buff_runtime_supported(consumer)
+        for consumer in consumers
     )
 
 
@@ -738,12 +749,26 @@ def _named_buff_event_dependency_score_safe(squad: CompiledSquad, effect) -> boo
             provider
             for provider in squad.effects
             if provider.effect_id != effect.effect_id
-            and provider.effect_type == "buff"
             and provider.name == name
         )
         if not providers:
             return False
         for provider in providers:
+            if provider.effect_type == "instant":
+                if (
+                    provider.actor != effect.actor
+                    or (provider.stat or "") != "ammo_charge_pct"
+                    or provider.value is None
+                    or float(provider.value) < 0.0
+                    or any(rule.event_key == "battle_start" for rule in provider.triggers)
+                    or not provider.target_spec.runtime_supported
+                    or not _possible_ally_targets(squad, provider)
+                    or not TriggerDispatcher.is_executable_effect(provider)
+                ):
+                    return False
+                continue
+            if provider.effect_type != "buff":
+                return False
             if TriggerDispatcher._named_event_keys(provider):
                 return False
             if provider.parameters.get("event_scope") not in (None, "", "squad", "recipients"):

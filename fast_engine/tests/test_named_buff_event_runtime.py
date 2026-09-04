@@ -111,7 +111,7 @@ class NamedBuffEventRuntimeTests(unittest.TestCase):
         names = ["리틀 머메이드", "토브", "크라운", "아스카 : WILLE", "루드밀라 : 윈터 오너"]
         squad = compile_moris_squad(build_squad(names))
         blockers = static_score_blockers(squad)
-        self.assertTrue(any("토브:임시 개조 2:crit_dmg" in item for item in blockers))
+        self.assertFalse(any("토브:임시 개조 2:crit_dmg" in item for item in blockers))
         self.assertFalse(any("크라운:로얄 에타이어 4:atk_dmg_pct" in item for item in blockers))
 
 
