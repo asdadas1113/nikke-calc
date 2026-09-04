@@ -15,6 +15,7 @@ from .public_ranking_probe import _source_corpus
 NAME = "나유타"
 DURATION = 100.0
 CONFIG = {"duration": DURATION, "first_burst_time": 3.0, "rng_mode": "expected"}
+CONSUMERS = {"위선", "위선 2", "무상", "무상 2", "무상 3"}
 
 
 def _stack(manager: BuffManager) -> int:
@@ -36,40 +37,42 @@ def main() -> None:
     for members, source in cases:
         raw = spec.build_squad(list(members))
         compiled = compile_moris_squad(raw)
+        actor = members.index(NAME)
         print(f"CASE {source} members={members}")
+        print("BASE_WEAPON=" + repr(dict(compiled.members[actor].weapon)))
         print("BLOCKERS=" + json.dumps([b for b in static_score_blockers(compiled) if NAME in b], ensure_ascii=False))
-        for effect in compiled.members[members.index(NAME)].effects:
-            if effect.name in {"기억 흡수", "무상", "무상 2", "무상 3", "위선", "위선 2", "위선 3", "위선 4"}:
-                print("EFFECT=" + repr((
+        for effect in compiled.members[actor].effects:
+            if effect.name in {"기억 흡수", "무상", "무상 2", "무상 3", "위선", "위선 2", "위선 3", "위선 4", "기억 연소"}:
+                row = (
                     effect.effect_id, effect.name, effect.effect_type, effect.stat,
                     tuple((r.raw, r.mode.value, r.event_key, r.interval, r.threshold) for r in effect.triggers),
                     tuple(repr(r) for r in effect.condition_rules), effect.duration, effect.max_stack,
-                    effect.capability.disposition.value, effect.capability.blockers,
+                    dict(effect.parameters), effect.capability.disposition.value, effect.capability.blockers,
                     TriggerDispatcher.is_executable_effect(effect),
-                )))
+                )
+                if effect.name == "기억 연소":
+                    row += (TriggerDispatcher._temporary_self_charge_weapon_change_shape_supported(effect),)
+                print("EFFECT=" + repr(row))
 
     members, source = cases[0]
     raw = spec.build_squad(list(members))
     original_activate = BuffManager._activate
-    original_notify = BuffManager.notify
     activations: list[tuple[float, int, int]] = []
-    named_events: list[tuple[float, str, int]] = []
+    consumer_rows: list[tuple[float, str, int]] = []
 
     def activate(manager, eff, caster, t, *args, **kwargs):
-        before = _stack(manager) if caster == NAME and eff.get("name") == "기억 흡수" else None
+        name = eff.get("name")
+        before = _stack(manager) if caster == NAME and name == "기억 흡수" else None
         out = original_activate(manager, eff, caster, t, *args, **kwargs)
         if before is not None:
             after = _stack(manager)
             if after != before:
                 activations.append((float(t), int(before), int(after)))
+        if caster == NAME and name in CONSUMERS:
+            consumer_rows.append((float(t), str(name), _stack(manager)))
         return out
 
-    def notify(manager, event, t, caster, **ctx):
-        if caster == NAME and event == "기억 흡수":
-            named_events.append((float(t), str(event), _stack(manager)))
-        return original_notify(manager, event, t, caster, **ctx)
-
-    with patch.object(BuffManager, "_activate", new=activate), patch.object(BuffManager, "notify", new=notify):
+    with patch.object(BuffManager, "_activate", new=activate):
         simulate(
             raw,
             config=spec.build_config(raw, dict(CONFIG)),
@@ -80,12 +83,13 @@ def main() -> None:
 
     print(f"TRACE_SOURCE={source}")
     print("MORIS_MEMORY_ABSORB=" + repr(activations))
-    print("MORIS_MEMORY_EVENTS=" + repr(named_events))
+    print("MORIS_CONSUMERS=" + repr(consumer_rows))
     assert len(activations) == 30, activations
     assert [row[2] for row in activations] == list(range(1, 31)), activations
-    assert len(named_events) == 30, named_events
-    assert all(abs(t - 3.0 * (i + 1)) <= 1.0 / 60.0 + 1e-9 for i, (t, _, _) in enumerate(named_events)), named_events
-    assert [stack for _, _, stack in named_events] == list(range(1, 31)), named_events
+    assert len([r for r in consumer_rows if r[1] == "위선"]) >= 30, consumer_rows
+    assert any(name == "무상" and stack == 2 for _, name, stack in consumer_rows), consumer_rows
+    assert any(name == "무상 2" and stack == 10 for _, name, stack in consumer_rows), consumer_rows
+    assert any(name == "무상 3" and stack == 30 for _, name, stack in consumer_rows), consumer_rows
 
 
 if __name__ == "__main__":
