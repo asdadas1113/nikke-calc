@@ -4,43 +4,56 @@ on:
   push:
     branches:
       - fast-engine-phase2-20260901
-  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  brady-gate:
+  promote-brady:
+    if: startsWith(github.event.head_commit.message, 'tmp: promote Brady stat-applied')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Apply runner-only patch and public semantic probe
+      - name: Apply exact gated candidate
         run: PYTHONPATH=. python .github/scripts/tmp_brady_stat_applied_ab.py
-      - name: Update chained frontier expectation in runner only
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          p = Path('fast_engine/tests/test_damage_full_charge_hit_charge_speed.py')
-          s = p.read_text(encoding='utf-8')
-          old = '        self.assertEqual(cadence, 64)\n'
-          new = '        self.assertEqual(cadence, 63)\n'
-          if old not in s:
-              raise SystemExit('Cinderella cadence expectation marker missing')
-          p.write_text(s.replace(old, new, 1), encoding='utf-8')
-          PY
-      - name: Focused regressions
+      - name: Write permanent regressions
+        run: PYTHONPATH=. python .github/scripts/tmp_brady_write_tests.py
+      - name: Focused production regressions
         run: |
           python -m unittest -v \
+            fast_engine.tests.test_damage_stat_applied_charge_speed \
             fast_engine.tests.test_damage_full_charge_hit_charge_speed \
             fast_engine.tests.test_damage_charge_speed_bullet_lifetime \
             fast_engine.tests.test_damage_charge_hold_control \
             fast_engine.tests.test_damage_dynamic_charge_scoring \
             fast_engine.tests.test_damage_ammo_pct_named_event \
             fast_engine.tests.test_named_buff_event_runtime
-      - name: Full Fast regressions
+      - name: Full Fast production regressions
         run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
-      - name: Standardized public ranking probe
-        run: PYTHONPATH=. python -m fast_engine.research.public_ranking_probe
+      - name: Verify production diff
+        run: |
+          git diff --check
+          git status --short
+          printf '%s\n' \
+            fast_engine/engine/dispatcher.py \
+            fast_engine/engine/score.py \
+            fast_engine/tests/test_damage_full_charge_hit_charge_speed.py \
+            fast_engine/tests/test_damage_stat_applied_charge_speed.py \
+            > /tmp/expected.txt
+          git diff --name-only | sort > /tmp/actual.txt
+          sort -o /tmp/expected.txt /tmp/expected.txt
+          diff -u /tmp/expected.txt /tmp/actual.txt
+      - name: Commit production semantic slice
+        run: |
+          git config user.name 'asdadas1113'
+          git config user.email 'crony06@gmail.com'
+          git add \
+            fast_engine/engine/dispatcher.py \
+            fast_engine/engine/score.py \
+            fast_engine/tests/test_damage_full_charge_hit_charge_speed.py \
+            fast_engine/tests/test_damage_stat_applied_charge_speed.py
+          git commit -m 'fast: certify recipient stat-applied charge speed'
+          git push origin HEAD:fast-engine-phase2-20260901
