@@ -6,7 +6,10 @@ from typing import Callable, TYPE_CHECKING
 
 from .capabilities import CapabilityDisposition
 from .conditions import ConditionEvaluator, ConditionMode, SignalContext
-from .damage_policy import is_direct_damage_buff_runtime_supported
+from .damage_policy import (
+    DIRECT_DAMAGE_STATE_STATS,
+    is_direct_damage_buff_runtime_supported,
+)
 from .effects import ActiveEffectStore
 from .shot_blocks import static_bullet_lifetime_cadence_safe
 from .state import ENEMY, StateStore
@@ -256,6 +259,41 @@ class TriggerDispatcher:
                 (rule.event_key or "") in cls._PATTERNLESS_UNREACHABLE_GAUGE_EVENTS
                 for rule in effect.triggers
             )
+        )
+
+    @staticmethod
+    def _periodic_permanent_self_direct_stack_shape_supported(
+        effect: "CompiledEffect",
+    ) -> bool:
+        """Certify an immutable-grid periodic self stack used by damage scoring.
+
+        This deliberately excludes finite lifetimes, mutable conditions, recipient
+        selection, removable state and periodic side effects. Moris/Fast need only
+        observe the fixed periodic stack edge and its generic named-event broadcast.
+        """
+        if not (
+            effect.effect_type == "buff"
+            and bool(effect.name)
+            and (effect.stat or "") in DIRECT_DAMAGE_STATE_STATS
+            and effect.polarity == "beneficial_irremovable"
+            and effect.target_spec.mode is TargetMode.SELF
+            and effect.value is not None
+            and effect.duration in (None, -1, -1.0)
+            and effect.max_stack is not None
+            and float(effect.max_stack) > 1.0
+            and float(effect.max_stack).is_integer()
+            and effect.max_trigger is None
+            and effect.tick_interval is None
+            and not effect.parameters
+            and not effect.condition_rules
+            and bool(effect.triggers)
+        ):
+            return False
+        return all(
+            rule.mode is TriggerMode.PERIODIC
+            and rule.interval is not None
+            and float(rule.interval) > 0.0
+            for rule in effect.triggers
         )
 
     @staticmethod
@@ -851,7 +889,8 @@ class TriggerDispatcher:
     def is_executable_effect(effect: "CompiledEffect") -> bool:
         stat = effect.stat or ""
         if (
-            TriggerDispatcher._self_stack_reach_marker_shape_supported(effect)
+            TriggerDispatcher._periodic_permanent_self_direct_stack_shape_supported(effect)
+            or TriggerDispatcher._self_stack_reach_marker_shape_supported(effect)
             or TriggerDispatcher._timed_self_named_state_marker_shape_supported(effect)
             or TriggerDispatcher._named_event_control_shape_supported(effect)
             or TriggerDispatcher._named_duration_extend_shape_supported(effect)

@@ -638,6 +638,8 @@ def _dynamic_rapid_reload_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
 
 
 def _is_score_safe_fixed_periodic(effect) -> bool:
+    if TriggerDispatcher._periodic_permanent_self_direct_stack_shape_supported(effect):
+        return True
     return (
         (effect.stat or "") in _PERIODIC_AUX_STATS
         and effect.effect_type == "buff"

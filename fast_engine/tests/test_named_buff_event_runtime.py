@@ -108,11 +108,10 @@ class NamedBuffEventRuntimeTests(unittest.TestCase):
         )
 
     def test_named_event_source_certification_stays_per_effect(self):
-        names = ["리틀 머메이드", "나유타", "크라운", "아스카 : WILLE", "루드밀라 : 윈터 오너"]
+        names = ["리틀 머메이드", "토브", "크라운", "아스카 : WILLE", "루드밀라 : 윈터 오너"]
         squad = compile_moris_squad(build_squad(names))
         blockers = static_score_blockers(squad)
-        self.assertTrue(any("나유타:위선:core_dmg_pct" in item for item in blockers))
-        self.assertTrue(any("나유타:위선 2:atk_caster_based_pct" in item for item in blockers))
+        self.assertTrue(any("토브:임시 개조 2:crit_dmg" in item for item in blockers))
         self.assertFalse(any("크라운:로얄 에타이어 4:atk_dmg_pct" in item for item in blockers))
 
 
