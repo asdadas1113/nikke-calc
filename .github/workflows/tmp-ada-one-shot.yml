@@ -17,7 +17,7 @@ jobs:
           ref: fast-engine-phase2-20260901
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.13'
       - name: Baseline Ada blockers
         run: |
           python - <<'PY'
@@ -38,9 +38,7 @@ jobs:
                   'skill_state_delivery:에이다:특수 개조 2:charge_dmg_pct',
                   'control:에이다',
               },
-              '지그_리코리코': {
-                  'cadence:에이다:특수 개조:charge_speed_pct',
-              },
+              '지그_리코리코': {'cadence:에이다:특수 개조:charge_speed_pct'},
           }
           for name, required in expected.items():
               compiled = compile_moris_squad(spec.build_squad(list(snapshot.SQUADS[name]['members'])))
@@ -57,7 +55,7 @@ jobs:
           p = Path('fast_engine/engine/dispatcher.py')
           s = p.read_text()
           needle = '''    @staticmethod\n    def is_executable_effect(effect: "CompiledEffect") -> bool:\n        stat = effect.stat or ""\n'''
-          replacement = '''    @staticmethod\n    def _charge_speed_bullet_lifetime_shape_supported(effect: "CompiledEffect") -> bool:\n        \"\"\"Bridge only self charge-speed states consumed by a later burst-cast shot.\n\n        Fast already owns dynamic charge-shot boundaries and post-shot bullet-lifetime\n        consumption.  Keep this lane deliberately narrow: one self state, one pre-shot\n        controller event, no conditions/stacks/secondary parameters, and only the\n        compiler's duration_bullets field blocker.\n        \"\"\"\n        if (\n            effect.capability.disposition is not CapabilityDisposition.PLANNED\n            or set(effect.capability.blockers) != {"field:duration_bullets"}\n            or effect.effect_type != "buff"\n            or (effect.stat or "") != "charge_speed_pct"\n            or effect.target_spec.mode is not TargetMode.SELF\n            or effect.duration not in (None, -1.0)\n            or effect.condition_rules\n            or set(effect.parameters) != {"duration_bullets"}\n        ):\n            return False\n        max_stack = effect.max_stack if effect.max_stack is not None else 1.0\n        if float(max_stack) != 1.0:\n            return False\n        try:\n            bullets = float(effect.parameters["duration_bullets"])\n        except (TypeError, ValueError):\n            return False\n        if bullets < 1.0 or not bullets.is_integer():\n            return False\n        return (\n            len(effect.triggers) == 1\n            and effect.triggers[0].mode is TriggerMode.EVENT\n            and effect.triggers[0].event_key == "burst_cast"\n        )\n\n    @staticmethod\n    def is_executable_effect(effect: "CompiledEffect") -> bool:\n        stat = effect.stat or ""\n        if TriggerDispatcher._charge_speed_bullet_lifetime_shape_supported(effect):\n            return True\n'''
+          replacement = '''    @staticmethod\n    def _charge_speed_bullet_lifetime_shape_supported(effect: "CompiledEffect") -> bool:\n        \"\"\"Certify self charge-speed states consumed by a later burst-cast shot.\"\"\"\n        if (\n            effect.capability.disposition is not CapabilityDisposition.PLANNED\n            or set(effect.capability.blockers) != {"field:duration_bullets"}\n            or effect.effect_type != "buff"\n            or (effect.stat or "") != "charge_speed_pct"\n            or effect.target_spec.mode is not TargetMode.SELF\n            or effect.duration not in (None, -1.0)\n            or effect.condition_rules\n            or set(effect.parameters) != {"duration_bullets"}\n        ):\n            return False\n        max_stack = effect.max_stack if effect.max_stack is not None else 1.0\n        if float(max_stack) != 1.0:\n            return False\n        try:\n            bullets = float(effect.parameters["duration_bullets"])\n        except (TypeError, ValueError):\n            return False\n        if bullets < 1.0 or not bullets.is_integer():\n            return False\n        return (\n            len(effect.triggers) == 1\n            and effect.triggers[0].mode is TriggerMode.EVENT\n            and effect.triggers[0].event_key == "burst_cast"\n        )\n\n    @staticmethod\n    def is_executable_effect(effect: "CompiledEffect") -> bool:\n        stat = effect.stat or ""\n        if TriggerDispatcher._charge_speed_bullet_lifetime_shape_supported(effect):\n            return True\n'''
           assert needle in s
           p.write_text(s.replace(needle, replacement, 1))
 
@@ -121,48 +119,25 @@ jobs:
                   self.assertEqual(observer.dynamic_charge_actors, (0,))
                   self.assertTrue(runtime.dispatcher.effects.dynamic_bullet_lifetime_supported(0))
                   runtime.dispatcher.effects.activate(effect, 0, 0.0, runtime.scheduler)
-                  self.assertAlmostEqual(
-                      runtime.dispatcher.effects.sum_stat(0, 'charge_speed_pct', now=0.0),
-                      -300.0,
-                      places=9,
-                  )
+                  self.assertAlmostEqual(runtime.dispatcher.effects.sum_stat(0, 'charge_speed_pct', now=0.0), -300.0, places=9)
                   result = runtime.run(duration=4.01, score_observer=observer)
                   self.assertGreater(result.events_processed, 0)
-                  self.assertEqual(
-                      runtime.dispatcher.effects.sum_stat(0, 'charge_speed_pct', now=4.01),
-                      0.0,
-                  )
+                  self.assertEqual(runtime.dispatcher.effects.sum_stat(0, 'charge_speed_pct', now=4.01), 0.0)
                   score = observer.finish(events_processed=result.events_processed)
                   self.assertGreater(score.char_total[0], 0.0)
 
               def test_weapon_bound_trigger_remains_fail_closed(self):
-                  effect = replace(
-                      self._one_shot_effect(),
-                      triggers=(TriggerRule('full_charge', 'full_charge', TriggerMode.EVENT),),
-                  )
-                  self.assertIn(
-                      'cadence:synthetic-charge:live charge speed:charge_speed_pct',
-                      static_normal_score_blockers(_squad(effect)),
-                  )
+                  effect = replace(self._one_shot_effect(), triggers=(TriggerRule('full_charge', 'full_charge', TriggerMode.EVENT),))
+                  self.assertIn('cadence:synthetic-charge:live charge speed:charge_speed_pct', static_normal_score_blockers(_squad(effect)))
 
               def test_non_integer_lifetime_remains_fail_closed(self):
                   effect = replace(self._one_shot_effect(), parameters={'duration_bullets': 1.5})
-                  self.assertIn(
-                      'cadence:synthetic-charge:live charge speed:charge_speed_pct',
-                      static_normal_score_blockers(_squad(effect)),
-                  )
+                  self.assertIn('cadence:synthetic-charge:live charge speed:charge_speed_pct', static_normal_score_blockers(_squad(effect)))
 
               def test_non_self_target_remains_fail_closed(self):
                   effect = self._one_shot_effect()
-                  effect = replace(
-                      effect,
-                      target='all_allies',
-                      target_spec=compile_target('all_allies', actor_by_name={'synthetic-charge': 0}),
-                  )
-                  self.assertIn(
-                      'cadence:synthetic-charge:live charge speed:charge_speed_pct',
-                      static_normal_score_blockers(_squad(effect)),
-                  )
+                  effect = replace(effect, target='all_allies', target_spec=compile_target('all_allies', actor_by_name={'synthetic-charge': 0}))
+                  self.assertIn('cadence:synthetic-charge:live charge speed:charge_speed_pct', static_normal_score_blockers(_squad(effect)))
 
               def test_public_ada_only_removes_charge_speed_lifetime_blocker(self):
                   for name in ('레이드_미하라에이다', '레이드_헬름아쿠아스노우'):
@@ -172,7 +147,6 @@ jobs:
                       self.assertIn('control:에이다', blockers)
                       self.assertIn('normal_delivery:에이다:특수 개조 2:charge_dmg_pct', blockers)
                       self.assertIn('skill_state_delivery:에이다:특수 개조 2:charge_dmg_pct', blockers)
-
                   jig = compile_moris_squad(spec.build_squad(list(snapshot.SQUADS['지그_리코리코']['members'])))
                   jig_blockers = set(static_score_blockers(jig))
                   self.assertNotIn('cadence:에이다:특수 개조:charge_speed_pct', jig_blockers)
@@ -183,7 +157,10 @@ jobs:
           PY
       - name: Focused regressions
         run: |
-          python -m pytest fast_engine/tests/test_damage_charge_speed_bullet_lifetime.py fast_engine/tests/test_damage_dynamic_charge_scoring.py fast_engine/tests/test_damage_helm_bullet_lifetime.py -q
+          python -m unittest \
+            fast_engine.tests.test_damage_charge_speed_bullet_lifetime \
+            fast_engine.tests.test_damage_dynamic_charge_scoring \
+            fast_engine.tests.test_damage_helm_bullet_lifetime
       - name: Patched public blocker delta
         run: |
           python - <<'PY'
@@ -196,7 +173,17 @@ jobs:
               print('PATCHED', name, [x for x in blockers if '에이다' in x])
               assert 'cadence:에이다:특수 개조:charge_speed_pct' not in blockers
           PY
-      - name: Full Fast regression suite
-        run: python -m pytest fast_engine/tests -q --ignore=fast_engine/tests/test_damage_patternless_board.py
+      - name: Full Fast regression suite excluding stale injected board
+        run: |
+          python - <<'PY'
+          import pathlib, subprocess, sys
+          modules=[]
+          for path in sorted(pathlib.Path('fast_engine/tests').glob('test_*.py')):
+              if path.name == 'test_damage_patternless_board.py':
+                  continue
+              modules.append('fast_engine.tests.' + path.stem)
+          print('FAST_TEST_MODULES', len(modules))
+          subprocess.run([sys.executable, '-m', 'unittest', *modules], check=True)
+          PY
       - name: Standardized public frontier and ranking probe
         run: python -m fast_engine.research.public_ranking_probe
