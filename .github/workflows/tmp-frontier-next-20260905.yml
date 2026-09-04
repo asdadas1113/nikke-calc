@@ -11,50 +11,54 @@ permissions:
   contents: write
 
 jobs:
-  promote-brady:
+  finalize:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Apply exact gated candidate
-        run: PYTHONPATH=. python .github/scripts/tmp_brady_stat_applied_ab.py
-      - name: Write permanent regressions
+      - name: Write checkpoint docs and handoff
         run: PYTHONPATH=. python .github/scripts/tmp_brady_write_tests.py
-      - name: Focused production regressions
+      - name: Validate docs and permanent regression
         run: |
+          python -m context.doclint
           python -m unittest -v \
             fast_engine.tests.test_damage_stat_applied_charge_speed \
-            fast_engine.tests.test_damage_full_charge_hit_charge_speed \
-            fast_engine.tests.test_damage_charge_speed_bullet_lifetime \
-            fast_engine.tests.test_damage_charge_hold_control \
-            fast_engine.tests.test_damage_dynamic_charge_scoring \
-            fast_engine.tests.test_damage_ammo_pct_named_event \
-            fast_engine.tests.test_named_buff_event_runtime
-      - name: Full Fast production regressions
-        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
-      - name: Verify production diff
-        run: |
+            fast_engine.tests.test_damage_full_charge_hit_charge_speed
           git diff --check
+      - name: Remove temporary investigation files
+        run: |
+          git rm \
+            .github/workflows/tmp-frontier-next-20260905.yml \
+            .github/scripts/tmp_brady_stat_applied_ab.py \
+            .github/scripts/tmp_brady_write_tests.py
+          test "$(find .github/workflows -maxdepth 1 -type f -printf '%f\n' | sort | tr '\n' ' ')" = "ci.yml pages.yml "
+      - name: Verify finalizer diff
+        run: |
           git status --short
-          printf '%s\n' \
-            fast_engine/engine/dispatcher.py \
-            fast_engine/engine/score.py \
-            fast_engine/tests/test_damage_full_charge_hit_charge_speed.py \
-            fast_engine/tests/test_damage_stat_applied_charge_speed.py \
-            > /tmp/expected.txt
-          { git diff --name-only; git ls-files --others --exclude-standard; } | sort > /tmp/actual.txt
-          sort -o /tmp/expected.txt /tmp/expected.txt
-          diff -u /tmp/expected.txt /tmp/actual.txt
-      - name: Commit production semantic slice
+          python - <<'PY'
+          import subprocess
+          expected = {
+              '.github/scripts/tmp_brady_stat_applied_ab.py',
+              '.github/scripts/tmp_brady_write_tests.py',
+              '.github/workflows/tmp-frontier-next-20260905.yml',
+              'fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md',
+              'fast_engine/research/LESSONS.md',
+              'fast_engine/research/STAT_APPLIED_CHARGE_SPEED_CHECKPOINT_20260905.md',
+          }
+          out = subprocess.check_output(['git', 'status', '--porcelain'], text=True)
+          actual = {line[3:] for line in out.splitlines() if line.strip()}
+          if actual != expected:
+              raise SystemExit(f'unexpected finalizer paths: {sorted(actual ^ expected)}')
+          PY
+      - name: Commit docs and cleanup
         run: |
           git config user.name 'asdadas1113'
           git config user.email 'crony06@gmail.com'
           git add \
-            fast_engine/engine/dispatcher.py \
-            fast_engine/engine/score.py \
-            fast_engine/tests/test_damage_full_charge_hit_charge_speed.py \
-            fast_engine/tests/test_damage_stat_applied_charge_speed.py
-          git commit -m 'fast: certify recipient stat-applied charge speed'
+            fast_engine/research/STAT_APPLIED_CHARGE_SPEED_CHECKPOINT_20260905.md \
+            fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md \
+            fast_engine/research/LESSONS.md
+          git commit -am 'docs: finalize stat-applied checkpoint'
           git push origin HEAD:fast-engine-phase2-20260901
