@@ -44,7 +44,7 @@ jobs:
             fast_engine/tests/test_damage_full_charge_hit_charge_speed.py \
             fast_engine/tests/test_damage_stat_applied_charge_speed.py \
             > /tmp/expected.txt
-          git diff --name-only | sort > /tmp/actual.txt
+          { git diff --name-only; git ls-files --others --exclude-standard; } | sort > /tmp/actual.txt
           sort -o /tmp/expected.txt /tmp/expected.txt
           diff -u /tmp/expected.txt /tmp/actual.txt
       - name: Commit production semantic slice
