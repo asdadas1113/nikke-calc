@@ -1,4 +1,4 @@
-name: tmp Ada charge hold ownership v2
+name: tmp Ada charge hold ownership v3
 
 on:
   workflow_dispatch:
@@ -46,7 +46,7 @@ jobs:
           p = Path('fast_engine/engine/weapon.py')
           s = p.read_text()
           needle = '''_EPS = 1e-9\n_FRAME_RATE_CAP = 60.0\n\n\ndef _round_half_up(value: float) -> int:\n'''
-          replacement = '''_EPS = 1e-9\n_FRAME_RATE_CAP = 60.0\n\n\ndef is_supported_charge_hold_control(member) -> bool:\n    \"\"\"Certify the first sparse pure charge-hold control shape.\"\"\"\n\n    weapon = member.weapon\n    if str(weapon.get(\"fire_mode\") or \"\") != \"charge\":\n        return False\n    if weapon.get(\"is_clip\"):\n        return False\n    control = weapon.get(\"control\") or {}\n    if not isinstance(control, dict) or set(control) != {\"hold\"}:\n        return False\n    hold = control.get(\"hold\")\n    if not isinstance(hold, dict) or hold.get(\"policy\") != \"own_full_burst\":\n        return False\n    if set(hold) - {\"policy\", \"lead\"}:\n        return False\n    try:\n        lead = float(hold.get(\"lead\", 0.5))\n    except (TypeError, ValueError):\n        return False\n    return lead >= 0.0\n\n\ndef _round_half_up(value: float) -> int:\n'''
+          replacement = '''_EPS = 1e-9\n_FRAME_RATE_CAP = 60.0\n\n\ndef is_supported_charge_hold_control(member) -> bool:\n    \"\"\"Certify the first sparse pure charge-hold control shape.\n\n    The supported shape is a non-clip charge weapon with exactly one control:\n    ``hold.policy == own_full_burst`` and an optional non-negative ``lead``.\n    Mixed controls (tap-fire/cover/reload/sequence) stay fail-closed. The\n    separate score-safety gate owns ``cover_during_delay`` reachability.\n    \"\"\"\n\n    weapon = member.weapon\n    if str(weapon.get(\"fire_mode\") or \"\") != \"charge\":\n        return False\n    if weapon.get(\"is_clip\"):\n        return False\n    control = weapon.get(\"control\") or {}\n    if not isinstance(control, dict) or set(control) != {\"hold\"}:\n        return False\n    hold = control.get(\"hold\")\n    if not isinstance(hold, dict) or hold.get(\"policy\") != \"own_full_burst\":\n        return False\n    if set(hold) - {\"policy\", \"lead\"}:\n        return False\n    try:\n        lead = float(hold.get(\"lead\", 0.5))\n    except (TypeError, ValueError):\n        return False\n    return lead >= 0.0\n\n\ndef _round_half_up(value: float) -> int:\n'''
           assert needle in s
           s = s.replace(needle, replacement, 1)
 
@@ -136,17 +136,19 @@ jobs:
           from fast_engine.engine.weapon import is_supported_charge_hold_control
           from fast_engine.tests.test_damage_dynamic_charge_scoring import _charge_speed_effect, _squad
 
-          def _controlled_squad(*, mixed=False, cover_during_delay=False):
-              base = _squad(_charge_speed_effect()).members[0]
+          def _controlled_squad(*, mixed=False, cover_during_delay=False, include_speed=False):
+              effect = _charge_speed_effect()
+              base = _squad(effect).members[0]
               control = {'hold': {'policy': 'own_full_burst', 'lead': 0.5}}
               if mixed:
                   control['tap_fire'] = {'rate': 3.6, 'release': 0.03}
-              member = replace(base, effects=(), weapon={**base.weapon, 'control': control, 'cover_during_delay': cover_during_delay})
-              return CompiledSquad((member,), TriggerIndex.from_effects((), actor_count=1))
+              effects = (effect,) if include_speed else ()
+              member = replace(base, effects=effects, weapon={**base.weapon, 'control': control, 'cover_during_delay': cover_during_delay})
+              return CompiledSquad((member,), TriggerIndex.from_effects(effects, actor_count=1))
 
           class ChargeHoldControlTests(unittest.TestCase):
               def test_pure_hold_latches_until_observed_release_and_survives_speed_change(self):
-                  squad = _controlled_squad()
+                  squad = _controlled_squad(include_speed=True)
                   self.assertTrue(is_supported_charge_hold_control(squad.members[0]))
                   self.assertEqual(static_normal_score_blockers(squad), ())
                   runtime = BurstRuntime(squad, BurstPolicy(duration=4.0, first_burst_time=10.0), EnemyStaticProfile(defense=0.0, core_uptime=0.0, core_px=0.0, duration=4.0))
@@ -164,7 +166,7 @@ jobs:
                   release=st.phase_end
                   self.assertAlmostEqual(release, moris_observed_tick(2.5, horizon=4.0), places=9)
                   self.assertEqual(st.ammo, 20)
-                  speed=_charge_speed_effect()
+                  speed=squad.members[0].effects[0]
                   runtime.dispatcher.effects.activate(speed, 0, 1.2, runtime.scheduler)
                   runtime.weapons.sync(1.2)
                   self.assertTrue(st.charge_latched)
@@ -211,6 +213,20 @@ jobs:
 
           if __name__ == '__main__': unittest.main()
           PY
+
+      - name: Update stale Ada frontier expectation in runner
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('fast_engine/tests/test_damage_charge_speed_bullet_lifetime.py')
+          s=p.read_text()
+          s=s.replace('def test_public_ada_only_removes_charge_speed_lifetime_blocker(self):', 'def test_public_ada_charge_hold_unlocks_one_shot_delivery(self):', 1)
+          old='''            self.assertIn("control:에이다", blockers)\n            self.assertIn(\n                "normal_delivery:에이다:특수 개조 2:charge_dmg_pct",\n                blockers,\n            )\n            self.assertIn(\n                "skill_state_delivery:에이다:특수 개조 2:charge_dmg_pct",\n                blockers,\n            )\n'''
+          new='''            self.assertNotIn("control:에이다", blockers)\n            self.assertNotIn(\n                "normal_delivery:에이다:특수 개조 2:charge_dmg_pct",\n                blockers,\n            )\n            self.assertNotIn(\n                "skill_state_delivery:에이다:특수 개조 2:charge_dmg_pct",\n                blockers,\n            )\n'''
+          assert old in s
+          p.write_text(s.replace(old,new,1))
+          PY
+          git diff --check
 
       - name: Focused regressions
         run: |
