@@ -21,6 +21,13 @@ jobs:
           python-version: '3.13'
       - name: Write checkpoint and handoff update
         run: python .github/scripts/tmp_finalize_periodic_docs.py
+      - name: Normalize documentation EOF
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('fast_engine/research/LESSONS.md')
+          p.write_text(p.read_text(encoding='utf-8').rstrip() + '\n', encoding='utf-8')
+          PY
       - name: Validate docs and permanent regression
         run: |
           python -m context.doclint
