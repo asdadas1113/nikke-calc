@@ -886,8 +886,39 @@ class TriggerDispatcher:
         )
 
     @staticmethod
+    def _charge_speed_bullet_lifetime_shape_supported(effect: "CompiledEffect") -> bool:
+        """Certify one-shot self charge-speed state from burst cast."""
+        if (
+            effect.capability.disposition is not CapabilityDisposition.PLANNED
+            or set(effect.capability.blockers) != {"field:duration_bullets"}
+            or effect.effect_type != "buff"
+            or (effect.stat or "") != "charge_speed_pct"
+            or effect.target_spec.mode is not TargetMode.SELF
+            or effect.duration not in (None, -1.0)
+            or effect.condition_rules
+            or set(effect.parameters) != {"duration_bullets"}
+        ):
+            return False
+        max_stack = effect.max_stack if effect.max_stack is not None else 1.0
+        if float(max_stack) != 1.0:
+            return False
+        try:
+            bullets = float(effect.parameters["duration_bullets"])
+        except (TypeError, ValueError):
+            return False
+        if bullets != 1.0:
+            return False
+        return (
+            len(effect.triggers) == 1
+            and effect.triggers[0].mode is TriggerMode.EVENT
+            and effect.triggers[0].event_key == "burst_cast"
+        )
+
+    @staticmethod
     def is_executable_effect(effect: "CompiledEffect") -> bool:
         stat = effect.stat or ""
+        if TriggerDispatcher._charge_speed_bullet_lifetime_shape_supported(effect):
+            return True
         if (
             TriggerDispatcher._periodic_permanent_self_direct_stack_shape_supported(effect)
             or TriggerDispatcher._self_stack_reach_marker_shape_supported(effect)

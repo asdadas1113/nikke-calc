@@ -129,9 +129,7 @@ def _is_dynamic_charge_score_supported(squad: CompiledSquad, effect) -> bool:
         return False
     if not _charge_actor_indexes(squad):
         return True
-    if effect.effect_type != "buff":
-        return False
-    if effect.parameters.get("duration_bullets") is not None:
+    if effect.effect_type != "buff" or not _valid_dynamic_bullet_lifetime(effect):
         return False
     return TriggerDispatcher.is_executable_effect(effect)
 
