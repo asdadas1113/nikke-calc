@@ -8,53 +8,33 @@ on:
       - '.github/workflows/tmp-ada-one-shot.yml'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  ab:
+  productionize:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: fast-engine-phase2-20260901
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Baseline Ada blockers
-        run: |
-          python - <<'PY'
-          from context import snapshot, spec
-          from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.score import static_score_blockers
-          expected = {
-              '레이드_미하라에이다': {
-                  'cadence:에이다:특수 개조:charge_speed_pct',
-                  'normal_delivery:에이다:특수 개조 2:charge_dmg_pct',
-                  'skill_state_delivery:에이다:특수 개조 2:charge_dmg_pct',
-                  'control:에이다',
-              },
-              '레이드_헬름아쿠아스노우': {
-                  'cadence:에이다:특수 개조:charge_speed_pct',
-                  'normal_delivery:에이다:특수 개조 2:charge_dmg_pct',
-                  'skill_state_delivery:에이다:특수 개조 2:charge_dmg_pct',
-                  'control:에이다',
-              },
-              '지그_리코리코': {'cadence:에이다:특수 개조:charge_speed_pct'},
-          }
-          for name, required in expected.items():
-              compiled = compile_moris_squad(spec.build_squad(list(snapshot.SQUADS[name]['members'])))
-              blockers = set(static_score_blockers(compiled))
-              assert not (required - blockers), (name, required - blockers, sorted(blockers))
-              print('BASELINE', name, sorted(x for x in blockers if '에이다' in x))
-          PY
-      - name: Apply runner-only generic patch
+
+      - name: Apply narrowly certified production patch
         run: |
           python - <<'PY'
           from pathlib import Path
+
           p = Path('fast_engine/engine/dispatcher.py')
           s = p.read_text()
           needle = '''    @staticmethod\n    def is_executable_effect(effect: "CompiledEffect") -> bool:\n        stat = effect.stat or ""\n'''
-          replacement = '''    @staticmethod\n    def _charge_speed_bullet_lifetime_shape_supported(effect: "CompiledEffect") -> bool:\n        \"\"\"Certify self charge-speed states consumed by a later burst-cast shot.\"\"\"\n        if (\n            effect.capability.disposition is not CapabilityDisposition.PLANNED\n            or set(effect.capability.blockers) != {"field:duration_bullets"}\n            or effect.effect_type != "buff"\n            or (effect.stat or "") != "charge_speed_pct"\n            or effect.target_spec.mode is not TargetMode.SELF\n            or effect.duration not in (None, -1.0)\n            or effect.condition_rules\n            or set(effect.parameters) != {"duration_bullets"}\n        ):\n            return False\n        max_stack = effect.max_stack if effect.max_stack is not None else 1.0\n        if float(max_stack) != 1.0:\n            return False\n        try:\n            bullets = float(effect.parameters["duration_bullets"])\n        except (TypeError, ValueError):\n            return False\n        if bullets < 1.0 or not bullets.is_integer():\n            return False\n        return (\n            len(effect.triggers) == 1\n            and effect.triggers[0].mode is TriggerMode.EVENT\n            and effect.triggers[0].event_key == "burst_cast"\n        )\n\n    @staticmethod\n    def is_executable_effect(effect: "CompiledEffect") -> bool:\n        stat = effect.stat or ""\n        if TriggerDispatcher._charge_speed_bullet_lifetime_shape_supported(effect):\n            return True\n'''
+          replacement = '''    @staticmethod\n    def _charge_speed_bullet_lifetime_shape_supported(effect: "CompiledEffect") -> bool:\n        \"\"\"Certify one-shot self charge-speed state from burst cast.\"\"\"\n        if (\n            effect.capability.disposition is not CapabilityDisposition.PLANNED\n            or set(effect.capability.blockers) != {"field:duration_bullets"}\n            or effect.effect_type != "buff"\n            or (effect.stat or "") != "charge_speed_pct"\n            or effect.target_spec.mode is not TargetMode.SELF\n            or effect.duration not in (None, -1.0)\n            or effect.condition_rules\n            or set(effect.parameters) != {"duration_bullets"}\n        ):\n            return False\n        max_stack = effect.max_stack if effect.max_stack is not None else 1.0\n        if float(max_stack) != 1.0:\n            return False\n        try:\n            bullets = float(effect.parameters["duration_bullets"])\n        except (TypeError, ValueError):\n            return False\n        if bullets != 1.0:\n            return False\n        return (\n            len(effect.triggers) == 1\n            and effect.triggers[0].mode is TriggerMode.EVENT\n            and effect.triggers[0].event_key == "burst_cast"\n        )\n\n    @staticmethod\n    def is_executable_effect(effect: "CompiledEffect") -> bool:\n        stat = effect.stat or ""\n        if TriggerDispatcher._charge_speed_bullet_lifetime_shape_supported(effect):\n            return True\n'''
           assert needle in s
           p.write_text(s.replace(needle, replacement, 1))
+
           p = Path('fast_engine/engine/score.py')
           s = p.read_text()
           needle = '''    if effect.effect_type != "buff":\n        return False\n    if effect.parameters.get("duration_bullets") is not None:\n        return False\n    return TriggerDispatcher.is_executable_effect(effect)\n'''
@@ -62,98 +42,220 @@ jobs:
           assert needle in s
           p.write_text(s.replace(needle, replacement, 1))
           PY
-      - name: Add runner-only focused regression
+
+      - name: Write permanent focused regression
         run: |
           cat > fast_engine/tests/test_damage_charge_speed_bullet_lifetime.py <<'PY'
           from __future__ import annotations
+
           import unittest
           from dataclasses import replace
+
           from context import snapshot, spec
           from fast_engine.engine.burst import BurstPolicy
           from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.capabilities import CapabilityDisposition
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.model import EnemyStaticProfile
-          from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers, static_normal_score_blockers
+          from fast_engine.engine.score import (
+              StaticNormalAttackObserver,
+              static_normal_score_blockers,
+              static_score_blockers,
+          )
           from fast_engine.engine.targets import compile_target
           from fast_engine.engine.triggers import TriggerMode, TriggerRule
-          from fast_engine.tests.test_damage_dynamic_charge_scoring import _charge_speed_effect, _squad
+          from fast_engine.tests.test_damage_dynamic_charge_scoring import (
+              _charge_speed_effect,
+              _squad,
+          )
+
 
           class ChargeSpeedBulletLifetimeTests(unittest.TestCase):
               @staticmethod
               def _one_shot_effect():
                   base = _charge_speed_effect()
                   return replace(
-                      base, value=-300.0, duration=None,
-                      parameters={'duration_bullets': 1},
-                      triggers=(TriggerRule('burst_cast', 'burst_cast', TriggerMode.EVENT),),
-                      capability=replace(base.capability, disposition=CapabilityDisposition.PLANNED, blockers=('field:duration_bullets',)),
+                      base,
+                      value=-300.0,
+                      duration=None,
+                      parameters={"duration_bullets": 1},
+                      triggers=(
+                          TriggerRule("burst_cast", "burst_cast", TriggerMode.EVENT),
+                      ),
+                      capability=replace(
+                          base.capability,
+                          disposition=CapabilityDisposition.PLANNED,
+                          blockers=("field:duration_bullets",),
+                      ),
                   )
 
               def test_self_burst_cast_one_shot_slows_consuming_charge_then_expires(self):
                   effect = self._one_shot_effect()
                   squad = _squad(effect)
-                  self.assertNotIn('cadence:synthetic-charge:live charge speed:charge_speed_pct', static_normal_score_blockers(squad))
-                  runtime = BurstRuntime(squad, BurstPolicy(duration=4.05, first_burst_time=30.0), EnemyStaticProfile(defense=0.0, core_uptime=0.0, core_px=0.0, duration=4.05))
+                  self.assertNotIn(
+                      "cadence:synthetic-charge:live charge speed:charge_speed_pct",
+                      static_normal_score_blockers(squad),
+                  )
+                  runtime = BurstRuntime(
+                      squad,
+                      BurstPolicy(duration=4.05, first_burst_time=30.0),
+                      EnemyStaticProfile(
+                          defense=0.0,
+                          core_uptime=0.0,
+                          core_px=0.0,
+                          duration=4.05,
+                      ),
+                  )
                   observer = StaticNormalAttackObserver(runtime, duration=4.05)
                   self.assertEqual(observer.dynamic_charge_actors, (0,))
-                  self.assertTrue(runtime.dispatcher.effects.dynamic_bullet_lifetime_supported(0))
-                  runtime.dispatcher.effects.activate(effect, 0, 0.0, runtime.scheduler)
+                  self.assertTrue(
+                      runtime.dispatcher.effects.dynamic_bullet_lifetime_supported(0)
+                  )
+                  runtime.dispatcher.effects.activate(
+                      effect, 0, 0.0, runtime.scheduler
+                  )
+
+                  # -300% on a 1.0 s base charge makes a 4.0 s charge. Moris
+                  # observes that deadline on the following outer tick, so the
+                  # one-shot state is still live at exactly 4.0 s.
                   runtime.run(duration=4.0, score_observer=observer)
-                  self.assertAlmostEqual(runtime.dispatcher.effects.sum_stat(0, 'charge_speed_pct', now=4.0), -300.0, places=9)
+                  self.assertAlmostEqual(
+                      runtime.dispatcher.effects.sum_stat(
+                          0, "charge_speed_pct", now=4.0
+                      ),
+                      -300.0,
+                      places=9,
+                  )
+
+                  # The consuming physical charge shot is scored with the state,
+                  # then the bullet lifetime is removed post-shot.
                   result = runtime.run(duration=4.05, score_observer=observer)
-                  self.assertEqual(runtime.dispatcher.effects.sum_stat(0, 'charge_speed_pct', now=4.05), 0.0)
+                  self.assertEqual(
+                      runtime.dispatcher.effects.sum_stat(
+                          0, "charge_speed_pct", now=4.05
+                      ),
+                      0.0,
+                  )
                   score = observer.finish(events_processed=result.events_processed)
                   self.assertGreater(score.char_total[0], 0.0)
 
               def test_weapon_bound_trigger_remains_fail_closed(self):
-                  effect = replace(self._one_shot_effect(), triggers=(TriggerRule('full_charge', 'full_charge', TriggerMode.EVENT),))
-                  self.assertIn('cadence:synthetic-charge:live charge speed:charge_speed_pct', static_normal_score_blockers(_squad(effect)))
+                  effect = replace(
+                      self._one_shot_effect(),
+                      triggers=(
+                          TriggerRule("full_charge", "full_charge", TriggerMode.EVENT),
+                      ),
+                  )
+                  self.assertIn(
+                      "cadence:synthetic-charge:live charge speed:charge_speed_pct",
+                      static_normal_score_blockers(_squad(effect)),
+                  )
 
               def test_non_integer_lifetime_remains_fail_closed(self):
-                  effect = replace(self._one_shot_effect(), parameters={'duration_bullets': 1.5})
-                  self.assertIn('cadence:synthetic-charge:live charge speed:charge_speed_pct', static_normal_score_blockers(_squad(effect)))
+                  effect = replace(
+                      self._one_shot_effect(), parameters={"duration_bullets": 1.5}
+                  )
+                  self.assertIn(
+                      "cadence:synthetic-charge:live charge speed:charge_speed_pct",
+                      static_normal_score_blockers(_squad(effect)),
+                  )
+
+              def test_multi_bullet_lifetime_remains_fail_closed(self):
+                  effect = replace(
+                      self._one_shot_effect(), parameters={"duration_bullets": 2}
+                  )
+                  self.assertIn(
+                      "cadence:synthetic-charge:live charge speed:charge_speed_pct",
+                      static_normal_score_blockers(_squad(effect)),
+                  )
 
               def test_non_self_target_remains_fail_closed(self):
                   effect = self._one_shot_effect()
-                  effect = replace(effect, target='all_allies', target_spec=compile_target('all_allies', actor_by_name={'synthetic-charge': 0}))
-                  self.assertIn('cadence:synthetic-charge:live charge speed:charge_speed_pct', static_normal_score_blockers(_squad(effect)))
+                  effect = replace(
+                      effect,
+                      target="all_allies",
+                      target_spec=compile_target(
+                          "all_allies", actor_by_name={"synthetic-charge": 0}
+                      ),
+                  )
+                  self.assertIn(
+                      "cadence:synthetic-charge:live charge speed:charge_speed_pct",
+                      static_normal_score_blockers(_squad(effect)),
+                  )
 
               def test_public_ada_only_removes_charge_speed_lifetime_blocker(self):
-                  for name in ('레이드_미하라에이다', '레이드_헬름아쿠아스노우'):
-                      compiled = compile_moris_squad(spec.build_squad(list(snapshot.SQUADS[name]['members'])))
+                  for name in ("레이드_미하라에이다", "레이드_헬름아쿠아스노우"):
+                      compiled = compile_moris_squad(
+                          spec.build_squad(list(snapshot.SQUADS[name]["members"]))
+                      )
                       blockers = set(static_score_blockers(compiled))
-                      self.assertNotIn('cadence:에이다:특수 개조:charge_speed_pct', blockers)
-                      self.assertIn('control:에이다', blockers)
-                      self.assertIn('normal_delivery:에이다:특수 개조 2:charge_dmg_pct', blockers)
-                      self.assertIn('skill_state_delivery:에이다:특수 개조 2:charge_dmg_pct', blockers)
-                  jig = compile_moris_squad(spec.build_squad(list(snapshot.SQUADS['지그_리코리코']['members'])))
-                  jig_blockers = set(static_score_blockers(jig))
-                  self.assertNotIn('cadence:에이다:특수 개조:charge_speed_pct', jig_blockers)
-                  self.assertFalse(any('특수 개조 2:charge_dmg_pct' in x for x in jig_blockers))
+                      self.assertNotIn(
+                          "cadence:에이다:특수 개조:charge_speed_pct", blockers
+                      )
+                      self.assertIn("control:에이다", blockers)
+                      self.assertIn(
+                          "normal_delivery:에이다:특수 개조 2:charge_dmg_pct",
+                          blockers,
+                      )
+                      self.assertIn(
+                          "skill_state_delivery:에이다:특수 개조 2:charge_dmg_pct",
+                          blockers,
+                      )
 
-          if __name__ == '__main__':
+                  jig = compile_moris_squad(
+                      spec.build_squad(list(snapshot.SQUADS["지그_리코리코"]["members"]))
+                  )
+                  jig_blockers = set(static_score_blockers(jig))
+                  self.assertNotIn(
+                      "cadence:에이다:특수 개조:charge_speed_pct", jig_blockers
+                  )
+                  self.assertFalse(
+                      any(
+                          "특수 개조 2:charge_dmg_pct" in blocker
+                          for blocker in jig_blockers
+                      )
+                  )
+
+
+          if __name__ == "__main__":
               unittest.main()
           PY
+
       - name: Focused regressions
-        run: python -m unittest fast_engine.tests.test_damage_charge_speed_bullet_lifetime fast_engine.tests.test_damage_dynamic_charge_scoring fast_engine.tests.test_damage_helm_bullet_lifetime
-      - name: Patched public blocker delta
+        run: |
+          python -m unittest \
+            fast_engine.tests.test_damage_charge_speed_bullet_lifetime \
+            fast_engine.tests.test_damage_dynamic_charge_scoring \
+            fast_engine.tests.test_damage_helm_bullet_lifetime
+
+      - name: Public blocker delta
         run: |
           python - <<'PY'
           from context import snapshot, spec
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.score import static_score_blockers
-          for name in ('레이드_미하라에이다', '레이드_헬름아쿠아스노우', '지그_리코리코'):
-              compiled = compile_moris_squad(spec.build_squad(list(snapshot.SQUADS[name]['members'])))
+
+          for name in (
+              '레이드_미하라에이다',
+              '레이드_헬름아쿠아스노우',
+              '지그_리코리코',
+          ):
+              compiled = compile_moris_squad(
+                  spec.build_squad(list(snapshot.SQUADS[name]['members']))
+              )
               blockers = tuple(static_score_blockers(compiled))
               print('PATCHED', name, [x for x in blockers if '에이다' in x])
               assert 'cadence:에이다:특수 개조:charge_speed_pct' not in blockers
           PY
+
       - name: Full Fast regression suite excluding stale injected board
         run: |
           python - <<'PY'
-          import pathlib, subprocess, sys
-          modules=[]
+          import pathlib
+          import subprocess
+          import sys
+
+          modules = []
           for path in sorted(pathlib.Path('fast_engine/tests').glob('test_*.py')):
               if path.name == 'test_damage_patternless_board.py':
                   continue
@@ -161,5 +263,17 @@ jobs:
           print('FAST_TEST_MODULES', len(modules))
           subprocess.run([sys.executable, '-m', 'unittest', *modules], check=True)
           PY
+
       - name: Standardized public frontier and ranking probe
         run: python -m fast_engine.research.public_ranking_probe
+
+      - name: Commit production slice
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add fast_engine/engine/dispatcher.py fast_engine/engine/score.py
+          git add -f fast_engine/tests/test_damage_charge_speed_bullet_lifetime.py
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m 'fast: certify one-shot charge-speed lifetime'
+          git push origin HEAD:fast-engine-phase2-20260901
