@@ -11,24 +11,27 @@
 가장 먼저 읽을 문서:
 
 1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md`
-2. `fast_engine/research/PATTERNLESS_ENCOUNTER_EVENT_CHECKPOINT_20260905.md`
-3. `fast_engine/research/HANDOFF_FAST_ENGINE_20260904.md`
-4. `fast_engine/research/CROWN_SELF_STACK_HEAL_CHECKPOINT_20260904.md`
-5. `fast_engine/research/COVERAGE_FRONTIER_CHECKPOINT_20260904.md`
+2. `fast_engine/research/ADA_ONE_SHOT_CHARGE_SPEED_CHECKPOINT_20260905.md`
+3. `fast_engine/research/PATTERNLESS_ENCOUNTER_EVENT_CHECKPOINT_20260905.md`
+4. `fast_engine/research/COVERAGE_FRONTIER_CHECKPOINT_20260904.md`
+5. `fast_engine/research/CROWN_SELF_STACK_HEAL_CHECKPOINT_20260904.md`
 6. `fast_engine/research/TIMING_SEMANTICS_RANKING_CHECKPOINT_20260904.md`
 
-현재 production HEAD 계열 핵심 commits:
+현재 최신 production semantic commit:
 
-- `4c78a27f024074a9e19391efc3d4ed6125c2d667` — patternless static score에서 unreachable encounter event blocker 제거
-- `68d8dea58e4b05a630fc1d6545dcb905a7c7cfa8` — finite self-state-end + enemy named-stack damage/remove support
+- `f70871e36ddf28a2474e7e25d6d7254cf9fe26cd` — `fast: certify one-shot charge-speed lifetime`
+
+직전 주요 commits:
+
+- `4c78a27f024074a9e19391efc3d4ed6125c2d667` — patternless unreachable encounter-event blocker 제거
+- `68d8dea58e4b05a630fc1d6545dcb905a7c7cfa8` — finite self-state-end + enemy named-stack damage/remove
 - `6a4c8346062eb3284ae34558d93675184b4ab154` — Crown self-stack heal-received bridge
 - `46af96866b9462ec22455b9c9f5121cfa3b35bdd` — last-bullet damage delivery
 - `0f522925b2cac86ab74329a9ce4d02347f739abe` — Moris outer-tick timing alignment
-- `27b389ceec3f5a5ecf2b6c28b0091aa36092ebb3` / `5818329270962ef9ec46c8e259f9d79dd787d726` — public ranking exact-membership dedupe contract
 
 ---
 
-## 1. 현재 phase
+## 1. 현재 phase / public accounting
 
 현재는 **coverage expansion** 단계다.
 
@@ -44,7 +47,7 @@ Fast-certified real public memberships:
 - certified: `2`
 - coverage gaps: `21`
 
-최근 standardized public ranking:
+latest standardized public ranking:
 
 - clean relative error median: `+0.0626832%`
 - min: `+0.0349533%`
@@ -56,25 +59,66 @@ optimizer production integration은 아직 하지 않는다.
 
 ---
 
-## 2. 최근 완료 — Asuka `섬멸`
+## 2. 최신 완료 — Ada one-shot charge-speed lifetime
 
-`레이드_델타`의 `아스카 : WILLE` `섬멸`을 character-specific hack 없이 좁은 generic state-end stack semantics로 열었다.
+Ada `특수 개조`의 다음 shape를 좁게 generic certification 했다.
 
-- production: `68d8dea58e4b05a630fc1d6545dcb905a7c7cfa8`
-- 첫 state-end 약 `12.35s`
-- enemy `안티 AT 필드` 30 stack을 읽어 damage 후 같은 timestamp에 제거
-- Moris `섬멸`: `1,303,500`
-- Fast: `1,394,345.58` (`+6.97%`)
-- 같은 Asuka 기존 비-섬멸 damage 오차가 `+8.29%`라 mechanic-specific formula regression 근거 없음
-- `레이드_델타`는 Little Mermaid `거품 난사` blocker 하나만 남음
+- self `charge_speed_pct`
+- trigger exactly `burst_cast`
+- `duration_bullets:1`
+- one stack
+- no conditions
+- capability blocker exactly `field:duration_bullets`
 
-Nayuta periodic named-stack chain은 이미 지원된다. 실제 남은 `기억 연소`는 `SMG -> RL` cross-class actor migration이 필요해 보류했다.
+production:
+
+- `f70871e36ddf28a2474e7e25d6d7254cf9fe26cd`
+
+Fast는 기존 dynamic charge runtime의 physical-shot 경계를 재사용한다. 새 전역 per-shot loop는 없다. consuming charge shot은 상태를 적용한 cadence로 처리되고, shot score/hit 계열 뒤 post-shot bullet consume에서 상태가 제거된다.
+
+outer-tick regression:
+
+- synthetic base charge 1.0s + `charge_speed_pct=-300`
+- 4.0s에는 state 유지
+- 다음 observed shot 이후 4.05s에는 state 제거
+
+production fail-closed:
+
+- weapon-bound trigger
+- `duration_bullets:1.5`
+- `duration_bullets:2`
+- non-self target
+
+검증:
+
+- focused: `19 tests` 통과
+- full Fast: `55 modules / 240 tests` 통과
+- standardized public ranking 통과
+
+blocker 변화:
+
+- cadence `68 -> 66`
+- 나머지 family count 불변
+
+두 non-`지그_*` Ada public team에서 정확히 `cadence:에이다:특수 개조:charge_speed_pct`만 제거됐다.
+
+`레이드_미하라에이다` / `레이드_헬름아쿠아스노우`에는 여전히 다음이 남는다.
+
+- `control:에이다`
+- `normal_delivery:에이다:특수 개조 2:charge_dmg_pct`
+- `skill_state_delivery:에이다:특수 개조 2:charge_dmg_pct`
+
+따라서 certified count는 2 그대로다.
+
+상세 근거:
+
+- `fast_engine/research/ADA_ONE_SHOT_CHARGE_SPEED_CHECKPOINT_20260905.md`
 
 ---
 
-## 3. 최근 완료 — patternless encounter event score certification
+## 3. 직전 완료 — patternless encounter events
 
-표준 static enemy 계약에서 발생하지 않는 두 encounter event를 score blocker에서만 제외했다.
+표준 static enemy에서 발생하지 않는 다음 encounter event는 score blocker에서만 unreachable로 취급한다.
 
 - `enemy_death`
 - `event:part_destroy`
@@ -83,34 +127,15 @@ production:
 
 - `4c78a27f024074a9e19391efc3d4ed6125c2d667`
 
-Moris 180초 실측:
-
-- `레이드_볼륨`: encounter event notify `0`, `프리스타일` activation `0`
-- `레이드_이브레이븐`: encounter event notify `0`, `일점 공격` activation `0`
-
-정확히 제거된 blockers:
-
-- Volume `프리스타일` normal delivery
-- Volume `프리스타일` skill-state delivery
-- Raven `일점 공격` skill-state delivery
-
-runtime dispatcher는 넓히지 않았다. Crown `heal_received` guard도 그대로 남는다.
-
-production gate:
-
-- focused `3 passed`
-- Fast pytest `234 passed, 27 subtests passed`
-- standardized public ranking success
-
-세부 근거는 `PATTERNLESS_ENCOUNTER_EVENT_CHECKPOINT_20260905.md` 참조.
+제거된 blocker는 Volume 2개, Raven 1개뿐이며 runtime dispatcher를 broad-enable하지 않았다. Crown external `heal_received` 등 named-event blocker는 계속 fail closed다.
 
 ---
 
 ## 4. 최신 blocker frontier
 
-post-patternless unique-23 family counts:
+post-Ada unique-23 family counts:
 
-- `cadence`: `68`
+- `cadence`: `66`
 - `skill_state_delivery`: `50`
 - `normal_delivery`: `49`
 - `skill_damage`: `27`
@@ -120,66 +145,58 @@ post-patternless unique-23 family counts:
 
 unsupported families: `0`
 
-반복도가 높은 큰 축:
+반복도가 높은 큰 축은 여전히 다음과 같다.
 
-- Little Mermaid `거품 난사` — 6 teams, `squad_ammo_consume:500`; 기존 실측 chronology mismatch 때문에 계속 보류
-- Mokdan `정정당당 승부다!` — 5 teams, weapon change
-- Crown `로얄 에타이어 4` — external heal 가능 4 teams만 계속 blocked
-- Privaty reload/max-ammo — 4 teams; recipient safety 문제와 묶여 있어 broad enable 금지
-- Nayuta `기억 연소` — 3 teams, cross-class `SMG -> RL`
+- Little Mermaid `거품 난사` — team-global `squad_ammo_consume:500`; chronology mismatch 때문에 보류
+- Mokdan `정정당당 승부다!` — weapon change
+- Crown `로얄 에타이어 4` — external heal 가능 팀은 계속 blocked
+- Privaty reload/max-ammo — recipient safety 문제와 결합
+- Nayuta `기억 연소` — cross-class `SMG -> RL`
 
 ---
 
 ## 5. 계속 보류하는 축
 
-다음은 근거 없이 broad-enable하지 않는다.
+근거 없이 broad-enable하지 않는다.
 
 - arbitrary/external `heal_received` chronology
 - Little Mermaid team-global `squad_ammo_consume`
-- cross-class weapon change
-- broad weapon-change
-- HP-derived state의 상수화
-- unsafe recipient를 무시한 reload/max-ammo enable
-- generic `bonus_damage` family enable
-
-Little Mermaid team-global ammo는 기존 real 180초 probe에서 Moris 34,587 vs Fast 34,476 physical shots였고 일부 500-shot crossing이 약 +0.6~0.7초 늦었다.
+- cross-class / broad weapon change
+- HP-derived state 상수화
+- unsafe recipient를 무시한 reload/max-ammo
+- generic `bonus_damage` family
+- arbitrary multi-bullet cadence lifetime
 
 ---
 
 ## 6. 다음 단일 checkpoint
 
-다음 우선 후보는 **one-shot / `duration_bullets:1` state lifetime**이다.
+다음 우선 후보는 **Ada `특수 개조 2` one-shot direct-damage lifetime**이다.
 
-대표 public shape:
+actual public shape:
 
-- Ada `특수 개조` — self `charge_speed_pct`, burst_cast, `duration_bullets:1`
-- Ada `특수 개조 2` — self `charge_dmg_pct`, burst_cast, `duration_bullets:1`
+- self `charge_dmg_pct=+1500`
+- `burst_cast`
+- `duration_bullets:1`
 
-이 후보가 좋은 이유:
+진행 순서:
 
-- Fast는 charge shot boundary 자체를 이미 소유한다.
-- duration-bullet 관련 infrastructure가 일부 이미 존재한다.
-- HP/team-global ammo/cross-class weapon transition을 새로 요구하지 않는다.
-- 두 public teams에서 반복된다.
+1. actual compiled effect와 capability blocker 재확인
+2. 기존 Helm charge direct-damage bullet-lifetime support와 비교
+3. Moris에서 burst 후 consuming physical charge shot의 damage term 적용/제거 순서 실측
+4. Fast score delivery가 동일 shot에서 적용 후 post-shot consume 되는지 확인
+5. runner-only narrow generic A/B
+6. positive + fail-closed regression
+7. full Fast regression + standardized public ranking
 
-다음 순서:
-
-1. actual Ada compiled effect / base weapon / control shape 확인
-2. Moris burst 후 정확히 어느 shot에 `특수 개조`/`특수 개조 2`가 적용되고 언제 제거되는지 실측
-3. Fast existing bullet-lifetime support와 비교
-4. runner-only generic A/B
-5. positive + fail-closed regression
-6. full Fast / near-tie / public frontier
-7. certified membership이 증가하면 full ranking validation
-
-단, Ada control 자체가 별도 blocker라 이 slice만으로 certified count가 증가하지 않을 가능성이 높다. 그래도 generic semantic이 좁고 재사용 가능하면 채택할 수 있다.
+Ada `control`은 별도 blocker이므로 이 slice만으로 certified count 증가를 목표로 하지 않는다.
 
 ---
 
 ## 7. 고정 원칙
 
 - Fast는 broad scorer이지 Moris 2.0이 아니다.
-- unsupported comparison-critical mechanic은 fail closed.
+- comparison-critical unsupported는 fail closed.
 - character-name hack 금지.
 - fitted coefficient 금지.
 - global 1/60 combat loop 금지.
@@ -191,10 +208,15 @@ Little Mermaid team-global ammo는 기존 real 180초 probe에서 Moris 34,587 v
 
 ---
 
-## 8. cleanup 계약
+## 8. CI / cleanup 계약
 
-patternless encounter 조사용 temporary workflow/helper는 checkpoint에서 모두 제거한다.
+`f70871e`는 temporary production workflow의 `GITHUB_TOKEN` push로 만들어져 해당 SHA 자체의 branch-push canonical CI가 자동 생성되지 않았다.
 
-영구 regression은 canonical CI가 실제 발견하도록 `fast_engine/tests/test_damage_patternless_encounter_events.py`의 `unittest.TestCase` 형태로 유지한다.
+따라서 이 handoff/checkpoint 갱신과 temporary workflow 제거를 같은 follow-up commit으로 묶어 canonical `ci.yml`을 트리거한다. 이 follow-up commit은 production engine/test tree를 그대로 포함하므로 canonical CI가 새 permanent regression을 실제 discovery하는 최종 gate다.
+
+최종 cleanup 후 `.github/workflows`에는 다음만 남겨야 한다.
+
+- `ci.yml`
+- `pages.yml`
 
 `master`는 그대로 둔다.
