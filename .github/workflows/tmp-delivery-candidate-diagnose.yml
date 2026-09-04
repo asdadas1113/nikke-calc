@@ -6,14 +6,12 @@ on:
     branches: [fast-engine-phase2-20260901]
     paths:
       - .github/workflows/tmp-delivery-candidate-diagnose.yml
-      - fast_engine/research/tmp_tove_named_event_ab.py
-      - fast_engine/research/tmp_tove_named_event_ab_v2.py
 
 permissions:
   contents: read
 
 jobs:
-  ab:
+  validate:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -23,5 +21,49 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Run Tove pct instant named-event A/B
-        run: PYTHONPATH=. python fast_engine/research/tmp_tove_named_event_ab_v2.py
+      - name: Focused promoted regression
+        run: |
+          python -m unittest -v \
+            fast_engine.tests.test_damage_dynamic_ammo_charge \
+            fast_engine.tests.test_named_buff_event_runtime \
+            fast_engine.tests.test_ammo_pct_named_event
+      - name: Public blocker and coverage scan
+        run: |
+          python - <<'PY'
+          from context import snapshot, spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+
+          seen = set()
+          certified = []
+          gaps = []
+          for name, case in snapshot.SQUADS.items():
+              if str(name).startswith('지그_'):
+                  continue
+              members = tuple(str(x) for x in case['members'])
+              if len(members) != 5 or any(x.startswith('test_') for x in members):
+                  continue
+              if members in seen:
+                  continue
+              seen.add(members)
+              squad = compile_moris_squad(spec.build_squad(list(members)))
+              blockers = tuple(static_score_blockers(squad))
+              if blockers:
+                  gaps.append((name, blockers))
+              else:
+                  certified.append(name)
+          print('unique', len(seen), 'certified', len(certified), 'gaps', len(gaps))
+          print('certified_names', certified)
+          assert len(seen) == 23
+          assert len(certified) == 2
+          assert len(gaps) == 21
+          for team in ('레이드_소다', '스쿼드3'):
+              blockers = dict(gaps)[team]
+              print(team, [b for b in blockers if '토브' in b])
+              assert 'normal_delivery:토브:임시 개조 2:crit_dmg' not in blockers
+              assert 'skill_state_delivery:토브:임시 개조 2:crit_dmg' not in blockers
+              assert 'cadence:토브:급조 탄환:ammo_charge_pct' in blockers
+              assert 'cadence:토브:임시 개조:max_ammo_flat' in blockers
+          PY
+      - name: Full Fast regression
+        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
