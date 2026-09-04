@@ -1,25 +1,148 @@
-name: tmp-asuka-release-validation
+name: tmp-final-cleanup
 
 on:
   push:
     branches:
       - fast-engine-phase2-20260901
-  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  validate:
+  cleanup:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
-      - name: Focused semantic regression
-        run: python -m unittest fast_engine.tests.test_damage_state_end_named_stack
-      - name: Certified near-tie ranking guard
-        run: python -m unittest fast_engine.tests.test_damage_moris_frame_timing
-      - name: Public coverage frontier
-        run: python -m fast_engine.research.public_blocker_frontier
+          ref: fast-engine-phase2-20260901
+          fetch-depth: 0
+      - name: Record checkpoint and remove diagnostics
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          handoff = Path('fast_engine/research/HANDOFF_FAST_ENGINE_20260904.md')
+          coverage = Path('fast_engine/research/COVERAGE_FRONTIER_CHECKPOINT_20260904.md')
+
+          handoff_marker = '## 12. Asuka state-end enemy-stack coverage checkpoint'
+          handoff_append = r'''
+
+---
+
+## 12. Asuka state-end enemy-stack coverage checkpoint
+
+이번 late-2026-09-04 checkpoint에서 `레이드_델타`의 `아스카 : WILLE` `섬멸` blocker를 generic하게 닫았다.
+
+production commit:
+
+- `68d8dea58e4b05a630fc1d6545dcb905a7c7cfa8` — `fast: support finite state-end enemy stack damage`
+
+Moris 실측 계약:
+
+- 첫 `섬멸 태세` 종료: 약 `12.35s`
+- 종료 시 `안티 AT 필드` `30` stack을 먼저 읽음
+- `섬멸` damage를 stack count만큼 계산
+- 같은 timestamp에서 뒤따르는 `섬멸 2`가 `안티 AT 필드`를 `30 -> 0` 제거
+
+Fast runner-only A/B도 동일 chronology를 재현했다.
+
+25초 Asuka 절대값 비교:
+
+- Moris `섬멸`: `1,303,500`
+- Fast `섬멸`: `1,394,345.582072921` (`+6.97%`)
+- Moris Asuka total minus `섬멸`: `18,752,589`
+- Fast Asuka total minus `섬멸`: `20,108,424.21249385` (`+8.29%`)
+
+따라서 `섬멸`에만 생긴 신규 damage-formula 오차라는 근거가 없고, global `bonus_damage` formula는 수정하지 않았다.
+
+정식 support는 character-name special case가 아니라 다음 shape만 fail-open 한다.
+
+1. 같은 actor의 유일한 finite SELF buff가 `event:state_end:<name>`을 생산
+2. enemy 쪽에는 같은 actor가 만든 finite harmful `received_dmg_pct` named stack이 존재
+3. consumer는 exactly `bonus_damage + scaling=stack_count + scaling_ref=<that name>`
+4. optional same-event cleanup은 exactly `remove_named_buff + target_effect=<that name>`
+5. arbitrary `event:*`, unknown state-end, mismatched actor/target, infinite/parameterized stack은 계속 fail closed
+
+focused regression `fast_engine/tests/test_damage_state_end_named_stack.py` 4 tests를 추가했다.
+기존 gauge/periodic stack tests와 합쳐 focused 12 tests 모두 통과했다.
+
+release validation:
+
+- workflow run `33830517337`: success
+- focused semantic regression: success
+- certified DEF55 near-tie ranking guard: success
+- public frontier: success
+
+frontier 변화:
+
+- `레이드_델타`: blocker 2 -> 1
+- 제거: `skill_damage:아스카 : WILLE:섬멸:bonus_damage`
+- 잔존: `skill_damage:리틀 머메이드:거품 난사:sequential_damage:10`
+- source 24 / unique 23 / certified 2 / gaps 21은 그대로
+
+certified membership 집합이 변하지 않았으므로 full public ranking probe는 다시 돌리지 않았다.
+
+Nayuta는 이번 slice에서 보류했다. 남은 핵심은 periodic/named-stack이 아니라 `SMG -> RL` weapon-class transition으로, rapid/charge runtime actor handoff가 필요해 작은 coverage patch 범위를 넘는다.
+
+canonical CI run `33830517342`에서 Fast/engine/optimizer, bridge smoke, browser tests, golden snapshot 29개가 모두 success였다.
+
+이번 checkpoint 종료 시 모든 `.github/workflows/tmp-*`와 `fast_engine/research/tmp_*` diagnostics를 제거한다. `.github/workflows`는 `ci.yml`, `pages.yml`만 남긴다.
+
+다음 단일 checkpoint는 최신 public frontier에서 **반복되는 작은 damage-delivery root**를 다시 고르는 것이다. Little Mermaid squad-ammo chronology, Nayuta cross-class weapon change, HP chronology를 억지로 열지 않는다.
+'''
+
+          coverage_marker = '## 11. 후속 채택 — finite state-end enemy-stack damage'
+          coverage_append = r'''
+
+## 11. 후속 채택 — finite state-end enemy-stack damage
+
+`last_bullet` 이후 반복 blocker를 다시 shape 기준으로 조사했다. Nayuta는 최종적으로 `SMG -> RL` cross-class weapon change가 필요해 보류했고, `레이드_델타`의 Asuka `섬멸`이 다음 작은 generic slice로 채택됐다.
+
+Moris는 첫 `섬멸 태세` 종료 약 `12.35s`에서 `안티 AT 필드` 30 stack을 읽어 damage를 계산한 뒤, 같은 timestamp의 `섬멸 2`에서 stack을 0으로 제거한다. Fast A/B도 `read 30 -> damage -> remove 30->0` 순서를 그대로 재현했다.
+
+절대 damage는 `섬멸`이 Moris 대비 약 `+6.97%`였지만, 같은 Asuka의 `섬멸` 제외 기존 damage가 이미 약 `+8.29%`였으므로 신규 mechanic-specific formula regression으로 보지 않았다. global `bonus_damage` 수식은 건드리지 않았다.
+
+정식 commit:
+
+- `68d8dea58e4b05a630fc1d6545dcb905a7c7cfa8`
+
+지원 범위는 finite SELF state-end producer + same-actor finite harmful enemy `received_dmg_pct` named stack + exact stack-count `bonus_damage`/named removal 조합으로 제한했다. 임의 named event나 broad enemy stack delivery는 계속 fail closed다.
+
+검증:
+
+- focused new regression 4/4
+- 관련 gauge/periodic 포함 focused 12/12
+- release validation run `33830517337`: success
+- DEF55 near-tie ranking guard: success
+- public frontier: success
+- canonical CI run `33830517342`: Fast/engine/optimizer/bridge/browser/golden 29/29 success
+
+public frontier 결과:
+
+- source 24 / unique 23 / certified 2 / gaps 21 유지
+- `레이드_델타`의 Asuka `섬멸` blocker 제거
+- `레이드_델타`에는 Little Mermaid `거품 난사` blocker 하나만 잔존
+
+certified membership 집합은 변하지 않아 full public ranking validation 재실행은 불필요했다.
+
+다음 탐색에서는 Little Mermaid `squad_ammo_consume`, Nayuta cross-class weapon change, HP-derived chronology는 계속 보류하고, 최신 frontier에서 여러 팀에 반복되는 작은 damage-delivery root를 다시 고른다.
+'''
+
+          text = handoff.read_text(encoding='utf-8')
+          if handoff_marker not in text:
+              handoff.write_text(text.rstrip() + handoff_append + '\n', encoding='utf-8')
+
+          text = coverage.read_text(encoding='utf-8')
+          if coverage_marker not in text:
+              coverage.write_text(text.rstrip() + coverage_append + '\n', encoding='utf-8')
+          PY
+
+          git rm .github/workflows/tmp-* fast_engine/research/tmp_*
+          git diff --check
+      - name: Commit clean checkpoint
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fast_engine/research/HANDOFF_FAST_ENGINE_20260904.md fast_engine/research/COVERAGE_FRONTIER_CHECKPOINT_20260904.md
+          git commit -m "research: close Asuka state-end coverage checkpoint [skip ci]"
+          git push origin HEAD:fast-engine-phase2-20260901
