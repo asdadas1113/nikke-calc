@@ -1,0 +1,333 @@
+name: tmp promote Ada charge hold
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fast-engine-phase2-20260901]
+    paths:
+      - .github/workflows/tmp-promote-ada-charge-hold.yml
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fast-engine-phase2-20260901
+          fetch-depth: 1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Apply production generic charge-hold patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('fast_engine/engine/weapon.py')
+          s = p.read_text()
+          needle = '''_EPS = 1e-9\n_FRAME_RATE_CAP = 60.0\n\n\ndef _round_half_up(value: float) -> int:\n'''
+          replacement = '''_EPS = 1e-9\n_FRAME_RATE_CAP = 60.0\n\n\ndef is_supported_charge_hold_control(member) -> bool:\n    \"\"\"Certify the first sparse pure charge-hold control shape.\n\n    The supported shape is a non-clip charge weapon with exactly one control:\n    ``hold.policy == own_full_burst`` and an optional non-negative ``lead``.\n    Mixed controls (tap-fire/cover/reload/sequence) stay fail-closed. The\n    separate score-safety gate owns ``cover_during_delay`` reachability.\n    \"\"\"\n\n    weapon = member.weapon\n    if str(weapon.get(\"fire_mode\") or \"\") != \"charge\":\n        return False\n    if weapon.get(\"is_clip\"):\n        return False\n    control = weapon.get(\"control\") or {}\n    if not isinstance(control, dict) or set(control) != {\"hold\"}:\n        return False\n    hold = control.get(\"hold\")\n    if not isinstance(hold, dict) or hold.get(\"policy\") != \"own_full_burst\":\n        return False\n    if set(hold) - {\"policy\", \"lead\"}:\n        return False\n    try:\n        lead = float(hold.get(\"lead\", 0.5))\n    except (TypeError, ValueError):\n        return False\n    return lead >= 0.0\n\n\ndef _round_half_up(value: float) -> int:\n'''
+          assert needle in s
+          s = s.replace(needle, replacement, 1)
+
+          needle = '''    scheduled_time: float | None = None\n    signature: tuple[float, ...] | None = None\n'''
+          replacement = '''    scheduled_time: float | None = None\n    signature: tuple[float, ...] | None = None\n    charge_latched: bool = False\n'''
+          assert needle in s
+          s = s.replace(needle, replacement, 1)
+
+          needle = '''    def _enter_charge(self, st: _ChargeActorState, at: float, now_for_mods: float) -> None:\n        st.phase = \"charging\"\n        st.charge_start = at\n        st.phase_end = self._observe_phase_boundary(\n            at + self._effective_charge_time(st.actor, now_for_mods)\n        )\n\n    def _after_shot(self, st: _ChargeActorState, shot_time: float) -> None:\n        st.ammo -= 1\n'''
+          replacement = '''    def _charge_shot_release_time(self, actor: int, ready_time: float) -> float:\n        return float(ready_time)\n\n    def _latch_charge_until_release(self, st: _ChargeActorState, ready_time: float) -> bool:\n        if st.charge_latched:\n            return False\n        release = self._charge_shot_release_time(st.actor, ready_time)\n        if release <= ready_time + _EPS:\n            return False\n        st.charge_latched = True\n        st.phase_end = self._observe_phase_boundary(release)\n        return True\n\n    def _enter_charge(self, st: _ChargeActorState, at: float, now_for_mods: float) -> None:\n        st.phase = \"charging\"\n        st.charge_start = at\n        st.charge_latched = False\n        st.phase_end = self._observe_phase_boundary(\n            at + self._effective_charge_time(st.actor, now_for_mods)\n        )\n\n    def _after_shot(self, st: _ChargeActorState, shot_time: float) -> None:\n        st.charge_latched = False\n        st.ammo -= 1\n'''
+          assert needle in s
+          s = s.replace(needle, replacement, 1)
+
+          needle = '''            if st.phase == \"charging\":\n                next_count = st.full_charge_count + 1\n                if self._shot_is_boundary(actor, next_count):\n                    # A meaningful shot belongs to the global scheduler.\n                    return\n                self._after_shot(st, when)\n                continue\n'''
+          replacement = '''            if st.phase == \"charging\":\n                if self._latch_charge_until_release(st, when):\n                    continue\n                next_count = st.full_charge_count + 1\n                if self._shot_is_boundary(actor, next_count):\n                    # A meaningful shot belongs to the global scheduler.\n                    return\n                self._after_shot(st, when)\n                continue\n'''
+          assert needle in s
+          s = s.replace(needle, replacement, 1)
+
+          needle = '''            if st.phase == \"charging\":\n                next_count = st.full_charge_count + 1\n                if self._shot_is_boundary(actor, next_count):\n                    return when, next_count\n                self._after_shot(st, when)\n                continue\n'''
+          replacement = '''            if st.phase == \"charging\":\n                if self._latch_charge_until_release(st, when):\n                    continue\n                next_count = st.full_charge_count + 1\n                if self._shot_is_boundary(actor, next_count):\n                    return when, next_count\n                self._after_shot(st, when)\n                continue\n'''
+          assert needle in s
+          s = s.replace(needle, replacement, 1)
+
+          needle = '''                        st.phase == \"charging\"\n                        and old_signature is not None\n                        and (signature[4], signature[5])\n'''
+          replacement = '''                        st.phase == \"charging\"\n                        and not st.charge_latched\n                        and old_signature is not None\n                        and (signature[4], signature[5])\n'''
+          assert needle in s
+          s = s.replace(needle, replacement, 1)
+          p.write_text(s)
+
+          p = Path('fast_engine/engine/dynamic_weapon.py')
+          s = p.read_text()
+          needle = 'from .weapon import DynamicChargeCadenceRuntime\n'
+          replacement = 'from .weapon import DynamicChargeCadenceRuntime, is_supported_charge_hold_control\n'
+          assert needle in s
+          s = s.replace(needle, replacement, 1)
+
+          needle = '''        \"_score_shot_sink\",\n        \"_rapid_reload\",\n    )\n'''
+          replacement = '''        \"_score_shot_sink\",\n        \"_rapid_reload\",\n        \"_charge_hold_release\",\n    )\n'''
+          assert needle in s
+          s = s.replace(needle, replacement, 1)
+
+          needle = '''        self._score_actors: frozenset[int] = frozenset()\n        self._score_shot_sink: Callable[[int, float], None] | None = None\n        self._rapid_reload = DynamicRapidCadenceRuntime(\n'''
+          replacement = '''        self._score_actors: frozenset[int] = frozenset()\n        self._score_shot_sink: Callable[[int, float], None] | None = None\n        self._charge_hold_release: dict[int, float] = {}\n        self._rapid_reload = DynamicRapidCadenceRuntime(\n'''
+          assert needle in s
+          s = s.replace(needle, replacement, 1)
+
+          needle = '''    def begin_full_burst(\n        self,\n        now: float,\n        casted: Sequence[bool],\n        full_burst_end: float,\n    ) -> tuple[int, ...]:\n        return self._rapid_reload.begin_full_burst(now, casted, full_burst_end)\n\n    @staticmethod\n'''
+          replacement = '''    def _charge_shot_release_time(self, actor: int, ready_time: float) -> float:\n        release = float(self._charge_hold_release.get(actor, -1.0))\n        return release if ready_time < release - 1e-9 else float(ready_time)\n\n    def begin_full_burst(\n        self,\n        now: float,\n        casted: Sequence[bool],\n        full_burst_end: float,\n    ) -> tuple[int, ...]:\n        entered = set(self._rapid_reload.begin_full_burst(now, casted, full_burst_end))\n        for actor in self.actors:\n            if actor >= len(casted) or not casted[actor]:\n                continue\n            member = self.squad.members[actor]\n            if not is_supported_charge_hold_control(member):\n                continue\n            hold = member.weapon[\"control\"][\"hold\"]\n            lead = float(hold.get(\"lead\", 0.5))\n            release = self._observe_phase_boundary(float(full_burst_end) - lead)\n            if release <= now + 1e-9:\n                continue\n            self._advance_actor_to(actor, now, inclusive=False)\n            st = self._states[actor]\n            self._charge_hold_release[actor] = release\n            self._invalidate(st)\n            self._plan(actor, now)\n            entered.add(actor)\n        return tuple(sorted(entered))\n\n    @staticmethod\n'''
+          assert needle in s
+          s = s.replace(needle, replacement, 1)
+          p.write_text(s)
+
+          p = Path('fast_engine/engine/score.py')
+          s = p.read_text()
+          needle = 'from .weapon import StaticCadenceModifiers\n'
+          replacement = 'from .weapon import StaticCadenceModifiers, is_supported_charge_hold_control\n'
+          assert needle in s
+          s = s.replace(needle, replacement, 1)
+
+          needle = '''    if member.weapon.get(\"control\") or member.weapon.get(\"is_clip\"):\n        return False\n'''
+          replacement = '''    control = member.weapon.get(\"control\") or {}\n    if control and not is_supported_charge_hold_control(member):\n        return False\n    if member.weapon.get(\"is_clip\"):\n        return False\n'''
+          assert needle in s
+          s = s.replace(needle, replacement, 1)
+
+          needle = '''    actors.update(_dynamic_charge_bullet_lifetime_score_actors(squad))\n    actors.update(\n'''
+          replacement = '''    actors.update(_dynamic_charge_bullet_lifetime_score_actors(squad))\n    actors.update(\n        actor\n        for actor, member in enumerate(squad.members)\n        if is_supported_charge_hold_control(member) and _charge_actor_score_safe(squad, actor)\n    )\n    actors.update(\n'''
+          assert needle in s
+          s = s.replace(needle, replacement, 1)
+
+          needle = '''    for actor, member in enumerate(squad.members):\n        if member.weapon.get(\"control\") and not _rapid_actor_score_safe(\n            squad, actor, require_cover_control=True\n        ):\n            blockers.append(f\"control:{member.name}\")\n'''
+          replacement = '''    for actor, member in enumerate(squad.members):\n        if not member.weapon.get(\"control\"):\n            continue\n        mode = str(member.weapon.get(\"fire_mode\") or \"\")\n        safe = (\n            _charge_actor_score_safe(squad, actor)\n            if mode == \"charge\"\n            else _rapid_actor_score_safe(squad, actor, require_cover_control=True)\n        )\n        if not safe:\n            blockers.append(f\"control:{member.name}\")\n'''
+          assert needle in s
+          p.write_text(s.replace(needle, replacement, 1))
+          PY
+
+      - name: Add permanent regressions
+        run: |
+          cat > fast_engine/tests/test_damage_charge_hold_control.py <<'PY'
+          from __future__ import annotations
+
+          import unittest
+          from dataclasses import replace
+
+          from context import snapshot, spec
+          from fast_engine.engine.burst import BurstPolicy
+          from fast_engine.engine.burst_runtime import BurstRuntime
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.frame_lattice import moris_observed_tick
+          from fast_engine.engine.model import CompiledSquad, EnemyStaticProfile
+          from fast_engine.engine.scheduler import EventKind
+          from fast_engine.engine.score import (
+              StaticNormalAttackObserver,
+              static_normal_score_blockers,
+              static_score_blockers,
+          )
+          from fast_engine.engine.triggers import TriggerIndex
+          from fast_engine.engine.weapon import is_supported_charge_hold_control
+          from fast_engine.tests.test_damage_dynamic_charge_scoring import (
+              _charge_speed_effect,
+              _squad,
+          )
+
+
+          def _controlled_squad(
+              *,
+              mixed: bool = False,
+              cover_during_delay: bool = False,
+              include_speed: bool = False,
+          ) -> CompiledSquad:
+              effect = _charge_speed_effect()
+              base = _squad(effect).members[0]
+              control = {"hold": {"policy": "own_full_burst", "lead": 0.5}}
+              if mixed:
+                  control["tap_fire"] = {"rate": 3.6, "release": 0.03}
+              effects = (effect,) if include_speed else ()
+              member = replace(
+                  base,
+                  effects=effects,
+                  weapon={
+                      **base.weapon,
+                      "control": control,
+                      "cover_during_delay": cover_during_delay,
+                  },
+              )
+              return CompiledSquad(
+                  (member,),
+                  TriggerIndex.from_effects(effects, actor_count=1),
+              )
+
+
+          class ChargeHoldControlTests(unittest.TestCase):
+              def test_pure_hold_latches_until_observed_release_and_survives_speed_change(self):
+                  squad = _controlled_squad(include_speed=True)
+                  self.assertTrue(is_supported_charge_hold_control(squad.members[0]))
+                  self.assertEqual(static_normal_score_blockers(squad), ())
+
+                  runtime = BurstRuntime(
+                      squad,
+                      BurstPolicy(duration=4.0, first_burst_time=10.0),
+                      EnemyStaticProfile(
+                          defense=0.0,
+                          core_uptime=0.0,
+                          core_px=0.0,
+                          duration=4.0,
+                      ),
+                  )
+                  observer = StaticNormalAttackObserver(runtime, duration=4.0)
+                  self.assertEqual(observer.dynamic_charge_actors, (0,))
+
+                  shot_times: list[float] = []
+                  original_sink = runtime.weapons._score_shot_sink
+                  self.assertIsNotNone(original_sink)
+                  runtime.weapons._score_shot_sink = lambda actor, t: (
+                      shot_times.append(t),
+                      original_sink(actor, t),
+                  )[1]
+
+                  runtime.weapons.start(0.0)
+                  self.assertEqual(
+                      runtime.weapons.begin_full_burst(0.2, (True,), 3.0),
+                      (0,),
+                  )
+                  runtime.weapons.advance_to(1.2, inclusive=False)
+                  st = runtime.weapons._states[0]
+                  self.assertTrue(st.charge_latched)
+                  release = st.phase_end
+                  self.assertAlmostEqual(
+                      release,
+                      moris_observed_tick(2.5, horizon=4.0),
+                      places=9,
+                  )
+                  self.assertEqual(st.ammo, 20)
+
+                  speed = squad.members[0].effects[0]
+                  runtime.dispatcher.effects.activate(
+                      speed,
+                      0,
+                      1.2,
+                      runtime.scheduler,
+                  )
+                  runtime.weapons.sync(1.2)
+                  self.assertTrue(st.charge_latched)
+                  self.assertAlmostEqual(st.phase_end, release, places=9)
+
+                  while (
+                      runtime.scheduler
+                      and (runtime.scheduler.peek_time() or 99.0) <= release + 1e-9
+                  ):
+                      event = runtime.scheduler.pop()
+                      if event.kind is EventKind.WEAPON_BOUNDARY:
+                          boundary = runtime.weapons.handle_boundary(event)
+                          if boundary is not None:
+                              runtime.weapons.sync(event.time)
+
+                  self.assertEqual(len(shot_times), 1)
+                  self.assertAlmostEqual(shot_times[0], release, places=9)
+                  self.assertEqual(st.ammo, 19)
+
+              def test_cover_during_delay_is_not_blanket_rejected(self):
+                  squad = _controlled_squad(cover_during_delay=True)
+                  self.assertTrue(is_supported_charge_hold_control(squad.members[0]))
+                  self.assertEqual(static_normal_score_blockers(squad), ())
+
+              def test_mixed_tap_and_hold_stays_fail_closed(self):
+                  squad = _controlled_squad(mixed=True)
+                  self.assertFalse(is_supported_charge_hold_control(squad.members[0]))
+                  self.assertEqual(
+                      static_normal_score_blockers(squad),
+                      ("control:synthetic-charge",),
+                  )
+
+              def test_hold_only_applies_when_actor_cast_in_cycle(self):
+                  squad = _controlled_squad()
+                  runtime = BurstRuntime(
+                      squad,
+                      BurstPolicy(duration=4.0, first_burst_time=10.0),
+                      EnemyStaticProfile(
+                          defense=0.0,
+                          core_uptime=0.0,
+                          core_px=0.0,
+                          duration=4.0,
+                      ),
+                  )
+                  observer = StaticNormalAttackObserver(runtime, duration=4.0)
+                  runtime.weapons.start(0.0)
+                  self.assertEqual(
+                      runtime.weapons.begin_full_burst(0.2, (False,), 3.0),
+                      (),
+                  )
+                  runtime.weapons.advance_to(1.2, inclusive=False)
+                  self.assertFalse(runtime.weapons._states[0].charge_latched)
+
+              def test_public_ada_control_unlocks_existing_one_shot_damage_delivery(self):
+                  for name in ("레이드_미하라에이다", "레이드_헬름아쿠아스노우"):
+                      compiled = compile_moris_squad(
+                          spec.build_squad(list(snapshot.SQUADS[name]["members"]))
+                      )
+                      ada = next(
+                          member for member in compiled.members if member.name == "에이다"
+                      )
+                      self.assertTrue(is_supported_charge_hold_control(ada))
+                      blockers = set(static_score_blockers(compiled))
+                      self.assertNotIn("control:에이다", blockers)
+                      self.assertNotIn(
+                          "cadence:에이다:특수 개조:charge_speed_pct",
+                          blockers,
+                      )
+                      self.assertNotIn(
+                          "normal_delivery:에이다:특수 개조 2:charge_dmg_pct",
+                          blockers,
+                      )
+                      self.assertNotIn(
+                          "skill_state_delivery:에이다:특수 개조 2:charge_dmg_pct",
+                          blockers,
+                      )
+
+
+          if __name__ == "__main__":
+              unittest.main()
+          PY
+
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('fast_engine/tests/test_damage_charge_speed_bullet_lifetime.py')
+          s = p.read_text()
+          s = s.replace(
+              'def test_public_ada_only_removes_charge_speed_lifetime_blocker(self):',
+              'def test_public_ada_charge_hold_unlocks_one_shot_delivery(self):',
+              1,
+          )
+          old = '''            self.assertIn("control:에이다", blockers)\n            self.assertIn(\n                "normal_delivery:에이다:특수 개조 2:charge_dmg_pct",\n                blockers,\n            )\n            self.assertIn(\n                "skill_state_delivery:에이다:특수 개조 2:charge_dmg_pct",\n                blockers,\n            )\n'''
+          new = '''            self.assertNotIn("control:에이다", blockers)\n            self.assertNotIn(\n                "normal_delivery:에이다:특수 개조 2:charge_dmg_pct",\n                blockers,\n            )\n            self.assertNotIn(\n                "skill_state_delivery:에이다:특수 개조 2:charge_dmg_pct",\n                blockers,\n            )\n'''
+          assert old in s
+          p.write_text(s.replace(old, new, 1))
+          PY
+
+      - name: Focused promotion gate
+        run: |
+          git diff --check
+          python -m unittest \
+            fast_engine.tests.test_damage_charge_hold_control \
+            fast_engine.tests.test_damage_charge_speed_bullet_lifetime \
+            fast_engine.tests.test_damage_dynamic_charge_scoring \
+            fast_engine.tests.test_damage_helm_bullet_lifetime \
+            fast_engine.tests.test_damage_rapid_cover_control
+
+      - name: Commit production slice
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fast_engine/engine/weapon.py \
+                  fast_engine/engine/dynamic_weapon.py \
+                  fast_engine/engine/score.py \
+                  fast_engine/tests/test_damage_charge_hold_control.py \
+                  fast_engine/tests/test_damage_charge_speed_bullet_lifetime.py
+          git diff --cached --check
+          git commit -m "fast: certify own-full-burst charge hold"
+          git push origin HEAD:fast-engine-phase2-20260901
