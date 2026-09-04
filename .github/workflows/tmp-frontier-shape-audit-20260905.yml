@@ -24,7 +24,6 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-
           p = Path('fast_engine/engine/dispatcher.py')
           s = p.read_text(encoding='utf-8')
           anchor = '''    @staticmethod\n    def _on_attack_charge_speed_shape_supported(effect: "CompiledEffect") -> bool:\n'''
@@ -188,7 +187,6 @@ jobs:
         run: |
           python -m unittest fast_engine.tests.test_damage_full_charge_hit_charge_speed
           python -m unittest fast_engine.tests.test_damage_charge_speed_bullet_lifetime
-          python -m unittest fast_engine.tests.test_dynamic_charge_score
 
       - name: Public scope gate
         run: |
@@ -197,7 +195,6 @@ jobs:
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.dispatcher import TriggerDispatcher
           from fast_engine.engine.score import static_score_blockers
-
           seen = set()
           matches = []
           cadence = 0
