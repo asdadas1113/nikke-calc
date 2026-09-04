@@ -12,7 +12,7 @@ from fast_engine.engine.score import static_score_blockers
 from .public_ranking_probe import _source_corpus
 
 TARGET_SOURCE = "레이드_델타"
-ACTOR_NAME = "아스카"
+ACTOR_NAME = "아스카 : WILLE"
 INTERESTING = {
     "안티 AT 필드",
     "안티 AT 필드 2",
