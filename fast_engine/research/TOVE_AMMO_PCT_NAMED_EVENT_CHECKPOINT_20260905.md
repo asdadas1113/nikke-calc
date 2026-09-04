@@ -94,7 +94,7 @@ provider cadence certification과 source certification은 분리한다. 즉 name
 
 영구 regression:
 
-- `fast_engine/tests/test_ammo_pct_named_event.py`
+- `fast_engine/tests/test_damage_ammo_pct_named_event.py`
 - `fast_engine/tests/test_named_buff_event_runtime.py`의 실제 Tove expectation 갱신
 
 검증 내용:
@@ -103,6 +103,8 @@ provider cadence certification과 source certification은 분리한다. 즉 name
 2. synthetic flat refill은 계속 fail closed이며 event를 방출하지 않는다.
 3. 실제 토브에서 10회 `hit_count` 뒤 `급조 탄환`이 1회 발동하고 `임시 개조 2`가 전 아군에게 적용된다.
 4. 실제 public Tove delivery blocker만 제거되고 별도 cadence blocker는 남는다.
+
+파일명은 canonical CI의 `Fast — damage`가 사용하는 `test_damage*.py` discovery 계약에 맞췄다. 최초 cleanup CI에서 이 계약 누락을 발견해 테스트 내용은 바꾸지 않고 파일명만 옮겼다.
 
 ## 6. runner-only A/B
 
@@ -148,6 +150,12 @@ Tove가 있는 두 public team에는 다음 별도 cadence blocker가 그대로 
 - `cadence:토브:개조 성공 2:attack_speed_pct`
 
 따라서 이번 slice로 certified universe가 증가하지 않았고 standardized ranking은 재실행하지 않았다. 이것은 ranking 변화가 아니라 coverage blocker 분해의 진전이다.
+
+### canonical CI discovery correction
+
+첫 cleanup HEAD `c7e55390cb8c9385e37e8237cd3d08d0a1ccb127`의 canonical CI run `33913173810`은 전체 workflow 자체는 성공했고 bridge `31`, site `385`, golden snapshot `29/29`도 통과했다. 다만 `ci.yml`의 Fast damage discovery가 `test_damage*.py` 패턴이라 당시 이름 `test_ammo_pct_named_event.py`는 그 canonical Fast 단계에 직접 포함되지 않았다.
+
+A/B full suite와 post-promotion full suite에서는 이미 해당 3개 regression이 실행됐으므로 구현 검증 실패는 아니지만, CI 계약을 완결하기 위해 파일명을 `test_damage_ammo_pct_named_event.py`로 변경했다. 최종 canonical CI는 이 이름으로 다시 검증한다.
 
 ## 8. fail-closed 유지
 
