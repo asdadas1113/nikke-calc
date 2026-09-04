@@ -44,149 +44,132 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
+          def replace_between(text: str, start: str, end: str, replacement: str) -> str:
+              a = text.index(start)
+              b = text.index(end, a)
+              return text[:a] + replacement + text[b:]
+
           dispatcher = Path('fast_engine/engine/dispatcher.py')
           text = dispatcher.read_text()
-          old = '''            elif stat in {"ammo_charge_pct", "ammo_charge_flat"}:
-              if self._ammo_charge_sink is None or any(target == ENEMY for target in targets):
-                  return False
-              actor_targets = tuple(int(target) for target in targets)
-              if not self._ammo_charge_sink(stat, actor_targets, value, now):
-                  return False
-          '''
-          new = '''            elif stat in {"ammo_charge_pct", "ammo_charge_flat"}:
-              if self._ammo_charge_sink is None or any(target == ENEMY for target in targets):
-                  return False
-              actor_targets = tuple(int(target) for target in targets)
-              if not self._ammo_charge_sink(stat, actor_targets, value, now):
-                  return False
-              # Moris' percent-ammo instant handler broadcasts event:{name}
-              # after the refill succeeds. Flat refill intentionally does not.
-              if (
-                  stat == "ammo_charge_pct"
-                  and effect.name
-                  and effect.name in self._named_event_names_needed
-              ):
-                  from .burst import BurstSignal
-                  self.dispatch(
-                      BurstSignal(
-                          now,
-                          f"event:{effect.name}",
-                          effect.actor,
-                          effect.actor,
-                      )
-                  )
-          '''
-          if old not in text:
-              raise SystemExit('dispatcher patch anchor not found')
-          dispatcher.write_text(text.replace(old, new, 1))
+          start = '            elif stat in {"ammo_charge_pct", "ammo_charge_flat"}:\n'
+          end = '            elif stat == "force_reload":\n'
+          replacement = '''            elif stat in {"ammo_charge_pct", "ammo_charge_flat"}:
+                if self._ammo_charge_sink is None or any(target == ENEMY for target in targets):
+                    return False
+                actor_targets = tuple(int(target) for target in targets)
+                if not self._ammo_charge_sink(stat, actor_targets, value, now):
+                    return False
+                # Moris' percent-ammo instant handler broadcasts event:{name}
+                # after the refill succeeds. Flat refill intentionally does not.
+                if (
+                    stat == "ammo_charge_pct"
+                    and effect.name
+                    and effect.name in self._named_event_names_needed
+                ):
+                    from .burst import BurstSignal
+                    self.dispatch(
+                        BurstSignal(
+                            now,
+                            f"event:{effect.name}",
+                            effect.actor,
+                            effect.actor,
+                        )
+                    )
+'''
+          dispatcher.write_text(replace_between(text, start, end, replacement))
 
           score = Path('fast_engine/engine/score.py')
           text = score.read_text()
-          old = '''def _ammo_charge_named_event_safe(squad: CompiledSquad, effect) -> bool:
-              if not effect.name:
-                  return True
-              event_key = f"event:{effect.name}"
-              return not any(
-                  other.effect_id != effect.effect_id
-                  and any(rule.event_key == event_key for rule in other.triggers)
-                  for other in squad.effects
-              )
-          '''
-          new = '''def _ammo_charge_named_event_safe(squad: CompiledSquad, effect) -> bool:
-              if not effect.name:
-                  return True
-              event_key = f"event:{effect.name}"
-              consumers = tuple(
-                  other
-                  for other in squad.effects
-                  if other.effect_id != effect.effect_id
-                  and any(rule.event_key == event_key for rule in other.triggers)
-              )
-              if not consumers:
-                  return True
-              # Moris emits a named event only for percent refill. Keep flat
-              # refill fail-closed when anything depends on its name.
-              if (effect.stat or "") != "ammo_charge_pct":
-                  return False
-              # This first lane only composes the instant event with damage-facing
-              # buffs owned by the same actor. Other named-event consumers retain
-              # their own blocker instead of being silently skipped.
-              return all(
-                  consumer.actor == effect.actor
-                  and consumer.effect_type == "buff"
-                  and is_direct_damage_buff_runtime_supported(consumer)
-                  for consumer in consumers
-              )
-          '''
-          if old not in text:
-              raise SystemExit('score ammo named-event patch anchor not found')
-          text = text.replace(old, new, 1)
+          text = replace_between(
+              text,
+              'def _ammo_charge_named_event_safe(squad: CompiledSquad, effect) -> bool:\n',
+              'def _ammo_charge_recipient_score_safe(squad: CompiledSquad, actor: int) -> bool:\n',
+              '''def _ammo_charge_named_event_safe(squad: CompiledSquad, effect) -> bool:
+    if not effect.name:
+        return True
+    event_key = f"event:{effect.name}"
+    consumers = tuple(
+        other
+        for other in squad.effects
+        if other.effect_id != effect.effect_id
+        and any(rule.event_key == event_key for rule in other.triggers)
+    )
+    if not consumers:
+        return True
+    # Moris emits a named event only for percent refill. Keep flat refill
+    # fail-closed when anything depends on its name.
+    if (effect.stat or "") != "ammo_charge_pct":
+        return False
+    # This first lane only composes the instant event with damage-facing buffs
+    # owned by the same actor. Other consumers keep the provider fail-closed.
+    return all(
+        consumer.actor == effect.actor
+        and consumer.effect_type == "buff"
+        and is_direct_damage_buff_runtime_supported(consumer)
+        for consumer in consumers
+    )
 
-          old = '''        providers = tuple(
-              provider
-              for provider in squad.effects
-              if provider.effect_id != effect.effect_id
-              and provider.effect_type == "buff"
-              and provider.name == name
+
+'''
           )
-          if not providers:
-              return False
-          for provider in providers:
-              if TriggerDispatcher._named_event_keys(provider):
-                  return False
-              if provider.parameters.get("event_scope") not in (None, "", "squad", "recipients"):
-                  return False
-              if not provider.target_spec.runtime_supported:
-                  return False
-              if not (
-                  TriggerDispatcher.is_executable_effect(provider)
-                  or TriggerDispatcher._named_event_marker_nop_shape_supported(provider)
-              ):
-                  return False
-          '''
-          new = '''        providers = tuple(
-              provider
-              for provider in squad.effects
-              if provider.effect_id != effect.effect_id
-              and provider.name == name
+          text = replace_between(
+              text,
+              'def _named_buff_event_dependency_score_safe(squad: CompiledSquad, effect) -> bool:\n',
+              'def _direct_damage_buff_score_supported(squad: CompiledSquad, effect) -> bool:\n',
+              '''def _named_buff_event_dependency_score_safe(squad: CompiledSquad, effect) -> bool:
+    keys = TriggerDispatcher._named_event_keys(effect)
+    if not keys:
+        return True
+    for key in keys:
+        if key == "event:heal_received":
+            if not TriggerDispatcher.heal_received_dependency_score_safe(squad, effect):
+                return False
+            continue
+        name = key[len("event:"):]
+        providers = tuple(
+            provider
+            for provider in squad.effects
+            if provider.effect_id != effect.effect_id
+            and provider.name == name
+        )
+        if not providers:
+            return False
+        for provider in providers:
+            if provider.effect_type == "instant":
+                # Moris' ammo_charge_pct handler emits event:{name} to the
+                # instant caster. Source proof is separate from cadence proof;
+                # unsafe refill cadence retains its own blocker.
+                if (
+                    provider.actor != effect.actor
+                    or (provider.stat or "") != "ammo_charge_pct"
+                    or provider.value is None
+                    or float(provider.value) < 0.0
+                    or any(rule.event_key == "battle_start" for rule in provider.triggers)
+                    or not provider.target_spec.runtime_supported
+                    or not _possible_ally_targets(squad, provider)
+                    or not TriggerDispatcher.is_executable_effect(provider)
+                ):
+                    return False
+                continue
+            if provider.effect_type != "buff":
+                return False
+            if TriggerDispatcher._named_event_keys(provider):
+                return False
+            if provider.parameters.get("event_scope") not in (None, "", "squad", "recipients"):
+                return False
+            if not provider.target_spec.runtime_supported:
+                return False
+            if not (
+                TriggerDispatcher.is_executable_effect(provider)
+                or TriggerDispatcher._named_event_marker_nop_shape_supported(provider)
+            ):
+                return False
+    return True
+
+
+'''
           )
-          if not providers:
-              return False
-          for provider in providers:
-              if provider.effect_type == "instant":
-                  # Moris' ammo_charge_pct handler emits event:{name} to the
-                  # instant caster. This source proof is deliberately independent
-                  # of cadence certification: if the refill cadence is unsafe,
-                  # that provider keeps its separate cadence blocker.
-                  if (
-                      provider.actor != effect.actor
-                      or (provider.stat or "") != "ammo_charge_pct"
-                      or provider.value is None
-                      or float(provider.value) < 0.0
-                      or any(rule.event_key == "battle_start" for rule in provider.triggers)
-                      or not provider.target_spec.runtime_supported
-                      or not _possible_ally_targets(squad, provider)
-                      or not TriggerDispatcher.is_executable_effect(provider)
-                  ):
-                      return False
-                  continue
-              if provider.effect_type != "buff":
-                  return False
-              if TriggerDispatcher._named_event_keys(provider):
-                  return False
-              if provider.parameters.get("event_scope") not in (None, "", "squad", "recipients"):
-                  return False
-              if not provider.target_spec.runtime_supported:
-                  return False
-              if not (
-                  TriggerDispatcher.is_executable_effect(provider)
-                  or TriggerDispatcher._named_event_marker_nop_shape_supported(provider)
-              ):
-                  return False
-          '''
-          if old not in text:
-              raise SystemExit('score named dependency patch anchor not found')
-          score.write_text(text.replace(old, new, 1))
+          score.write_text(text)
           PY
           git diff --check
           git diff -- fast_engine/engine/dispatcher.py fast_engine/engine/score.py
@@ -221,17 +204,11 @@ jobs:
                       BurstPolicy(duration=5.0, first_burst_time=30.0),
                       EnemyStaticProfile(defense=0.0, duration=5.0),
                   )
-                  runtime.dispatcher.attach_ammo_charge_sink(
-                      lambda stat, targets, value, now: True
-                  )
+                  runtime.dispatcher.attach_ammo_charge_sink(lambda stat, targets, value, now: True)
                   runtime.dispatcher.dispatch(BurstSignal(1.0, 'burst_cast', 0, 0))
                   self.assertEqual(runtime.dispatcher._activation_counts.get(refill.effect_id, 0), 1)
                   self.assertEqual(runtime.dispatcher._activation_counts.get(followup.effect_id, 0), 1)
-                  self.assertAlmostEqual(
-                      runtime.dispatcher.effects.sum_stat(0, 'atk_pct', now=1.01),
-                      10.0,
-                      places=9,
-                  )
+                  self.assertAlmostEqual(runtime.dispatcher.effects.sum_stat(0, 'atk_pct', now=1.01), 10.0, places=9)
 
               def test_flat_named_provider_remains_fail_closed_and_does_not_emit(self):
                   refill = _ammo_effect(stat='ammo_charge_flat', value=1.0)
@@ -245,17 +222,13 @@ jobs:
                       BurstPolicy(duration=5.0, first_burst_time=30.0),
                       EnemyStaticProfile(defense=0.0, duration=5.0),
                   )
-                  runtime.dispatcher.attach_ammo_charge_sink(
-                      lambda stat, targets, value, now: True
-                  )
+                  runtime.dispatcher.attach_ammo_charge_sink(lambda stat, targets, value, now: True)
                   runtime.dispatcher.dispatch(BurstSignal(1.0, 'burst_cast', 0, 0))
                   self.assertEqual(runtime.dispatcher._activation_counts.get(refill.effect_id, 0), 1)
                   self.assertEqual(runtime.dispatcher._activation_counts.get(followup.effect_id, 0), 0)
 
               def test_real_tove_consumer_source_is_certified_and_runtime_event_fires(self):
-                  squad = compile_moris_squad(
-                      spec.build_squad(list(snapshot.SQUADS['레이드_소다']['members']))
-                  )
+                  squad = compile_moris_squad(spec.build_squad(list(snapshot.SQUADS['레이드_소다']['members'])))
                   tove = next(i for i, member in enumerate(squad.members) if member.name == '토브')
                   provider = next(e for e in squad.members[tove].effects if e.name == '급조 탄환')
                   followup = next(e for e in squad.members[tove].effects if e.name == '임시 개조 2')
@@ -263,7 +236,6 @@ jobs:
                   blockers = score.static_score_blockers(squad)
                   self.assertNotIn('normal_delivery:토브:임시 개조 2:crit_dmg', blockers)
                   self.assertNotIn('skill_state_delivery:토브:임시 개조 2:crit_dmg', blockers)
-                  # Other Tove cadence mechanics are intentionally outside this slice.
                   self.assertIn('cadence:토브:임시 개조:max_ammo_flat', blockers)
 
                   runtime = BurstRuntime(
@@ -271,9 +243,7 @@ jobs:
                       BurstPolicy(duration=5.0, first_burst_time=30.0),
                       EnemyStaticProfile(defense=0.0, duration=5.0),
                   )
-                  runtime.dispatcher.attach_ammo_charge_sink(
-                      lambda stat, targets, value, now: True
-                  )
+                  runtime.dispatcher.attach_ammo_charge_sink(lambda stat, targets, value, now: True)
                   for n in range(10):
                       runtime.dispatcher.dispatch(BurstSignal(0.1 * n, 'hit_count', tove, tove))
                   self.assertEqual(runtime.dispatcher._activation_counts.get(provider.effect_id, 0), 1)
