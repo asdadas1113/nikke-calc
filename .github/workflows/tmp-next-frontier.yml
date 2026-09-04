@@ -12,49 +12,40 @@ on:
       - '.github/workflows/tmp-next-frontier.yml'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  probe:
+  productionize:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: fast-engine-phase2-20260901
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: State immediately after checkout
-        run: |
-          echo '--- gitignore lines ---'
-          wc -l .gitignore
-          tail -n 20 .gitignore
-          echo '--- board file ---'
-          test -e fast_engine/tests/test_damage_patternless_board.py && echo PRESENT || echo ABSENT
-          git status --short --ignored | tail -n 40
-      - name: Import context only
-        run: python -c 'import context; print("context imported")'
-      - name: State after context import
-        run: |
-          echo '--- gitignore lines ---'
-          wc -l .gitignore
-          tail -n 20 .gitignore
-          echo '--- board file ---'
-          test -e fast_engine/tests/test_damage_patternless_board.py && echo PRESENT || echo ABSENT
-          git status --short --ignored | tail -n 40
-      - name: Baseline post-Asuka frontier
-        run: python -m fast_engine.research.tmp_next_frontier_probe
-      - name: State after frontier import/run
-        run: |
-          echo '--- gitignore lines ---'
-          wc -l .gitignore
-          tail -n 20 .gitignore
-          echo '--- board file ---'
-          test -e fast_engine/tests/test_damage_patternless_board.py && echo PRESENT || echo ABSENT
-          git status --short --ignored | tail -n 40
-      - name: Probe Moris encounter-event reachability
+      - name: Reconfirm Moris encounter-event reachability
         run: python -m fast_engine.research.tmp_encounter_unreachable_probe
-      - name: Apply runner-only patternless encounter patch
+      - name: Apply validated patternless encounter patch
         run: python -m fast_engine.research.tmp_apply_patternless_encounter
+      - name: Focused permanent regressions
+        run: python -m pytest fast_engine/tests/test_patternless_encounter_events.py -q
       - name: Validate narrow blocker removal
         run: python -m fast_engine.research.tmp_validate_patternless_encounter
       - name: Patched frontier
         run: python -m fast_engine.research.tmp_next_frontier_probe
-      - name: Fast regression suite excluding stale ignored board
+      - name: Fast regression suite
         run: python -m pytest fast_engine/tests -q --ignore=fast_engine/tests/test_damage_patternless_board.py
+      - name: Standardized public ranking probe
+        run: python -m fast_engine.research.public_ranking_probe
+      - name: Commit production slice
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add fast_engine/engine/score.py
+          git add -f fast_engine/tests/test_patternless_encounter_events.py
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m 'fast: ignore unreachable patternless encounter events'
+          git push origin HEAD:fast-engine-phase2-20260901
