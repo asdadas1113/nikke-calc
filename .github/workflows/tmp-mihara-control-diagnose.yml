@@ -78,18 +78,6 @@ jobs:
               print('blocked_event', score._actor_has_executable_event(squad, actor, event_keys))
               print('unhandled_count', score._actor_has_unhandled_count_event(squad, actor, count_keys))
 
-              actor_event_effects=[]
-              for effect in member.effects:
-                  if not TriggerDispatcher.is_executable_effect(effect):
-                      continue
-                  keys=[r.event_key for r in effect.triggers]
-                  if any(k in event_keys or k in count_keys or k == 'core_hit_count' for k in keys):
-                      actor_event_effects.append((
-                          effect.name, effect.effect_type, effect.stat, keys,
-                          [(r.mode.value, r.threshold, r.trigger_count_reducible) for r in effect.triggers],
-                      ))
-              print('mihara_relevant_executable_effects', actor_event_effects)
-
               body=[]
               for effect in squad.effects:
                   if not TriggerDispatcher.is_executable_effect(effect):
@@ -98,13 +86,21 @@ jobs:
                       continue
                   body.append({
                       'owner': squad.members[effect.actor].name,
+                      'effect_id': effect.effect_id,
                       'name': effect.name,
                       'type': effect.effect_type,
                       'stat': effect.stat,
+                      'value': effect.value,
+                      'duration': effect.duration,
+                      'max_stack': effect.max_stack,
+                      'max_trigger': effect.max_trigger,
                       'target': effect.target,
-                      'possible_targets': list(score._possible_ally_targets(squad, effect)),
+                      'target_mode': effect.target_spec.mode.value,
+                      'possible_targets_static_owner': list(score._possible_ally_targets(squad, effect)),
+                      'conditions': [(c.kind.value, c.op, c.value, c.ref) for c in effect.condition_rules],
+                      'parameters': dict(effect.parameters),
                       'triggers': [
-                          (r.event_key, r.mode.value, r.threshold, r.trigger_count_reducible)
+                          (r.event_key, r.mode.value, r.threshold, r.trigger_count_reducible, r.raw)
                           for r in effect.triggers
                       ],
                       'capability': (
@@ -114,7 +110,6 @@ jobs:
                   })
               print('squad_body_hit_effects', body)
 
-              # Print every executable effect that can mutate Mihara's rapid cadence.
               cadence_stats={
                   'reload_speed_pct','reload_time_fixed','max_ammo_pct','max_ammo_flat',
                   'max_ammo_infinite','ammo_charge_flat','ammo_charge_pct','attack_speed_pct',
@@ -137,3 +132,6 @@ jobs:
                   })
               print('cadence_mutators_targeting_mihara', mutators)
           PY
+      - name: Locate Moris squad-body-hit semantics
+        run: |
+          grep -R -n -E "squad_body_hit|target_owner_actor|notify_team_hit" calculator context fast_engine | head -120 || true
