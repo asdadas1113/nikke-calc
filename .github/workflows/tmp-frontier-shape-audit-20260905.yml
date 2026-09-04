@@ -1,0 +1,86 @@
+name: tmp-frontier-shape-audit-20260905
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Audit unique-23 frontier shapes
+        run: |
+          python - <<'PY'
+          from collections import Counter, defaultdict
+          from context import snapshot, spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+          from fast_engine.engine.score import static_score_blockers
+
+          seen = set()
+          rows = []
+          freq = Counter()
+          by_family = Counter()
+          for team, entry in snapshot.SQUADS.items():
+              if team.startswith('지그_'):
+                  continue
+              members = tuple(entry['members'])
+              if members in seen:
+                  continue
+              seen.add(members)
+              squad = compile_moris_squad(spec.build_squad(list(members)))
+              blockers = static_score_blockers(squad)
+              for blocker in blockers:
+                  freq[blocker] += 1
+                  by_family[blocker.split(':', 1)[0]] += 1
+                  rows.append((team, squad, blocker))
+
+          print('ACCOUNTING', len(seen), sum(1 for team, entry in snapshot.SQUADS.items() if not team.startswith('지그_')))
+          print('FAMILIES')
+          for k, v in by_family.most_common():
+              print(v, k)
+
+          print('\nBLOCKERS')
+          for blocker, count in freq.most_common():
+              print(f'{count}\t{blocker}')
+
+          print('\nDETAILS')
+          emitted = set()
+          for team, squad, blocker in rows:
+              if blocker in emitted:
+                  continue
+              emitted.add(blocker)
+              family, rest = blocker.split(':', 1)
+              matches = []
+              for effect in squad.effects:
+                  owner = squad.members[effect.actor].name
+                  label = f'{owner}:{effect.name or effect.stat or "?"}:{effect.stat or "?"}'
+                  short = f'{owner}:{effect.name or "unnamed"}'
+                  if rest == label or rest == short or rest.startswith(label) or label.startswith(rest):
+                      matches.append(effect)
+              print('---')
+              print('BLOCKER', blocker)
+              print('TEAM', team)
+              if not matches:
+                  print('NO_EFFECT_MATCH')
+                  continue
+              for effect in matches:
+                  owner = squad.members[effect.actor].name
+                  print('EFFECT', owner, '|', effect.name, '|', effect.stat, '| type=', effect.effect_type)
+                  print(' target=', effect.target_spec.mode.value, 'runtime_target=', effect.target_spec.runtime_supported)
+                  print(' disposition=', effect.capability.disposition.value, 'cap_blockers=', tuple(effect.capability.blockers))
+                  print(' executable=', TriggerDispatcher.is_executable_effect(effect))
+                  print(' value=', effect.value, 'duration=', effect.duration, 'max_stack=', effect.max_stack, 'tick_interval=', effect.tick_interval)
+                  print(' params=', dict(effect.parameters))
+                  print(' triggers=', [(r.mode.value, r.event_key, r.interval, r.threshold) for r in effect.triggers])
+                  print(' conditions=', [(r.mode.value, getattr(r, 'threshold', None), getattr(r, 'stat', None)) for r in effect.condition_rules])
+          PY
