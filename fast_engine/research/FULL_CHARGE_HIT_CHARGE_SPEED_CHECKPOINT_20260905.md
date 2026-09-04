@@ -148,4 +148,19 @@ docs/cleanup finalizer HEAD:
 
 - `1dd06b721049c6402e0579448307ec103774d302`
 
-이 HEAD에서 temporary workflow가 제거됐고 `.github/workflows`에는 `ci.yml`, `pages.yml`만 남았다. 이 user-authored metadata commit으로 동일 production code와 clean workflow tree에 대한 canonical CI를 다시 실행한다. 최종 run/result는 후속 기록한다.
+이 HEAD에서 temporary workflow가 제거됐고 `.github/workflows`에는 `ci.yml`, `pages.yml`만 남았다.
+
+clean workflow tree와 동일 production code를 user-authored metadata commit `849b56b5a554bc28951f5f36df3bbb160128dd9f`에서 canonical CI로 검증했다.
+
+- run: `33924775444`
+- job: `101190834995`
+- workflow conclusion: `success`
+- doclint: success
+- `Fast — damage`: `147/147` — 기존 144개 + 이번 신규 3개가 canonical `test_damage*.py` discovery에 포함됨
+- calculator: `137/137` (1 skip)
+- optimizer: `374/374`
+- bridge: `31/31` (1 skip)
+- site: `385/385`
+- golden snapshot: `29/29`
+
+이 문서 commit은 위 성공 결과를 기록하기 위한 docs-only 변경이다. 따라서 이 최종 문서 HEAD에서도 동일 canonical CI를 다시 통과시켜 checkpoint를 닫는다.
