@@ -90,7 +90,7 @@ production:
 
 permanent regression:
 
-- `fast_engine/tests/test_ammo_pct_named_event.py`
+- `fast_engine/tests/test_damage_ammo_pct_named_event.py`
 - `fast_engine/tests/test_named_buff_event_runtime.py` Tove expectation 갱신
 
 runner-only A/B:
@@ -121,6 +121,10 @@ post-promotion validation:
 - `cadence:토브:개조 성공 2:attack_speed_pct`
 
 즉 named-event delivery와 provider cadence certification을 섞지 않았다.
+
+첫 cleanup HEAD `c7e55390cb8c9385e37e8237cd3d08d0a1ccb127`의 canonical CI run `33913173810`은 workflow 전체, bridge `31`, site `385`, golden `29/29`까지 통과했다. 다만 CI가 Fast damage를 `test_damage*.py`로 선택 실행하므로 당시 이름 `test_ammo_pct_named_event.py`는 canonical Fast 단계에 직접 포함되지 않는 것을 마지막 점검에서 발견했다.
+
+A/B와 post-promotion full Fast suite에서는 이미 새 3개 regression을 실행했으므로 기능 검증 실패는 아니었다. CI 계약을 완결하기 위해 테스트 내용은 그대로 두고 파일명을 `test_damage_ammo_pct_named_event.py`로 옮겼다. 이 이름은 기존 `Fast — damage` discovery에 자동 포함된다.
 
 상세:
 
@@ -262,15 +266,13 @@ Ada 두 public team에서 Ada 자체 blocker는 모두 제거됐지만 다른 bl
 
 ## 9. CI / cleanup 계약
 
-Tove production commit은 이미 runner-only A/B와 post-promotion validation에서 검증됐다.
+이번 조사에 사용한 temporary workflow와 Tove patch helper는 cleanup commit `c7e55390cb8c9385e37e8237cd3d08d0a1ccb127`에서 제거했다.
 
-최종 handoff/checkpoint 정리 commit에서는 이번 조사에 사용한 temporary workflow와 Tove patch helper를 제거하고 canonical `ci.yml`을 다시 트리거한다.
-
-최종 `.github/workflows`에는 다음만 남겨야 한다.
+`.github/workflows`에는 다음만 남긴다.
 
 - `ci.yml`
 - `pages.yml`
 
-최종 canonical CI에서 새 permanent regression이 실제 discovery되는지 확인한다.
+첫 cleanup canonical CI는 기능상 전부 초록이었지만 새 regression 파일명이 `test_damage*.py` discovery 계약 밖인 것을 마지막 점검에서 발견했다. 테스트를 `fast_engine/tests/test_damage_ammo_pct_named_event.py`로 rename한 뒤 canonical CI를 다시 실행해 **새 3개 regression이 `Fast — damage` test count에 실제 포함되는 것**까지 확인해야 이 checkpoint가 완전히 닫힌다.
 
 `master`는 그대로 둔다.
