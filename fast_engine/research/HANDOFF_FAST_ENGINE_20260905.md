@@ -11,19 +11,21 @@
 가장 먼저 읽을 문서:
 
 1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md`
-2. `fast_engine/research/ADA_CHARGE_HOLD_CONTROL_CHECKPOINT_20260905.md`
-3. `fast_engine/research/ADA_ONE_SHOT_CHARGE_SPEED_CHECKPOINT_20260905.md`
-4. `fast_engine/research/PATTERNLESS_ENCOUNTER_EVENT_CHECKPOINT_20260905.md`
-5. `fast_engine/research/COVERAGE_FRONTIER_CHECKPOINT_20260904.md`
-6. `fast_engine/research/CROWN_SELF_STACK_HEAL_CHECKPOINT_20260904.md`
-7. `fast_engine/research/TIMING_SEMANTICS_RANKING_CHECKPOINT_20260904.md`
+2. `fast_engine/research/TOVE_AMMO_PCT_NAMED_EVENT_CHECKPOINT_20260905.md`
+3. `fast_engine/research/ADA_CHARGE_HOLD_CONTROL_CHECKPOINT_20260905.md`
+4. `fast_engine/research/ADA_ONE_SHOT_CHARGE_SPEED_CHECKPOINT_20260905.md`
+5. `fast_engine/research/PATTERNLESS_ENCOUNTER_EVENT_CHECKPOINT_20260905.md`
+6. `fast_engine/research/COVERAGE_FRONTIER_CHECKPOINT_20260904.md`
+7. `fast_engine/research/CROWN_SELF_STACK_HEAL_CHECKPOINT_20260904.md`
+8. `fast_engine/research/TIMING_SEMANTICS_RANKING_CHECKPOINT_20260904.md`
 
 현재 최신 production semantic commit:
 
-- `73145b1862ce474bd78a5674916cfd7ec6a05f1e` — `fast: certify own-full-burst charge hold`
+- `47e8c47278bbd9125b42a8f08bde632638796026` — percent-ammo instant named-event emission / source certification
 
-직전 주요 commits:
+직전 주요 production commits:
 
+- `73145b1862ce474bd78a5674916cfd7ec6a05f1e` — pure charge `own_full_burst` hold ownership
 - `f70871e36ddf28a2474e7e25d6d7254cf9fe26cd` — Ada one-shot charge-speed lifetime
 - `4c78a27f024074a9e19391efc3d4ed6125c2d667` — patternless unreachable encounter-event blocker 제거
 - `68d8dea58e4b05a630fc1d6545dcb905a7c7cfa8` — finite self-state-end + enemy named-stack damage/remove
@@ -49,7 +51,7 @@ Fast-certified real public memberships:
 - certified: `2`
 - coverage gaps: `21`
 
-latest standardized public ranking:
+latest standardized public ranking은 certified universe가 2개일 때의 기존 결과를 유지한다.
 
 - clean relative error median: `+0.0626832%`
 - min: `+0.0349533%`
@@ -57,176 +59,189 @@ latest standardized public ranking:
 - pairwise accuracy: `1.0`
 - top-N recall: `1.0`
 
+이번 Tove slice 뒤에도 certified count가 `2`라 ranking probe는 재실행하지 않았다.
+
 optimizer production integration은 아직 하지 않는다.
 
 ---
 
-## 2. 최신 완료 — pure charge `own_full_burst` hold ownership
+## 2. 최신 완료 — percent-ammo instant named event
 
-Ada 이름을 특별취급하지 않고 다음 control shape를 좁게 generic certification 했다.
+토브 `급조 탄환 -> 임시 개조 2`에서 작은 generic gap을 닫았다.
 
-- charge weapon
-- non-clip
-- `control`의 유일한 key가 `hold`
-- `hold.policy == own_full_burst`
-- optional non-negative `lead`
-- mixed `tap_fire` / cover / reload / explicit sequence는 계속 fail closed
+실제 shape:
+
+- provider `급조 탄환`: `instant / ammo_charge_pct`, self, reducible `hit_count:10`
+- consumer `임시 개조 2`: `buff / crit_dmg +5.24`, all allies, 5s, `event:급조 탄환`
+
+Moris의 `handle_ammo_charge_pct`는 refill 성공 뒤 `event:{effect.name}`을 같은 caster로 notify한다. 반면 `ammo_charge_flat` handler에는 이 notify가 없다.
+
+따라서 Fast도 정확히 다음만 지원한다.
+
+- 성공한 `ammo_charge_pct` instant의 named-event emission
+- same-actor, executable, non-negative pct provider를 named-event source로 runtime/score에서 증명
+- consumer는 direct-damage-runtime-supported buff로 제한
+
+`ammo_charge_flat` named provider는 계속 fail closed다. flat까지 넓히면 Moris 의미론과 달라진다.
+
+production:
+
+- `47e8c47278bbd9125b42a8f08bde632638796026`
+
+permanent regression:
+
+- `fast_engine/tests/test_ammo_pct_named_event.py`
+- `fast_engine/tests/test_named_buff_event_runtime.py` Tove expectation 갱신
+
+runner-only A/B:
+
+- run `33912561440`
+- job `101152127477`
+- focused `16/16`
+- full Fast `248/248`
+
+post-promotion validation:
+
+- HEAD `d21c68517f83dee638d8ca566291534e1c23712f`
+- run `33912764211`
+- job `101152802424`
+- focused `16/16`
+- full Fast `248/248`
+- public `23 unique / 2 certified / 21 gaps`
+
+제거된 public blockers (`레이드_소다`, `스쿼드3`):
+
+- `normal_delivery:토브:임시 개조 2:crit_dmg`
+- `skill_state_delivery:토브:임시 개조 2:crit_dmg`
+
+다음 Tove cadence blockers는 의도적으로 남아 있다.
+
+- `cadence:토브:급조 탄환:ammo_charge_pct`
+- `cadence:토브:임시 개조:max_ammo_flat`
+- `cadence:토브:개조 성공 2:attack_speed_pct`
+
+즉 named-event delivery와 provider cadence certification을 섞지 않았다.
+
+상세:
+
+- `fast_engine/research/TOVE_AMMO_PCT_NAMED_EVENT_CHECKPOINT_20260905.md`
+
+---
+
+## 3. 미하라 control 진단 — no patch
+
+`컨트롤_미란다미하라`와 `레이드_미하라에이다`의 `미하라 : 본딩 체인` weapon/control 자체는 동일하다.
+
+team-dependent safety 차이는 D : 킬러 와이프 `타겟 섬멸 ATK`에서 나온다.
+
+- stat: `atk_caster_based_pct`
+- value: `12.19`
+- duration: `10s`
+- target: `self`
+- condition: `target_state:타겟 섬멸`
+- trigger: `body_hit_count:1` -> `squad_body_hit`
+
+Moris `notify_team_hit()`은 스쿼드 어느 아군이 본체를 명중해도 consumer를 확인하고, activation caster를 실제 attacker로 넘긴다. 따라서 target `self`는 D가 아니라 그 공격자를 뜻한다.
+
+기본 `enemy.has_parts=False`에서는 비코어 본체 명중마다 이 chronology가 발생한다.
+
+결론:
+
+- 미하라 control blocker를 단순 완화하면 오답이다.
+- executable global `squad_body_hit` consumer는 기존 rapid score fail-closed를 유지한다.
+- `레이드_미하라에이다`의 `control:미하라 : 본딩 체인`은 정상적인 coverage gap이다.
+
+---
+
+## 4. 직전 완료 — Ada charge ownership
+
+Ada 이름 특례 없이 pure charge `own_full_burst` hold를 좁게 generic certification했다.
 
 production:
 
 - `73145b1862ce474bd78a5674916cfd7ec6a05f1e`
 
-Fast는 global 1/60 loop를 추가하지 않았다. full charge에 도달하면 shot을 즉시 발사하는 대신 sparse latch 상태로 두고, 해당 actor가 그 burst cycle에 cast했을 때 확정된 `full_burst_end - lead` release boundary로만 이동한다.
+지원 shape:
 
-중요 semantics:
+- charge weapon
+- non-clip
+- control의 유일한 key가 `hold`
+- `hold.policy == own_full_burst`
+- optional non-negative `lead`
 
-- full charge 완료 전에는 기존 dynamic charge cadence 그대로다.
-- full charge 완료 후 hold 중에는 `charge_latched=True`다.
-- hold 중 charge-speed 상태가 바뀌어도 이미 완성된 charge의 release 시각을 다시 계산하지 않는다.
-- nominal release 2.500s는 Moris outer-tick 의미에 따라 observed boundary 약 2.516667s에서 발사된다.
-- actor가 해당 cycle에 burst cast하지 않았으면 hold가 걸리지 않는다.
+mixed control은 계속 fail closed다.
 
-Ada 실제 RL은 `cover_during_delay=True`지만 두 public Ada team에서 positive reload-speed upper bound가 `29.69%`라 Moris의 >=100% 특수 branch가 도달 불가능하다. 따라서 `cover_during_delay` 자체를 helper에서 blanket reject하지 않고 기존 `_charge_actor_score_safe()`가 reachability를 판단하게 했다.
+Ada 두 public team에서 Ada 자체 blocker는 모두 제거됐지만 다른 blocker 때문에 certified count는 증가하지 않았다.
 
-이 ownership이 열리면서 이미 존재하던 direct-damage `duration_bullets:1` runtime support가 Ada `특수 개조 2`에도 그대로 적용됐다. 별도의 Ada direct-damage 특례는 추가하지 않았다.
-
-permanent regression:
-
-- `fast_engine/tests/test_damage_charge_hold_control.py`
-- `fast_engine/tests/test_damage_charge_speed_bullet_lifetime.py`의 public Ada frontier expectation 갱신
-
-runner-only production gate:
-
-- focused: `27 tests` 통과
-- full Fast: `56 modules / 245 tests` 통과
-- standardized public ranking 통과
-
-public family delta:
-
-- cadence: `66` 유지
-- skill_state_delivery: `50 -> 48`
-- normal_delivery: `49 -> 47`
-- skill_damage: `27` 유지
-- weapon_change: `12` 유지
-- control: `8 -> 6`
-- normal_state: `7` 유지
-
-두 non-`지그_*` Ada public team에서 Ada 이름이 들어간 blocker는 모두 사라졌다.
-
-제거:
-
-- `control:에이다`
-- `normal_delivery:에이다:특수 개조 2:charge_dmg_pct`
-- `skill_state_delivery:에이다:특수 개조 2:charge_dmg_pct`
-- `cadence:에이다:특수 개조:charge_speed_pct`는 직전 checkpoint에서 이미 제거됨
-
-다만 두 team 모두 다른 캐릭터 blocker가 남아 있어 certified count는 `2` 그대로다.
-
-상세 근거:
+상세:
 
 - `fast_engine/research/ADA_CHARGE_HOLD_CONTROL_CHECKPOINT_20260905.md`
 
 ---
 
-## 3. 직전 완료 — Ada one-shot charge-speed lifetime
+## 5. 기타 최근 완료
 
-Ada `특수 개조`의 다음 shape를 좁게 generic certification 했다.
+### Ada one-shot charge-speed lifetime
 
+- production `f70871e36ddf28a2474e7e25d6d7254cf9fe26cd`
 - self `charge_speed_pct`
-- trigger exactly `burst_cast`
+- exactly `burst_cast`
 - `duration_bullets:1`
-- one stack
-- no conditions
-- capability blocker exactly `field:duration_bullets`
+- existing physical-shot / post-shot bullet-consume runtime 재사용
 
-production:
+### patternless encounter events
 
-- `f70871e36ddf28a2474e7e25d6d7254cf9fe26cd`
-
-Fast는 기존 dynamic charge runtime의 physical-shot 경계를 재사용한다. consuming charge shot은 상태를 적용한 cadence로 처리되고, shot score/hit 계열 뒤 post-shot bullet consume에서 상태가 제거된다.
-
-상세 근거:
-
-- `fast_engine/research/ADA_ONE_SHOT_CHARGE_SPEED_CHECKPOINT_20260905.md`
+- production `4c78a27f024074a9e19391efc3d4ed6125c2d667`
+- static patternless enemy에서 unreachable인 `enemy_death`, `event:part_destroy`만 score blocker에서 제외
+- runtime을 broad-enable하지 않음
+- Crown external heal 등 다른 named events는 fail closed 유지
 
 ---
 
-## 4. 직전 완료 — patternless encounter events
+## 6. 현재 frontier / 계속 보류하는 축
 
-표준 static enemy에서 발생하지 않는 다음 encounter event는 score blocker에서만 unreachable로 취급한다.
+가까운 public gap을 blocker 수만 보고 broad-enable하지 않는다.
 
-- `enemy_death`
-- `event:part_destroy`
+특히 다음은 이미 보류 근거가 있다.
 
-production:
-
-- `4c78a27f024074a9e19391efc3d4ed6125c2d667`
-
-제거된 blocker는 Volume 2개, Raven 1개뿐이며 runtime dispatcher를 broad-enable하지 않았다. Crown external `heal_received` 등 named-event blocker는 계속 fail closed다.
-
----
-
-## 5. 최신 blocker frontier
-
-post-charge-hold unique-23 family counts:
-
-- `cadence`: `66`
-- `skill_state_delivery`: `48`
-- `normal_delivery`: `47`
-- `skill_damage`: `27`
-- `weapon_change`: `12`
-- `normal_state`: `7`
-- `control`: `6`
-
-unsupported families: `0`
-
-반복도가 높은 큰 축은 여전히 다음과 같다.
-
-- Little Mermaid `거품 난사` — team-global `squad_ammo_consume:500`; chronology mismatch 때문에 보류
-- Mokdan `정정당당 승부다!` — weapon change
-- Crown `로얄 에타이어 4` — external heal 가능 팀은 계속 blocked
-- Privaty reload/max-ammo — recipient safety 문제와 결합
+- Little Mermaid `거품 난사` — team-global `squad_ammo_consume:500`; Fast/Moris crossing chronology mismatch
+- Crown `로얄 에타이어 4` — arbitrary/external `heal_received`
+- Mokdan `정정당당 승부다!` — broad weapon change
 - Nayuta `기억 연소` — cross-class `SMG -> RL`
-
-Ada 자체는 두 public team에서 blocker frontier를 더 이상 차지하지 않는다.
-
----
-
-## 6. 계속 보류하는 축
-
-근거 없이 broad-enable하지 않는다.
-
-- arbitrary/external `heal_received` chronology
-- Little Mermaid team-global `squad_ammo_consume`
-- cross-class / broad weapon change
-- HP-derived state 상수화
 - unsafe recipient를 무시한 reload/max-ammo
+- HP-derived state 상수화
 - generic `bonus_damage` family
+- executable global `squad_body_hit`
 - arbitrary multi-bullet cadence lifetime
-- mixed charge controls를 pure hold support로 간주하는 것
+- mixed charge controls
+
+현재 closest public membership `레이드_델타`는 Little Mermaid `거품 난사` 하나만 남았지만 위 이유로 억지 certification하지 않는다.
 
 ---
 
 ## 7. 다음 단일 checkpoint
 
-다음은 production patch를 전제하지 않는 **`미하라 : 본딩 체인` control safety diagnosis**다.
+다음 작업은 **남은 repeated delivery/cadence blocker를 다시 shape 단위로 분류해 작은 generic slice를 선정하는 것**이다.
 
-이유:
+이미 no-patch/hold가 확정된 축은 후보에서 제외한다.
 
-- `컨트롤_미란다미하라`는 현재 certified membership인데,
-- `레이드_미하라에이다`에서는 같은 캐릭터가 `control:미하라 : 본딩 체인` blocker를 만든다.
-
-따라서 character control 자체가 아니라 team-dependent score-safety invalidator일 가능성이 있다. 다음 checkpoint에서는 그 차이를 정확히 분리한다.
+- Mihara / `squad_body_hit`
+- Little Mermaid / `squad_ammo_consume`
+- Crown external heal
+- broad/cross-class weapon change
 
 진행 순서:
 
-1. 두 membership의 compiled `미하라 : 본딩 체인` weapon/control shape가 실제로 같은지 확인
-2. `_rapid_actor_score_safe()` / 관련 dynamic owner gate에서 어느 조건이 team별로 달라지는지 항목별 진단
-3. 미하라를 target할 수 있는 cadence/state effects와 executable weapon events를 비교
-4. certified team에서만 안전한 이유가 이미 generic proof로 표현돼 있는지 확인
-5. 좁은 generic relaxation이 증명되면 runner-only A/B, 아니면 no-patch로 종료
+1. 현재 unique-23 blocker frontier 재스캔
+2. 반복 effect를 stat 이름이 아니라 trigger / target / condition / recipient-safety shape로 묶기
+3. 기존 runtime이 이미 대부분 소유하고 있고 새로운 HP/global-shot chronology가 필요 없는 후보 우선
+4. real Moris semantic probe
+5. runner-only A/B
+6. focused regression
+7. public blocker delta
+8. certified count가 실제 증가할 때만 ranking validation 재실행
 
-목표는 blocker 숫자를 억지로 줄이는 것이 아니라 **동일 control의 team-dependent certification 원인**을 확정하는 것이다.
+목표는 blocker 숫자를 줄이는 것이 아니라 comparison-critical 의미론을 증명할 수 있는 작은 generic ownership을 계속 늘리는 것이다.
 
 ---
 
@@ -247,13 +262,15 @@ Ada 자체는 두 public team에서 blocker frontier를 더 이상 차지하지 
 
 ## 9. CI / cleanup 계약
 
-`73145b1`은 temporary promotion workflow의 `GITHUB_TOKEN` push로 만들어져 해당 SHA 자체의 branch-push canonical CI가 자동 생성되지 않는다.
+Tove production commit은 이미 runner-only A/B와 post-promotion validation에서 검증됐다.
 
-따라서 이 handoff/checkpoint 갱신과 모든 temporary workflow 제거를 같은 follow-up commit으로 묶어 canonical `ci.yml`을 트리거한다. 이 follow-up commit은 production engine/test tree를 그대로 포함하므로 canonical CI가 새 permanent regression을 실제 discovery하는 최종 gate다.
+최종 handoff/checkpoint 정리 commit에서는 이번 조사에 사용한 temporary workflow와 Tove patch helper를 제거하고 canonical `ci.yml`을 다시 트리거한다.
 
-최종 cleanup 후 `.github/workflows`에는 다음만 남겨야 한다.
+최종 `.github/workflows`에는 다음만 남겨야 한다.
 
 - `ci.yml`
 - `pages.yml`
+
+최종 canonical CI에서 새 permanent regression이 실제 discovery되는지 확인한다.
 
 `master`는 그대로 둔다.
