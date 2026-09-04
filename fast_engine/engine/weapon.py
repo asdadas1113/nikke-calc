@@ -19,6 +19,35 @@ _EPS = 1e-9
 _FRAME_RATE_CAP = 60.0
 
 
+def is_supported_charge_hold_control(member) -> bool:
+    """Certify the first sparse pure charge-hold control shape.
+
+    The supported shape is a non-clip charge weapon with exactly one control:
+    ``hold.policy == own_full_burst`` and an optional non-negative ``lead``.
+    Mixed controls (tap-fire/cover/reload/sequence) stay fail-closed. The
+    separate score-safety gate owns ``cover_during_delay`` reachability.
+    """
+
+    weapon = member.weapon
+    if str(weapon.get("fire_mode") or "") != "charge":
+        return False
+    if weapon.get("is_clip"):
+        return False
+    control = weapon.get("control") or {}
+    if not isinstance(control, dict) or set(control) != {"hold"}:
+        return False
+    hold = control.get("hold")
+    if not isinstance(hold, dict) or hold.get("policy") != "own_full_burst":
+        return False
+    if set(hold) - {"policy", "lead"}:
+        return False
+    try:
+        lead = float(hold.get("lead", 0.5))
+    except (TypeError, ValueError):
+        return False
+    return lead >= 0.0
+
+
 def _round_half_up(value: float) -> int:
     return math.floor(value + 0.5)
 
@@ -513,6 +542,7 @@ class _ChargeActorState:
     generation: int = 0
     scheduled_time: float | None = None
     signature: tuple[float, ...] | None = None
+    charge_latched: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -704,14 +734,29 @@ class DynamicChargeCadenceRuntime:
     def _next_outer_tick(self, after: float) -> float:
         return moris_next_tick(after, horizon=self.duration)
 
+    def _charge_shot_release_time(self, actor: int, ready_time: float) -> float:
+        return float(ready_time)
+
+    def _latch_charge_until_release(self, st: _ChargeActorState, ready_time: float) -> bool:
+        if st.charge_latched:
+            return False
+        release = self._charge_shot_release_time(st.actor, ready_time)
+        if release <= ready_time + _EPS:
+            return False
+        st.charge_latched = True
+        st.phase_end = self._observe_phase_boundary(release)
+        return True
+
     def _enter_charge(self, st: _ChargeActorState, at: float, now_for_mods: float) -> None:
         st.phase = "charging"
         st.charge_start = at
+        st.charge_latched = False
         st.phase_end = self._observe_phase_boundary(
             at + self._effective_charge_time(st.actor, now_for_mods)
         )
 
     def _after_shot(self, st: _ChargeActorState, shot_time: float) -> None:
+        st.charge_latched = False
         st.ammo -= 1
         st.full_charge_count += 1
         st.phase = "post_fire_reload" if st.ammo <= 0 else "post_fire"
@@ -775,6 +820,8 @@ class DynamicChargeCadenceRuntime:
             if when > self.duration + _EPS:
                 return
             if st.phase == "charging":
+                if self._latch_charge_until_release(st, when):
+                    continue
                 next_count = st.full_charge_count + 1
                 if self._shot_is_boundary(actor, next_count):
                     # A meaningful shot belongs to the global scheduler.
@@ -797,6 +844,8 @@ class DynamicChargeCadenceRuntime:
         while st.phase_end <= self.duration + _EPS:
             when = st.phase_end
             if st.phase == "charging":
+                if self._latch_charge_until_release(st, when):
+                    continue
                 next_count = st.full_charge_count + 1
                 if self._shot_is_boundary(actor, next_count):
                     return when, next_count
@@ -887,6 +936,7 @@ class DynamicChargeCadenceRuntime:
                     self._invalidate(st)
                     if (
                         st.phase == "charging"
+                        and not st.charge_latched
                         and old_signature is not None
                         and (signature[4], signature[5])
                         != (old_signature[4], old_signature[5])

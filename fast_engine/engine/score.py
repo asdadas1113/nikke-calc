@@ -22,7 +22,7 @@ from .shot_blocks import (
 )
 from .target_scope import possible_ally_targets, target_scope_is_static
 from .triggers import TriggerMode
-from .weapon import StaticCadenceModifiers
+from .weapon import StaticCadenceModifiers, is_supported_charge_hold_control
 
 if TYPE_CHECKING:
     from .burst import BurstPolicy
@@ -236,7 +236,10 @@ def _charge_actor_score_safe(squad: CompiledSquad, actor: int) -> bool:
     member = squad.members[actor]
     if str(member.weapon.get("fire_mode") or "") != "charge":
         return False
-    if member.weapon.get("control") or member.weapon.get("is_clip"):
+    control = member.weapon.get("control") or {}
+    if control and not is_supported_charge_hold_control(member):
+        return False
+    if member.weapon.get("is_clip"):
         return False
     if (
         member.weapon.get("cover_during_delay")
@@ -606,6 +609,11 @@ def _dynamic_charge_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
     actors.update(charge & set(_dynamic_max_ammo_score_actors(squad)))
     actors.update(_dynamic_charge_bullet_lifetime_score_actors(squad))
     actors.update(
+        actor
+        for actor, member in enumerate(squad.members)
+        if is_supported_charge_hold_control(member) and _charge_actor_score_safe(squad, actor)
+    )
+    actors.update(
         effect.actor
         for effect in squad.effects
         if effect.effect_type == "weapon_change"
@@ -772,9 +780,15 @@ def _direct_damage_buff_score_supported(squad: CompiledSquad, effect) -> bool:
 def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
     blockers: list[str] = []
     for actor, member in enumerate(squad.members):
-        if member.weapon.get("control") and not _rapid_actor_score_safe(
-            squad, actor, require_cover_control=True
-        ):
+        if not member.weapon.get("control"):
+            continue
+        mode = str(member.weapon.get("fire_mode") or "")
+        safe = (
+            _charge_actor_score_safe(squad, actor)
+            if mode == "charge"
+            else _rapid_actor_score_safe(squad, actor, require_cover_control=True)
+        )
+        if not safe:
             blockers.append(f"control:{member.name}")
 
     has_score_periodic = any(_is_score_safe_fixed_periodic(effect) for effect in squad.effects)

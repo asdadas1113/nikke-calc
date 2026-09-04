@@ -7,7 +7,7 @@ from .dynamic_rapid import DynamicRapidCadenceRuntime
 from .scheduler import EventScheduler, ScheduledEvent
 from .state import StateStore
 from .triggers import TriggerMode
-from .weapon import DynamicChargeCadenceRuntime
+from .weapon import DynamicChargeCadenceRuntime, is_supported_charge_hold_control
 
 if TYPE_CHECKING:
     from .effects import ActiveEffectStore
@@ -52,6 +52,7 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         "_score_actors",
         "_score_shot_sink",
         "_rapid_reload",
+        "_charge_hold_release",
     )
 
     def __init__(
@@ -123,6 +124,7 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         self._raw_on_attack_actors = frozenset(raw_on_attack_actors)
         self._score_actors: frozenset[int] = frozenset()
         self._score_shot_sink: Callable[[int, float], None] | None = None
+        self._charge_hold_release: dict[int, float] = {}
         self._rapid_reload = DynamicRapidCadenceRuntime(
             squad,
             effects,
@@ -174,13 +176,35 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
     ) -> None:
         self._rapid_reload.attach_score_sink(actors, sink)
 
+    def _charge_shot_release_time(self, actor: int, ready_time: float) -> float:
+        release = float(self._charge_hold_release.get(actor, -1.0))
+        return release if ready_time < release - 1e-9 else float(ready_time)
+
     def begin_full_burst(
         self,
         now: float,
         casted: Sequence[bool],
         full_burst_end: float,
     ) -> tuple[int, ...]:
-        return self._rapid_reload.begin_full_burst(now, casted, full_burst_end)
+        entered = set(self._rapid_reload.begin_full_burst(now, casted, full_burst_end))
+        for actor in self.actors:
+            if actor >= len(casted) or not casted[actor]:
+                continue
+            member = self.squad.members[actor]
+            if not is_supported_charge_hold_control(member):
+                continue
+            hold = member.weapon["control"]["hold"]
+            lead = float(hold.get("lead", 0.5))
+            release = self._observe_phase_boundary(float(full_burst_end) - lead)
+            if release <= now + 1e-9:
+                continue
+            self._advance_actor_to(actor, now, inclusive=False)
+            st = self._states[actor]
+            self._charge_hold_release[actor] = release
+            self._invalidate(st)
+            self._plan(actor, now)
+            entered.add(actor)
+        return tuple(sorted(entered))
 
     @staticmethod
     def _ammo_charge_gain(full: int, stat: str, value: float) -> int:

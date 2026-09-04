@@ -135,7 +135,7 @@ class ChargeSpeedBulletLifetimeTests(unittest.TestCase):
             static_normal_score_blockers(_squad(effect)),
         )
 
-    def test_public_ada_only_removes_charge_speed_lifetime_blocker(self):
+    def test_public_ada_charge_hold_unlocks_one_shot_delivery(self):
         for name in ("레이드_미하라에이다", "레이드_헬름아쿠아스노우"):
             compiled = compile_moris_squad(
                 spec.build_squad(list(snapshot.SQUADS[name]["members"]))
@@ -144,12 +144,12 @@ class ChargeSpeedBulletLifetimeTests(unittest.TestCase):
             self.assertNotIn(
                 "cadence:에이다:특수 개조:charge_speed_pct", blockers
             )
-            self.assertIn("control:에이다", blockers)
-            self.assertIn(
+            self.assertNotIn("control:에이다", blockers)
+            self.assertNotIn(
                 "normal_delivery:에이다:특수 개조 2:charge_dmg_pct",
                 blockers,
             )
-            self.assertIn(
+            self.assertNotIn(
                 "skill_state_delivery:에이다:특수 개조 2:charge_dmg_pct",
                 blockers,
             )
