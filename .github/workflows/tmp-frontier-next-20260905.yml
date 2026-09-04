@@ -10,66 +10,57 @@ permissions:
   contents: read
 
 jobs:
-  brady:
+  brady-source-audit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Brady compiled shape
+      - name: Exact Moris and Fast source ranges
+        run: |
+          echo '=== Moris stat_applied activation tail ==='
+          sed -n '2400,2455p' calculator/buff_manager.py
+          echo '=== Fast named event parsing/proof ==='
+          sed -n '750,875p' fast_engine/engine/dispatcher.py
+          sed -n '1010,1085p' fast_engine/engine/dispatcher.py
+          echo '=== Fast activation tail ==='
+          sed -n '1460,1525p' fast_engine/engine/dispatcher.py
+          echo '=== Fast score named source proof ==='
+          sed -n '720,800p' fast_engine/engine/score.py
+      - name: Exact Brady condition and split providers
         run: |
           python - <<'PY'
           from context import snapshot, spec
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.engine.score import static_score_blockers, _charge_actor_score_safe, _possible_ally_targets
 
-          for team, entry in snapshot.SQUADS.items():
-              if team.startswith('지그_') or '브래디' not in entry['members']:
-                  continue
-              squad = compile_moris_squad(spec.build_squad(list(entry['members'])))
-              print('\nTEAM', team, tuple(m.name for m in squad.members))
-              print('BLOCKERS', static_score_blockers(squad))
-              for effect in squad.effects:
-                  owner = squad.members[effect.actor].name
-                  keys = tuple(rule.event_key for rule in effect.triggers)
-                  if owner != '브래디' and not any('stat_applied' in (key or '') for key in keys):
-                      continue
-                  print('---')
-                  print('OWNER', owner)
-                  print('ID', effect.effect_id)
-                  print('NAME', effect.name)
-                  print('TYPE', effect.effect_type, 'STAT', effect.stat)
+          team = '레이드_앨리스브래디'
+          raw = spec.build_squad(list(snapshot.SQUADS[team]['members']))
+          squad = compile_moris_squad(raw)
+          brady = next(i for i,m in enumerate(squad.members) if m.name == '브래디')
+          print('TEAM', tuple(m.name for m in squad.members), 'BRADY_ACTOR', brady)
+          print('BRADY_CHARGE_SAFE', _charge_actor_score_safe(squad, brady))
+          print('BLOCKERS', static_score_blockers(squad))
+
+          for effect in squad.effects:
+              if effect.effect_id in {104,105,106,107} or (effect.stat or '') in {'split_dmg_pct','dot_dmg_pct'}:
+                  print('\nEFFECT', effect.effect_id, squad.members[effect.actor].name, effect.name)
+                  print('TYPE_STAT', effect.effect_type, effect.stat)
+                  print('TARGET_RAW', effect.target, 'TARGET_MODE', effect.target_spec)
+                  print('POSSIBLE_TARGETS', [(i, squad.members[i].name) for i in _possible_ally_targets(squad,effect)])
                   print('CAP', effect.capability.disposition.value, tuple(effect.capability.blockers))
                   print('EXEC', TriggerDispatcher.is_executable_effect(effect))
-                  print('TARGET', effect.target_spec.mode.value, 'runtime=', effect.target_spec.runtime_supported)
-                  print('VALUE', effect.value, 'DURATION', effect.duration, 'MAX_STACK', effect.max_stack, 'MAX_TRIGGER', effect.max_trigger)
+                  print('TRIGGERS', effect.triggers)
+                  print('CONDS', effect.condition_rules)
+                  print('RAW_CONDS', effect.conditions)
                   print('PARAMS', dict(effect.parameters))
-                  print('TRIGGERS', [(r.mode.value, r.event_key, r.interval, r.threshold, r.trigger_count_reducible) for r in effect.triggers])
-                  print('CONDS', [(r.mode.value, getattr(r, 'stat', None), getattr(r, 'threshold', None)) for r in effect.condition_rules])
-          PY
-      - name: Locate stat-applied source semantics
-        run: |
-          echo '=== stat_applied grep ==='
-          grep -Rni --exclude-dir=.git -E 'stat[_:-]?applied|stat applied' calculator fast_engine context || true
-          echo '=== named-event grep ==='
-          grep -Rni --exclude-dir=.git -E 'named_event|named event|event:\{' calculator fast_engine | head -200 || true
-      - name: Moris Brady trace
-        run: |
-          python - <<'PY'
-          from context import snapshot, spec
-          from calculator.timeline import simulate
 
-          team = next(name for name, entry in snapshot.SQUADS.items() if not name.startswith('지그_') and '브래디' in entry['members'])
-          squad = spec.build_squad(list(snapshot.SQUADS[team]['members']))
-          result = simulate(squad, config={'duration': 40.0, 'rng_mode': 'expected'}, verbose=True)
-          print('TEAM', team)
-          for row in result.log.buff_events:
-              if row.caster == '브래디' or row.target == '브래디' or '브래디' in str(row):
-                  print('BUFF_EVENT', row)
-          print('ALL_BRADY_SKILLS')
-          brady = next(member for member in squad.members if member.name == '브래디')
-          for effect in brady.effects:
-              print(effect)
+          split = next(e for e in squad.effects if e.effect_id == 106)
+          key = split.condition_rules[0].key if split.condition_rules else None
+          print('\nSPLIT_CONDITION_KEY', key)
+          if key:
+              providers = [e for e in squad.members[brady].effects if e.name == key]
+              print('BRADY_STATE_PROVIDERS_FOR_CONDITION', [(e.effect_id,e.name,e.effect_type,e.stat,TriggerDispatcher.is_executable_effect(e)) for e in providers])
           PY
