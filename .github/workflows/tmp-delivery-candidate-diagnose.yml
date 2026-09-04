@@ -21,7 +21,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect candidate effect shapes
+      - name: Inspect Tove named-event shape
         run: |
           python - <<'PY'
           from context import snapshot, spec
@@ -30,45 +30,30 @@ jobs:
           from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_supported
           import fast_engine.engine.score as score
 
-          cases = [
-              ('레이드_일레그', '아니스 : 스타', '스타더스트 3'),
-              ('레이드_소다', '토브', '임시 개조 2'),
-              ('레이드_소다', '도로시 : 세렌디피티', '섬광'),
-              ('레이드_소다', '도로시 : 세렌디피티', '섬광 2'),
-              ('레이드_브리드디젤', '스노우 화이트 : 헤비암즈', '어나더 화이트 공격력증가'),
-          ]
-          for team, owner_name, effect_name in cases:
-              squad=compile_moris_squad(spec.build_squad(list(snapshot.SQUADS[team]['members'])))
+          squad=compile_moris_squad(spec.build_squad(list(snapshot.SQUADS['레이드_소다']['members'])))
+          for owner_name,effect_name in (
+              ('토브','급조 탄환'),
+              ('토브','임시 개조 2'),
+          ):
               effect=next(e for e in squad.effects if squad.members[e.actor].name==owner_name and e.name==effect_name)
-              print('\n===',team,owner_name,effect_name,'===')
-              print('effect_id',effect.effect_id)
-              print('type/stat/value',effect.effect_type,effect.stat,effect.value)
+              print('\n===',owner_name,effect_name,'===')
+              print('id/type/stat/value',effect.effect_id,effect.effect_type,effect.stat,effect.value)
               print('duration/max_stack/max_trigger',effect.duration,effect.max_stack,effect.max_trigger)
-              print('target_raw',effect.target)
-              print('target_spec',repr(effect.target_spec))
-              print('target_runtime_supported',effect.target_spec.runtime_supported)
-              print('possible_targets',score._possible_ally_targets(squad,effect))
+              print('target',effect.target,repr(effect.target_spec),'possible',score._possible_ally_targets(squad,effect))
               print('conditions',[repr(x) for x in effect.condition_rules])
               print('triggers',[repr(x) for x in effect.triggers])
               print('parameters',dict(effect.parameters))
               print('capability',repr(effect.capability))
               print('dispatcher_executable',TriggerDispatcher.is_executable_effect(effect))
-              print('direct_runtime_supported',is_direct_damage_buff_runtime_supported(effect))
-              print('direct_score_supported',score._direct_damage_buff_score_supported(squad,effect))
-              print('named_event_keys',TriggerDispatcher._named_event_keys(effect))
-              for key in TriggerDispatcher._named_event_keys(effect):
-                  name=key.removeprefix('event:')
-                  providers=[]
-                  for p in squad.effects:
-                      if p.name==name:
-                          providers.append({
-                              'owner':squad.members[p.actor].name,
-                              'type':p.effect_type,'stat':p.stat,'duration':p.duration,
-                              'target':p.target,'conditions':[r.raw for r in p.condition_rules],
-                              'triggers':[(r.event_key,r.mode.value) for r in p.triggers],
-                              'params':dict(p.parameters),
-                              'exec':TriggerDispatcher.is_executable_effect(p),
-                              'marker_nop':TriggerDispatcher._named_event_marker_nop_shape_supported(p),
-                          })
-                  print('providers_for',name,providers)
+              print('direct_runtime_supported',is_direct_damage_buff_runtime_supported(effect) if effect.effect_type=='buff' else None)
+              print('direct_score_supported',score._direct_damage_buff_score_supported(squad,effect) if effect.effect_type=='buff' else None)
+          print('blockers',[x for x in score.static_score_blockers(squad) if '토브' in x])
           PY
+      - name: Trace Moris and Fast instant named-event code
+        run: |
+          echo '--- instant handler registrations ---'
+          grep -R -n -E "register_instant_event_handler|instant_event_handler" calculator | head -80 || true
+          echo '--- named event emission ---'
+          grep -R -n -E "event:\{.*name|event:\{.*effect|notify\(f\"event:|notify\(f'event:" calculator fast_engine | head -160 || true
+          echo '--- Tove literal references ---'
+          grep -R -n -E "급조 탄환|임시 개조 2" calculator context tests fast_engine | head -160 || true
