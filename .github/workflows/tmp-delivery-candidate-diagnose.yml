@@ -11,9 +11,9 @@ permissions:
   contents: read
 
 jobs:
-  diagnose:
+  ab:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -21,39 +21,298 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect Tove named-event shape
+
+      - name: Baseline contract
         run: |
           python - <<'PY'
           from context import snapshot, spec
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_supported
           import fast_engine.engine.score as score
 
-          squad=compile_moris_squad(spec.build_squad(list(snapshot.SQUADS['레이드_소다']['members'])))
-          for owner_name,effect_name in (
-              ('토브','급조 탄환'),
-              ('토브','임시 개조 2'),
-          ):
-              effect=next(e for e in squad.effects if squad.members[e.actor].name==owner_name and e.name==effect_name)
-              print('\n===',owner_name,effect_name,'===')
-              print('id/type/stat/value',effect.effect_id,effect.effect_type,effect.stat,effect.value)
-              print('duration/max_stack/max_trigger',effect.duration,effect.max_stack,effect.max_trigger)
-              print('target',effect.target,repr(effect.target_spec),'possible',score._possible_ally_targets(squad,effect))
-              print('conditions',[repr(x) for x in effect.condition_rules])
-              print('triggers',[repr(x) for x in effect.triggers])
-              print('parameters',dict(effect.parameters))
-              print('capability',repr(effect.capability))
-              print('dispatcher_executable',TriggerDispatcher.is_executable_effect(effect))
-              print('direct_runtime_supported',is_direct_damage_buff_runtime_supported(effect) if effect.effect_type=='buff' else None)
-              print('direct_score_supported',score._direct_damage_buff_score_supported(squad,effect) if effect.effect_type=='buff' else None)
-          print('blockers',[x for x in score.static_score_blockers(squad) if '토브' in x])
+          squad = compile_moris_squad(spec.build_squad(list(snapshot.SQUADS['레이드_소다']['members'])))
+          consumer = next(e for e in squad.effects if squad.members[e.actor].name == '토브' and e.name == '임시 개조 2')
+          blockers = score.static_score_blockers(squad)
+          print('baseline direct score supported', score._direct_damage_buff_score_supported(squad, consumer))
+          print('baseline Tove blockers', [b for b in blockers if '토브' in b])
+          assert not score._direct_damage_buff_score_supported(squad, consumer)
+          assert 'normal_delivery:토브:임시 개조 2:crit_dmg' in blockers
+          assert 'skill_state_delivery:토브:임시 개조 2:crit_dmg' in blockers
           PY
-      - name: Trace Moris and Fast instant named-event code
+
+      - name: Apply runner-only generic patch
         run: |
-          echo '--- instant handler registrations ---'
-          grep -R -n -E "register_instant_event_handler|instant_event_handler" calculator | head -80 || true
-          echo '--- named event emission ---'
-          grep -R -n -E "event:\{.*name|event:\{.*effect|notify\(f\"event:|notify\(f'event:" calculator fast_engine | head -160 || true
-          echo '--- Tove literal references ---'
-          grep -R -n -E "급조 탄환|임시 개조 2" calculator context tests fast_engine | head -160 || true
+          python - <<'PY'
+          from pathlib import Path
+
+          dispatcher = Path('fast_engine/engine/dispatcher.py')
+          text = dispatcher.read_text()
+          old = '''            elif stat in {"ammo_charge_pct", "ammo_charge_flat"}:
+              if self._ammo_charge_sink is None or any(target == ENEMY for target in targets):
+                  return False
+              actor_targets = tuple(int(target) for target in targets)
+              if not self._ammo_charge_sink(stat, actor_targets, value, now):
+                  return False
+          '''
+          new = '''            elif stat in {"ammo_charge_pct", "ammo_charge_flat"}:
+              if self._ammo_charge_sink is None or any(target == ENEMY for target in targets):
+                  return False
+              actor_targets = tuple(int(target) for target in targets)
+              if not self._ammo_charge_sink(stat, actor_targets, value, now):
+                  return False
+              # Moris' percent-ammo instant handler broadcasts event:{name}
+              # after the refill succeeds. Flat refill intentionally does not.
+              if (
+                  stat == "ammo_charge_pct"
+                  and effect.name
+                  and effect.name in self._named_event_names_needed
+              ):
+                  from .burst import BurstSignal
+                  self.dispatch(
+                      BurstSignal(
+                          now,
+                          f"event:{effect.name}",
+                          effect.actor,
+                          effect.actor,
+                      )
+                  )
+          '''
+          if old not in text:
+              raise SystemExit('dispatcher patch anchor not found')
+          dispatcher.write_text(text.replace(old, new, 1))
+
+          score = Path('fast_engine/engine/score.py')
+          text = score.read_text()
+          old = '''def _ammo_charge_named_event_safe(squad: CompiledSquad, effect) -> bool:
+              if not effect.name:
+                  return True
+              event_key = f"event:{effect.name}"
+              return not any(
+                  other.effect_id != effect.effect_id
+                  and any(rule.event_key == event_key for rule in other.triggers)
+                  for other in squad.effects
+              )
+          '''
+          new = '''def _ammo_charge_named_event_safe(squad: CompiledSquad, effect) -> bool:
+              if not effect.name:
+                  return True
+              event_key = f"event:{effect.name}"
+              consumers = tuple(
+                  other
+                  for other in squad.effects
+                  if other.effect_id != effect.effect_id
+                  and any(rule.event_key == event_key for rule in other.triggers)
+              )
+              if not consumers:
+                  return True
+              # Moris emits a named event only for percent refill. Keep flat
+              # refill fail-closed when anything depends on its name.
+              if (effect.stat or "") != "ammo_charge_pct":
+                  return False
+              # This first lane only composes the instant event with damage-facing
+              # buffs owned by the same actor. Other named-event consumers retain
+              # their own blocker instead of being silently skipped.
+              return all(
+                  consumer.actor == effect.actor
+                  and consumer.effect_type == "buff"
+                  and is_direct_damage_buff_runtime_supported(consumer)
+                  for consumer in consumers
+              )
+          '''
+          if old not in text:
+              raise SystemExit('score ammo named-event patch anchor not found')
+          text = text.replace(old, new, 1)
+
+          old = '''        providers = tuple(
+              provider
+              for provider in squad.effects
+              if provider.effect_id != effect.effect_id
+              and provider.effect_type == "buff"
+              and provider.name == name
+          )
+          if not providers:
+              return False
+          for provider in providers:
+              if TriggerDispatcher._named_event_keys(provider):
+                  return False
+              if provider.parameters.get("event_scope") not in (None, "", "squad", "recipients"):
+                  return False
+              if not provider.target_spec.runtime_supported:
+                  return False
+              if not (
+                  TriggerDispatcher.is_executable_effect(provider)
+                  or TriggerDispatcher._named_event_marker_nop_shape_supported(provider)
+              ):
+                  return False
+          '''
+          new = '''        providers = tuple(
+              provider
+              for provider in squad.effects
+              if provider.effect_id != effect.effect_id
+              and provider.name == name
+          )
+          if not providers:
+              return False
+          for provider in providers:
+              if provider.effect_type == "instant":
+                  # Moris' ammo_charge_pct handler emits event:{name} to the
+                  # instant caster. This source proof is deliberately independent
+                  # of cadence certification: if the refill cadence is unsafe,
+                  # that provider keeps its separate cadence blocker.
+                  if (
+                      provider.actor != effect.actor
+                      or (provider.stat or "") != "ammo_charge_pct"
+                      or provider.value is None
+                      or float(provider.value) < 0.0
+                      or any(rule.event_key == "battle_start" for rule in provider.triggers)
+                      or not provider.target_spec.runtime_supported
+                      or not _possible_ally_targets(squad, provider)
+                      or not TriggerDispatcher.is_executable_effect(provider)
+                  ):
+                      return False
+                  continue
+              if provider.effect_type != "buff":
+                  return False
+              if TriggerDispatcher._named_event_keys(provider):
+                  return False
+              if provider.parameters.get("event_scope") not in (None, "", "squad", "recipients"):
+                  return False
+              if not provider.target_spec.runtime_supported:
+                  return False
+              if not (
+                  TriggerDispatcher.is_executable_effect(provider)
+                  or TriggerDispatcher._named_event_marker_nop_shape_supported(provider)
+              ):
+                  return False
+          '''
+          if old not in text:
+              raise SystemExit('score named dependency patch anchor not found')
+          score.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+          git diff -- fast_engine/engine/dispatcher.py fast_engine/engine/score.py
+
+      - name: Add runner-only regression
+        run: |
+          cat > fast_engine/tests/test_tmp_tove_pct_named_event.py <<'PY'
+          from __future__ import annotations
+
+          import unittest
+
+          from context import snapshot, spec
+          from fast_engine.engine.burst import BurstPolicy, BurstSignal
+          from fast_engine.engine.burst_runtime import BurstRuntime
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.model import EnemyStaticProfile
+          import fast_engine.engine.score as score
+          from fast_engine.tests.test_damage_dynamic_ammo_charge import _ammo_effect, _named_consumer, _squad
+
+
+          class TovePctInstantNamedEventABTests(unittest.TestCase):
+              def test_synthetic_pct_provider_emits_named_event_and_is_score_safe(self):
+                  refill = _ammo_effect(stat='ammo_charge_pct', value=25.0)
+                  followup = _named_consumer()
+                  squad = _squad((refill, followup))
+                  blockers = score.static_score_blockers(squad)
+                  self.assertNotIn('cadence:synthetic-reload:refill:ammo_charge_pct', blockers)
+                  self.assertNotIn('normal_delivery:synthetic-reload:named followup:atk_pct', blockers)
+
+                  runtime = BurstRuntime(
+                      squad,
+                      BurstPolicy(duration=5.0, first_burst_time=30.0),
+                      EnemyStaticProfile(defense=0.0, duration=5.0),
+                  )
+                  runtime.dispatcher.attach_ammo_charge_sink(
+                      lambda stat, targets, value, now: True
+                  )
+                  runtime.dispatcher.dispatch(BurstSignal(1.0, 'burst_cast', 0, 0))
+                  self.assertEqual(runtime.dispatcher._activation_counts.get(refill.effect_id, 0), 1)
+                  self.assertEqual(runtime.dispatcher._activation_counts.get(followup.effect_id, 0), 1)
+                  self.assertAlmostEqual(
+                      runtime.dispatcher.effects.sum_stat(0, 'atk_pct', now=1.01),
+                      10.0,
+                      places=9,
+                  )
+
+              def test_flat_named_provider_remains_fail_closed_and_does_not_emit(self):
+                  refill = _ammo_effect(stat='ammo_charge_flat', value=1.0)
+                  followup = _named_consumer()
+                  squad = _squad((refill, followup))
+                  blockers = score.static_score_blockers(squad)
+                  self.assertIn('cadence:synthetic-reload:refill:ammo_charge_flat', blockers)
+
+                  runtime = BurstRuntime(
+                      squad,
+                      BurstPolicy(duration=5.0, first_burst_time=30.0),
+                      EnemyStaticProfile(defense=0.0, duration=5.0),
+                  )
+                  runtime.dispatcher.attach_ammo_charge_sink(
+                      lambda stat, targets, value, now: True
+                  )
+                  runtime.dispatcher.dispatch(BurstSignal(1.0, 'burst_cast', 0, 0))
+                  self.assertEqual(runtime.dispatcher._activation_counts.get(refill.effect_id, 0), 1)
+                  self.assertEqual(runtime.dispatcher._activation_counts.get(followup.effect_id, 0), 0)
+
+              def test_real_tove_consumer_source_is_certified_and_runtime_event_fires(self):
+                  squad = compile_moris_squad(
+                      spec.build_squad(list(snapshot.SQUADS['레이드_소다']['members']))
+                  )
+                  tove = next(i for i, member in enumerate(squad.members) if member.name == '토브')
+                  provider = next(e for e in squad.members[tove].effects if e.name == '급조 탄환')
+                  followup = next(e for e in squad.members[tove].effects if e.name == '임시 개조 2')
+                  self.assertTrue(score._direct_damage_buff_score_supported(squad, followup))
+                  blockers = score.static_score_blockers(squad)
+                  self.assertNotIn('normal_delivery:토브:임시 개조 2:crit_dmg', blockers)
+                  self.assertNotIn('skill_state_delivery:토브:임시 개조 2:crit_dmg', blockers)
+                  # Other Tove cadence mechanics are intentionally outside this slice.
+                  self.assertIn('cadence:토브:임시 개조:max_ammo_flat', blockers)
+
+                  runtime = BurstRuntime(
+                      squad,
+                      BurstPolicy(duration=5.0, first_burst_time=30.0),
+                      EnemyStaticProfile(defense=0.0, duration=5.0),
+                  )
+                  runtime.dispatcher.attach_ammo_charge_sink(
+                      lambda stat, targets, value, now: True
+                  )
+                  for n in range(10):
+                      runtime.dispatcher.dispatch(BurstSignal(0.1 * n, 'hit_count', tove, tove))
+                  self.assertEqual(runtime.dispatcher._activation_counts.get(provider.effect_id, 0), 1)
+                  self.assertEqual(runtime.dispatcher._activation_counts.get(followup.effect_id, 0), 1)
+                  for actor in range(len(squad.members)):
+                      self.assertAlmostEqual(
+                          runtime.dispatcher.effects.sum_stat(actor, 'crit_dmg', now=0.91),
+                          float(followup.value or 0.0),
+                          places=9,
+                      )
+
+          if __name__ == '__main__':
+              unittest.main()
+          PY
+
+      - name: Focused regression
+        run: |
+          python -m unittest -v \
+            fast_engine.tests.test_damage_dynamic_ammo_charge \
+            fast_engine.tests.test_named_buff_event_runtime \
+            fast_engine.tests.test_tmp_tove_pct_named_event
+
+      - name: Public blocker delta
+        run: |
+          python - <<'PY'
+          from context import snapshot, spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+
+          for team in ('레이드_소다', '스쿼드3'):
+              squad = compile_moris_squad(spec.build_squad(list(snapshot.SQUADS[team]['members'])))
+              blockers = static_score_blockers(squad)
+              print('\n', team)
+              print('\n'.join(blockers))
+              assert 'normal_delivery:토브:임시 개조 2:crit_dmg' not in blockers
+              assert 'skill_state_delivery:토브:임시 개조 2:crit_dmg' not in blockers
+              assert any(item.startswith('cadence:토브:') for item in blockers)
+          PY
+
+      - name: Full Fast regression
+        run: |
+          python -m unittest discover -s fast_engine/tests -p 'test_*.py'
