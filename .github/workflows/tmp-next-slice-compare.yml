@@ -11,14 +11,25 @@ permissions:
   contents: read
 
 jobs:
-  compare:
+  helm-periodic-ab:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Compare narrow candidates
+      - name: Apply runner-only Helm candidate and semantic trace
         run: PYTHONPATH=. python .github/scripts/tmp_next_slice_compare.py
-      - name: Confirm diagnostic only
-        run: git diff --exit-code
+      - name: Diff sanity
+        run: git diff --check
+      - name: Focused periodic and damage-state regressions
+        run: |
+          python -m unittest -v \
+            fast_engine.tests.test_damage_periodic_self_crit \
+            fast_engine.tests.test_damage_state \
+            fast_engine.tests.test_damage_spawn_lifecycle \
+            fast_engine.tests.test_periodic_runtime
+      - name: Full Fast regressions
+        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
+      - name: Standardized public ranking probe
+        run: PYTHONPATH=. python -m fast_engine.research.public_ranking_probe
