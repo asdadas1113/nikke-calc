@@ -11,19 +11,21 @@
 가장 먼저 읽을 문서:
 
 1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260906.md`
-2. `fast_engine/research/SPARSE_SAME_TIMESTAMP_ACTOR_TRANSACTION_CHECKPOINT_20260906.md`
-3. `fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md`
-4. `fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md`
+2. `fast_engine/research/LAZY_DYNAMIC_RANK_TARGET_CHECKPOINT_20260906.md`
+3. `fast_engine/research/SPARSE_SAME_TIMESTAMP_ACTOR_TRANSACTION_CHECKPOINT_20260906.md`
+4. `fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md`
+5. `fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md`
 
 ## 1. 현재 production 상태
 
 latest semantic production commit:
 
+- `cc11c5c08d907001ab6e7841c05da7f3179afa67` — lazy dynamic-rank target resolution ownership
+
+직전 semantics restoration:
+
 - `0351fb40bd7faae5c62697c22588239b4c6868d4` — sparse same-timestamp actor transaction ownership
-
-follow-up regression commit:
-
-- `7e3fb23cc184ddc48b552da60927bd31faa68250` — guard 시절 stale RHQ assertion 2개를 certified expectation으로 복구
+- `7e3fb23cc184ddc48b552da60927bd31faa68250` — guard 시절 stale RHQ assertions 복구
 
 직전 safety commits:
 
@@ -31,107 +33,125 @@ follow-up regression commit:
 - `aadfde37ad7be708f6b3d3312ff828844a8a391a` — unsafe dynamic-rank timing fail-closed
 - `4c11c2dd4317393c3220b6f0957e12e34e3b6502` — scored-state remover dependency fail-closed
 
-`438eef...`의 ordering guard는 의미론을 실제 소유한 뒤 제거했다. 다른 safety closure는 유지한다.
+두 safety guard는 각각 실제 semantics ownership을 확보한 narrow shape에 대해서만 철회했다. 나머지 미소유 surface는 계속 fail-closed다.
 
-## 2. 이번 완료 — sparse same-timestamp actor transaction
+## 2. 최신 완료 — lazy dynamic-rank resolution
 
-기존 Fast 문제:
+Moris는 dynamic rank target buff를 activation 시 concrete target으로 확정하지 않는다. `target_chars=None`으로 보관한 뒤 첫 실제 buff read에서 live ATK로 target을 resolve하며, 같은 caster + activation time + exact raw selector sibling은 하나의 cohort를 공유한다.
 
-- 첫 phase-30 trigger 전에 timestamp `t`의 모든 static actor shot을 먼저 score
-- Moris의 actor별 `shot → post-shot mutation → next actor shot` 순서를 flatten
+Fast도 이를 좁게 소유했다.
 
-현재 구현:
+- unresolved rank buff를 `ActiveEffectStore` pending target으로 보관
+- 첫 해당 stat read 때 materialize
+- cache identity는 activation time, 실제 ranking 값은 first-read 시점 live ATK
+- unresolved rank buff는 자기 own ranking 계산에 끼지 않음
+- pending activation이 damage cache를 stale하게 남기지 않도록 ally EFFECT dependency를 invalidate
+- 이미 resolved된 effect refresh는 기존 cohort 유지
 
-- global 60 Hz/per-shot loop 없음
-- phase-30 equal-time weapon work만 roster actor order로 정렬
-- static ShotBlockCursor는 exact-`t`에서 현재 actor prefix까지만 inclusive consume
-- same timestamp가 끝나면 기존 end-of-timestamp drain으로 나머지 shot 처리
-- dynamic weapon boundary도 기존 phase-30 scheduler를 통해 같은 actor transaction에 참여
+지원 범위는 max-stack 1, no bullet lifetime, no runtime condition, no recipient-scoped named-event/state dependency인 direct-damage rank buff로 한정한다.
 
-public 결과:
+따라서 미란다 `파워 업!` / `파워 업! 2`는 owned 되었지만 `웨이크업! 4`의 `duration_bullets:1`은 이번 lazy slice로 넓히지 않았다.
+
+상세:
+
+- `fast_engine/research/LAZY_DYNAMIC_RANK_TARGET_CHECKPOINT_20260906.md`
+
+## 3. 직전 완료 — sparse same-timestamp actor transaction
+
+Fast의 phase-30 equal-time weapon work를 roster actor order로 처리하고, static shot block은 exact timestamp에서 현재 actor prefix까지만 consume하도록 바꿨다. global 60 Hz/per-shot loop는 추가하지 않았다.
+
+결과:
 
 - RHQ ordering blockers 4개 제거
-  - 프리카 `무대, 시작할게.` / `2` / `3`
-  - 민트 `보컬 효과`
-- public `23 unique / 1 certified / 22 gaps`
-- certified: `레이드_레드후드퀀시`
-- `컨트롤_미란다미하라`는 rank timing guard 때문에 계속 fail-closed
+- `레이드_레드후드퀀시` certification 복구
 
 상세:
 
 - `fast_engine/research/SPARSE_SAME_TIMESTAMP_ACTOR_TRANSACTION_CHECKPOINT_20260906.md`
 
-## 3. 검증
+## 4. 현재 public frontier
 
-최종 semantic/test 상태 canonical CI:
+latest semantic `cc11c5c08d907001ab6e7841c05da7f3179afa67` 기준:
 
-- run `33979473026`
-- job `101341973396`
-- **전체 success**
+- source cases: `24`
+- unique ordered memberships: `23`
+- certified: **2**
+- coverage gaps: **21**
 
-canonical results:
+certified:
 
-- Fast damage `170/170`
-- Fast complete discovery `278/278`
-- calculator `137/137 (1 skip)`
-- optimizer `374/374`
-- bridge `31/31 (1 skip)`
-- site `385/385`
-- golden `29/29`
-- structural 180 s median 약 `175.7 ms`, events `539`
+- `레이드_레드후드퀀시`
+- `컨트롤_미란다미하라`
 
-RHQ 30 s Moris/Fast direct regression:
+fresh blocker families:
 
-- Moris `236,373,847`
-- Fast `236,465,053.42473748`
-- relative error 약 `+0.0386%`
+- normal state `34`
+- normal delivery `55`
+- skill-state delivery `62`
+- skill damage `27`
+- cadence `62`
+- weapon change `12`
+- control `4`
+- periodic grid `1`
 
-첫 run `33979331938`의 complete discovery 실패 2개는 guard 존재를 계속 기대하던 shard-outside stale assertions였고, 구현은 Fast damage shard부터 이미 통과했다. stale assertions를 pre-guard certified regression으로 복구한 뒤 최종 canonical run이 전부 초록이다.
+감사 전의 2 certified를 단순 guard 제거로 되돌린 것이 아니다. RHQ는 sparse actor transaction, Miranda는 actual first-read lazy rank snapshot을 각각 구현해 복구했다.
 
-## 4. 현재 phase
+## 5. 검증
+
+lazy-rank promotion pre-commit workflow:
+
+- run `33983062877`
+- job `101351627750`
+- focused lazy-rank regressions: success
+- full Fast discovery: **279/279**
+- public frontier assertion: **23 unique / 2 certified / 21 gaps**
+- structural 180 s median 약 `180.66 ms`, events `539`
+- RHQ 30 s existing Moris/Fast relative error 약 `+0.0386%` 유지
+
+focused에서 실제 `컨트롤_미란다미하라` blocker-free certification과 방어력 55,000 near-tie 180초 Moris/Fast 순서·오차 계약을 복구했다.
+
+semantic commit push는 workflow 내부 `GITHUB_TOKEN`이었기 때문에 별도 canonical push run을 재트리거하지 않는다. 이 handoff/checkpoint 직접 커밋의 clean HEAD에서 canonical `ci.yml` 전체 gate를 다시 확인해 최종 상태로 사용한다.
+
+## 6. 현재 phase
 
 현재는 **false-supported safety closure → semantics restoration**을 계속한다.
 
 복구 완료:
 
 1. sparse same-timestamp actor transaction → RHQ certification 복구
+2. lazy dynamic-rank first-read resolution → Miranda certification 복구
 
 아직 fail-closed:
 
-1. lazy dynamic-rank resolution / same-event cohort
-2. finite reference-stack capture
-3. generic full-burst conditional permanent passive
-4. broader producer/mutator dependency ownership
+1. finite reference-stack capture
+2. generic full-burst conditional permanent passive
+3. broader producer/mutator dependency ownership
 
-raw coverage expansion이나 optimizer integration으로 돌아가지 않는다.
+raw coverage expansion이나 optimizer production integration으로 돌아가지 않는다.
 
-## 5. 다음 단일 체크포인트
+## 7. 다음 단일 체크포인트
 
-**lazy dynamic-rank resolution / same-event cohort semantics**
+**finite reference-stack capture semantics**
 
-우선 public anchor:
+우선 Maid Mast / Tove / Arcana 계열 public surface를 다시 감사한다.
 
-- `컨트롤_미란다미하라`
-- 미란다 `파워 업!`
-- 미란다 `파워 업! 2`
+핵심 확인:
 
-확인해야 할 핵심:
+- `scaling == stack_count` / `scaling_ref`의 source stack을 Moris가 어느 시점에 capture하는가
+- target effect activation 뒤 source stack 변화가 기존 effect magnitude를 바꾸는가
+- finite duration / refresh / reactivation에서 capture가 다시 일어나는가
+- source provider가 없거나 도달 불가능한 경우를 어떻게 fail-closed할 것인가
 
-- 같은 `burst_cast` timestamp에 Brid `풀 마스콘`, Rouge `더 게임 마스터` 등 ATK mutation이 존재한다.
-- Moris가 `allies_top_atk_excl:*` target을 어느 transaction 지점에서 lazy resolve하는지 직접 probe한다.
-- synthetic target inversion만 보지 말고 실제 public reachability와 Moris/Fast target/activation trace를 대조한다.
-- ownership이 증명되기 전 `rank_target_timing` guard를 제거하지 않는다.
-- global frame loop를 만들지 않는다. sparse/same-event cohort 방식으로 해결 가능한지 먼저 본다.
+단순 blocker 제거가 아니라 실제 capture/live-reference semantics를 probe한 뒤 좁은 generic ownership으로 구현한다.
 
-성공하면 `컨트롤_미란다미하라`가 두 번째 certified membership으로 복구될 가능성이 있다. 실패하면 guard를 유지하고 다음 semantics로 넘어간다.
+`레이드_볼륨` Scarlet `ammo_charge_pct` 마지막 visible blocker만 먼저 제거하는 것은 계속 보류한다. Maid Mast reference-stack 의미론이 아직 미소유이므로 그것만 열면 false certification 위험이 있다.
 
-## 6. 작업공간 상태
+## 8. 작업공간 상태
 
 - branch: `fast-engine-phase2-20260901`
-- pre-doc HEAD: `7e3fb23cc184ddc48b552da60927bd31faa68250`
-- latest semantic: `0351fb40bd7faae5c62697c22588239b4c6868d4`
+- latest semantic: `cc11c5c08d907001ab6e7841c05da7f3179afa67`
 - master: `fb2fd9157aa14499daf6b9f185beb685d4393f90`
 - temporary workflow: 없음
 - `.github/workflows`: `ci.yml`, `pages.yml`만 유지
 
-이 문서 커밋 후 최신 branch HEAD와 canonical CI를 다시 확인해 최종 clean gate로 기록한다.
+이 문서 커밋 후 최신 branch HEAD와 canonical CI를 확인해 최종 clean gate로 기록한다.
