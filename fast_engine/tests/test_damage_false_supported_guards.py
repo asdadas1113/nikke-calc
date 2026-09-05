@@ -47,13 +47,20 @@ class FalseSupportedScalingGuardTests(unittest.TestCase):
         squad = _compiled([_effect("AUDIT scaled reload", "reload_speed_pct", target="self", duration=-1.0, timing="battle_start")])
         self.assertIn("cadence:라피:AUDIT scaled reload:reload_speed_pct", static_score_blockers(squad))
 
-    def test_unowned_full_burst_conditional_passive_fails_closed(self):
+    def test_owned_full_burst_conditional_passive_and_neighbor_guard(self):
         squad = _compiled([_conditional_passive(
             "AUDIT conditional", "atk_pct", "during_full_burst"
         )])
         blockers = static_score_blockers(squad)
-        self.assertIn("normal_delivery:라피:AUDIT conditional:atk_pct", blockers)
-        self.assertIn("skill_state_delivery:라피:AUDIT conditional:atk_pct", blockers)
+        self.assertNotIn("normal_delivery:라피:AUDIT conditional:atk_pct", blockers)
+        self.assertNotIn("skill_state_delivery:라피:AUDIT conditional:atk_pct", blockers)
+
+        neighbor = _compiled([_conditional_passive(
+            "AUDIT not-fb", "atk_pct", "not_during_full_burst"
+        )])
+        neighbor_blockers = static_score_blockers(neighbor)
+        self.assertIn("normal_delivery:라피:AUDIT not-fb:atk_pct", neighbor_blockers)
+        self.assertIn("skill_state_delivery:라피:AUDIT not-fb:atk_pct", neighbor_blockers)
 
     def test_unowned_remove_of_scored_buff_fails_closed(self):
         provider = {

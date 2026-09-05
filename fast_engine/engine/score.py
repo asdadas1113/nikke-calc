@@ -7,6 +7,7 @@ from .conditions import ConditionMode
 from .core_events import is_static_expected_core_count_rule
 from .damage_policy import (
     DIRECT_DAMAGE_STATE_STATS,
+    full_burst_conditional_permanent_passive_shape,
     is_direct_damage_buff_runtime_supported,
     is_static_element_override_score_supported,
 )
@@ -809,8 +810,32 @@ def _named_buff_event_dependency_score_safe(squad: CompiledSquad, effect) -> boo
     return True
 
 
+def _full_burst_conditional_passive_dependency_score_safe(
+    squad: CompiledSquad, effect
+) -> bool:
+    if not full_burst_conditional_permanent_passive_shape(effect):
+        return True
+    if not effect.name:
+        return True
+    event_key = f"event:{effect.name}"
+    if any(
+        any((rule.event_key or "") == event_key for rule in other.triggers)
+        for other in squad.effects
+        if other.effect_id != effect.effect_id
+    ):
+        return False
+    return not any(
+        rule.key == effect.name
+        for other in squad.effects
+        if other.effect_id != effect.effect_id
+        for rule in other.condition_rules
+    )
+
+
 def _direct_damage_buff_score_supported(squad: CompiledSquad, effect) -> bool:
     if not is_direct_damage_buff_runtime_supported(effect):
+        return False
+    if not _full_burst_conditional_passive_dependency_score_safe(squad, effect):
         return False
     if (
         _has_unowned_reference_stack_scaling(effect)

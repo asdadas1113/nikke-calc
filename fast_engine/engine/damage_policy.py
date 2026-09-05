@@ -198,6 +198,34 @@ def _one_shot_lifetime_supported(effect) -> bool:
     return True
 
 
+def full_burst_conditional_permanent_passive_shape(effect) -> bool:
+    """Own one sparse permanent self ATK passive gated by full-burst phase.
+
+    This first phase-edge slice deliberately excludes accuracy/cadence/state
+    toggles and every non-self or multi-stack shape.  Moris keeps the passive
+    row registered and gates contribution live; Fast materializes only the true
+    full-burst intervals.
+    """
+    return (
+        effect.effect_type == "buff"
+        and (effect.stat or "") in {"atk_pct", "atk_flat", "atk_caster_based_pct"}
+        and effect.value is not None
+        and effect.target_spec.mode is TargetMode.SELF
+        and effect.target_spec.runtime_supported
+        and effect.duration in (None, -1.0)
+        and effect.max_stack in (None, 1, 1.0)
+        and effect.max_trigger is None
+        and effect.tick_interval is None
+        and not effect.parameters
+        and len(effect.condition_rules) == 1
+        and effect.condition_rules[0].mode is ConditionMode.DURING_FULL_BURST
+        and len(effect.triggers) == 1
+        and effect.triggers[0].mode is TriggerMode.EVENT
+        and effect.triggers[0].raw == "passive"
+        and effect.triggers[0].event_key == "battle_start"
+    )
+
+
 def _conditional_passive_runtime_owned(effect) -> bool:
     """Only accept permanent passive condition families with sparse edge sync.
 
@@ -221,6 +249,8 @@ def _conditional_passive_runtime_owned(effect) -> bool:
         or not effect.target_spec.runtime_supported
     ):
         return False
+    if full_burst_conditional_permanent_passive_shape(effect):
+        return True
     if all(
         rule.mode is ConditionMode.SELF_STACK_AT_LEAST and bool(rule.key)
         for rule in effect.condition_rules

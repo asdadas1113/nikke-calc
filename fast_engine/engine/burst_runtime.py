@@ -592,6 +592,8 @@ class BurstRuntime:
                 full_burst_extension=extension,
                 cooldown_buff_provider=self.dispatcher.burst_cooldown_buff,
             )
+            if event.kind in {EventKind.FULL_BURST_START, EventKind.FULL_BURST_END}:
+                self.dispatcher.sync_full_burst_conditional_passives(now=event.time)
             for signal in signals:
                 if signal.event_key == "burst_cast" and signal.source_actor is not None:
                     casts.append(

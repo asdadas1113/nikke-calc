@@ -8,6 +8,7 @@ from .capabilities import CapabilityDisposition
 from .conditions import ConditionEvaluator, ConditionMode, SignalContext
 from .damage_policy import (
     DIRECT_DAMAGE_STATE_STATS,
+    full_burst_conditional_permanent_passive_shape,
     is_direct_damage_buff_runtime_supported,
 )
 from .effects import ActiveEffectStore
@@ -44,7 +45,7 @@ class TriggerDispatcher:
         "conditions", "damage_sink", "_effect_table", "_event_counts", "_conditional_counts",
         "_activation_counts", "_state_dependency_names", "_self_stack_passive_ids",
         "_self_stack_dependency_names", "_self_state_passive_ids",
-        "_self_state_dependency_names", "_gauge_maxima",
+        "_self_state_dependency_names", "_full_burst_passive_ids", "_gauge_maxima",
         "_unsafe_gauge_families", "_strict_score_delivery", "_ammo_charge_sink",
         "_force_reload_sink", "_named_event_names_needed",
     )
@@ -197,6 +198,12 @@ class TriggerDispatcher:
             for effect_id in self._self_state_passive_ids
             for rule in self._effect_table[effect_id].condition_rules
             if rule.key
+        )
+        self._full_burst_passive_ids = tuple(
+            effect.effect_id
+            for effect in self._effect_table
+            if full_burst_conditional_permanent_passive_shape(effect)
+            and self.is_runtime_executable_effect(effect)
         )
 
     def enable_strict_score_delivery(self) -> None:
@@ -1448,6 +1455,29 @@ class TriggerDispatcher:
             )
             is_active = self.effects.group_active(effect.effect_id, targets, now=now)
             if should_be_active and not is_active:
+                self.effects.activate_group(effect, targets, now, self.scheduler)
+            elif not should_be_active and is_active:
+                self.effects.deactivate_group(effect.effect_id, targets, now=now)
+
+    def sync_full_burst_conditional_passives(self, *, now: float) -> None:
+        """Materialize/de-materialize permanent passives on full-burst phase edges."""
+        for effect_id in self._full_burst_passive_ids:
+            effect = self._effect_table[effect_id]
+            targets = self.targets.resolve(
+                effect.target_spec, owner_actor=effect.actor, now=now
+            )
+            should_be_active = self.conditions.evaluate_all(
+                effect.condition_rules,
+                effect_id=effect.effect_id,
+                owner_actor=effect.actor,
+                target_actor=None,
+                now=now,
+                context=SignalContext(),
+            )
+            is_active = self.effects.group_active(effect.effect_id, targets, now=now)
+            if should_be_active and not is_active:
+                # This is a condition-gating transition, not a fresh trigger;
+                # activate_group itself does not broadcast a generic named event.
                 self.effects.activate_group(effect, targets, now, self.scheduler)
             elif not should_be_active and is_active:
                 self.effects.deactivate_group(effect.effect_id, targets, now=now)
