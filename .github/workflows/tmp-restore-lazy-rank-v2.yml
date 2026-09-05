@@ -1,0 +1,104 @@
+name: tmp-restore-lazy-rank-v2
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+    paths:
+      - .github/workflows/tmp-restore-lazy-rank-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Apply corrected embedded patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/tmp-restore-lazy-rank.yml')
+          text = workflow.read_text(encoding='utf-8').replace(
+              'if count != 6:', 'if count != 4:'
+          )
+          marker = "          python - <<'PY'\n"
+          end = "\n          PY"
+          blocks = []
+          pos = 0
+          while True:
+              start = text.find(marker, pos)
+              if start < 0:
+                  break
+              start += len(marker)
+              stop = text.find(end, start)
+              if stop < 0:
+                  raise SystemExit('unterminated embedded python block')
+              block = textwrap.dedent(text[start:stop])
+              blocks.append(block)
+              pos = stop + len(end)
+
+          # The first two blocks are the engine patch and permanent regression patch.
+          if len(blocks) < 2:
+              raise SystemExit(f'expected >=2 embedded python blocks, got {len(blocks)}')
+          for i, block in enumerate(blocks[:2], 1):
+              exec(compile(block, f'<lazy-rank-patch-{i}>', 'exec'), {})
+          PY
+
+      - name: Focused lazy rank regressions
+        run: |
+          python -m unittest fast_engine.tests.test_damage_false_supported_guards
+          python -m unittest fast_engine.tests.test_target_snapshot
+          python -m unittest fast_engine.tests.test_damage_real_squad_certification
+          python -m unittest fast_engine.tests.test_damage_moris_frame_timing
+
+      - name: Full Fast regression
+        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
+
+      - name: Verify restored public frontier
+        run: |
+          python - <<'PY'
+          from collections import Counter
+          from context import spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.research.public_ranking_probe import _source_corpus
+
+          unique = {}
+          for members, source in _source_corpus():
+              unique.setdefault(tuple(members), source)
+          families = Counter()
+          certified = []
+          for members, source in unique.items():
+              blockers = static_score_blockers(
+                  compile_moris_squad(spec.build_squad(list(members)))
+              )
+              if not blockers:
+                  certified.append(source)
+              for blocker in blockers:
+                  families[blocker.split(':', 1)[0]] += 1
+          print('FRONTIER', len(unique), 'CERTIFIED', certified, 'FAMILIES', dict(families))
+          assert len(unique) == 23
+          assert set(certified) == {'컨트롤_미란다미하라', '레이드_레드후드퀀시'}, certified
+          PY
+
+      - name: Commit semantic restoration and remove temporary workflows
+        run: |
+          rm -f .github/workflows/tmp-restore-lazy-rank.yml
+          rm -f .github/workflows/tmp-restore-lazy-rank-v2.yml
+          git diff --check
+          git config user.name "asdadas1113"
+          git config user.email "crony06@gmail.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Fast: own lazy dynamic-rank target resolution"
+          git push origin HEAD:fast-engine-phase2-20260901
