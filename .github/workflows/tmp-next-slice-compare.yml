@@ -20,3 +20,5 @@ jobs:
           python-version: '3.13'
       - name: Compare narrow candidates
         run: PYTHONPATH=. python .github/scripts/tmp_next_slice_compare.py
+      - name: Confirm diagnostic only
+        run: git diff --exit-code
