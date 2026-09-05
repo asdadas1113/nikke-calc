@@ -1,0 +1,160 @@
+name: tmp-finalize-same-timestamp-ordering
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+    paths:
+      - .github/workflows/tmp-finalize-same-timestamp-ordering.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Apply cross-actor post-shot fail-closed guard
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('fast_engine/engine/score.py')
+          t=p.read_text(encoding='utf-8')
+          anchor='''def _unsupported_remove_named_buff_changes_scored_state(\n'''
+          helper='''_POST_SHOT_CROSS_ACTOR_EVENT_KEYS = frozenset({\n    "on_attack",\n    "hit_count",\n    "pellet_hit",\n    "full_charge_hit",\n    "last_bullet",\n    "core_hit",\n    "squad_body_hit",\n})\n\n\ndef _post_shot_cross_actor_score_unsafe(squad: CompiledSquad, effect) -> bool:\n    """Fail closed when a post-shot state can affect later Moris actors.\n\n    Moris processes weapon actors in roster order inside one frame, so a post-shot\n    buff from actor N may affect same-frame shots from actors N+1..end. Fast's\n    static observer currently consumes every actor's shot at t before phase-30\n    trigger dispatch, flattening that transaction. Self-only and earlier-only\n    targets are safe from this specific ordering hole.\n    """\n    if effect.effect_type != "buff" or _is_patternless_unreachable(effect):\n        return False\n    if not TriggerDispatcher.is_executable_effect(effect):\n        return False\n    if not _direct_damage_buff_score_supported(squad, effect):\n        return False\n    if not any(\n        (rule.event_key or "") in _POST_SHOT_CROSS_ACTOR_EVENT_KEYS\n        or (rule.event_key or "").startswith("weapon_hit:")\n        for rule in effect.triggers\n    ):\n        return False\n    if effect.target_spec.mode.value == "enemy":\n        return effect.actor < len(squad.members) - 1\n    return any(target > effect.actor for target in _possible_ally_targets(squad, effect))\n\n\n'''
+          if t.count(anchor)!=1: raise SystemExit('same-time helper anchor changed')
+          t=t.replace(anchor,helper+anchor,1)
+          old='''        if _is_patternless_unreachable(effect):\n            continue\n\n        if (\n            _has_unowned_reference_stack_scaling(effect)\n'''
+          new='''        if _is_patternless_unreachable(effect):\n            continue\n\n        if _post_shot_cross_actor_score_unsafe(squad, effect):\n            blockers.append(\n                f"normal_state:{owner}:{effect.name or stat}:same_timestamp_actor_order"\n            )\n\n        if (\n            _has_unowned_reference_stack_scaling(effect)\n'''
+          if t.count(old)!=1: raise SystemExit('same-time blocker anchor changed')
+          p.write_text(t.replace(old,new,1),encoding='utf-8')
+
+          p=Path('fast_engine/tests/test_damage_false_supported_guards.py')
+          t=p.read_text(encoding='utf-8')
+          anchor='''    def test_rank_target_with_same_event_atk_mutation_fails_closed(self):\n'''
+          tests='''    def test_cross_actor_post_shot_buff_fails_closed(self):\n        effect = {\n            "source": "skill1", "type": "buff", "name": "AUDIT post shot",\n            "stat": "atk_pct", "fixed_value": 100.0,\n            "polarity": "beneficial", "target": "all_allies",\n            "duration": 10.0,\n            "trigger": {"timing": ["hit_count:1"], "condition": []},\n        }\n        blockers = static_score_blockers(_compiled([effect]))\n        self.assertIn(\n            "normal_state:라피:AUDIT post shot:same_timestamp_actor_order", blockers\n        )\n\n    def test_self_post_shot_buff_does_not_get_cross_actor_blocker(self):\n        effect = {\n            "source": "skill1", "type": "buff", "name": "AUDIT self post shot",\n            "stat": "atk_pct", "fixed_value": 100.0,\n            "polarity": "beneficial", "target": "self",\n            "duration": 10.0,\n            "trigger": {"timing": ["hit_count:1"], "condition": []},\n        }\n        blockers = static_score_blockers(_compiled([effect]))\n        self.assertNotIn(\n            "normal_state:라피:AUDIT self post shot:same_timestamp_actor_order", blockers\n        )\n\n'''
+          if t.count(anchor)!=1: raise SystemExit('false-supported test anchor changed')
+          p.write_text(t.replace(anchor,tests+anchor,1),encoding='utf-8')
+          PY
+
+      - name: Update certification and isolated regression contracts
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          for name in (
+              'test_damage_full_charge_bullet_lifetime.py',
+              'test_damage_full_charge_hit_charge_speed.py',
+              'test_damage_stat_applied_charge_speed.py',
+          ):
+              p=Path('fast_engine/tests')/name
+              t=p.read_text(encoding='utf-8')
+              old='self.assertEqual(certified, 1)'
+              if t.count(old)!=1: raise SystemExit(f'{name}: certified anchor changed')
+              p.write_text(t.replace(old,'self.assertEqual(certified, 0)',1),encoding='utf-8')
+
+          p=Path('fast_engine/tests/test_damage_moris_frame_timing.py')
+          t=p.read_text(encoding='utf-8')
+          start=t.index('    def test_def55_near_tie_withdraws_unowned_miranda_side(self):\n')
+          end=t.index('\n\n\nif __name__ == "__main__":',start)
+          replacement='''    def test_def55_near_tie_both_sides_now_fail_closed(self):\n        mm = (\n            "미란다", "브리드 : 사일런트 트랙", "헬름", "루주", "미하라 : 본딩 체인",\n        )\n        rhq = (\n            "라피 : 레드 후드", "레드 후드", "프리카", "민트", "퀀시 : 이스케이프 퀸",\n        )\n        duration = 180.0\n        cfg = {"duration": duration, "first_burst_time": 3.0, "rng_mode": "expected"}\n        profile = EnemyStaticProfile(\n            defense=55000.0, element="작열", core_uptime=1.0, core_px=10.0, duration=duration,\n        )\n        mm_squad = spec.build_squad(list(mm))\n        mm_compiled = compile_moris_squad(mm_squad)\n        mm_blockers = static_score_blockers(mm_compiled)\n        self.assertIn("normal_state:미란다:파워 업!:rank_target_timing", mm_blockers)\n        mm_policy = compile_burst_policy(mm_squad, mm_compiled, dict(cfg))\n        with self.assertRaises(NotImplementedError):\n            score_static_squad(mm_compiled, mm_policy, profile, duration=duration)\n        rhq_squad = spec.build_squad(list(rhq))\n        rhq_compiled = compile_moris_squad(rhq_squad)\n        rhq_blockers = static_score_blockers(rhq_compiled)\n        self.assertIn(\n            "normal_state:프리카:무대, 시작할게. 3:same_timestamp_actor_order", rhq_blockers\n        )\n        rhq_policy = compile_burst_policy(rhq_squad, rhq_compiled, dict(cfg))\n        with self.assertRaises(NotImplementedError):\n            score_static_squad(rhq_compiled, rhq_policy, profile, duration=duration)\n'''
+          p.write_text(t[:start]+replacement+t[end:],encoding='utf-8')
+
+          safe='["라피", "델타", "프로덕트 12", "iDoll 오션", "iDoll 썬"]'
+          old_names='["라피", "폴리", "프로덕트 12", "델타", "아니스"]'
+          for name in ('test_damage_score.py','test_performance_contract.py'):
+              p=Path('fast_engine/tests')/name
+              t=p.read_text(encoding='utf-8')
+              if t.count(old_names)!=1: raise SystemExit(f'{name}: fixture anchor changed')
+              p.write_text(t.replace(old_names,safe,1),encoding='utf-8')
+
+          p=Path('fast_engine/tests/test_damage_last_bullet.py')
+          t=p.read_text(encoding='utf-8')
+          old='''    def test_post_shot_last_bullet_is_certified_without_aliasing_pre_shot_signal(self):\n        _moris_squad, compiled, helm = self._helm_fixture()\n\n        self.assertEqual(tuple(rule.event_key for rule in helm.triggers), ("last_bullet",))\n        self.assertTrue(is_direct_damage_buff_runtime_supported(helm))\n        self.assertFalse(\n            any("헬름:진두지휘" in blocker for blocker in static_score_blockers(compiled))\n        )\n\n        # Moris last_bullet_fire is a different pre-shot notification. It must not\n        # become score-safe merely because post-shot last_bullet is now supported.\n'''
+          new='''    def test_post_shot_last_bullet_delivery_is_owned_but_cross_actor_order_fails_closed(self):\n        _moris_squad, compiled, helm = self._helm_fixture()\n\n        self.assertEqual(tuple(rule.event_key for rule in helm.triggers), ("last_bullet",))\n        self.assertTrue(is_direct_damage_buff_runtime_supported(helm))\n        blockers = static_score_blockers(compiled)\n        self.assertIn("normal_state:헬름:진두지휘:same_timestamp_actor_order", blockers)\n        self.assertNotIn("normal_delivery:헬름:진두지휘:normal_atk_crit_rate", blockers)\n        self.assertNotIn("skill_state_delivery:헬름:진두지휘:normal_atk_crit_rate", blockers)\n\n        # Moris last_bullet_fire is a different pre-shot notification. It must not\n        # become score-safe merely because post-shot last_bullet is now supported.\n'''
+          if t.count(old)!=1: raise SystemExit('last-bullet anchor changed')
+          p.write_text(t.replace(old,new,1),encoding='utf-8')
+
+          p=Path('fast_engine/tests/test_dynamic_weapon_change.py')
+          t=p.read_text(encoding='utf-8')
+          start=t.index('    def test_red_hood_mint_frika_team_clears_weapon_change_and_max_ammo_blockers(self):\n')
+          end=t.index('\n    def test_red_hood_transform_activates_and_restores_effective_weapon',start)
+          replacement='''    def test_red_hood_mint_frika_team_clears_weapon_change_and_max_ammo_blockers(self):\n        _squad, compiled = self._team("레이드_레드후드퀀시")\n        blockers = static_score_blockers(compiled)\n        self.assertFalse(\n            any("weapon_change" in item or "max_ammo" in item for item in blockers), blockers\n        )\n        self.assertIn(\n            "normal_state:프리카:무대, 시작할게. 3:same_timestamp_actor_order", blockers\n        )\n'''
+          p.write_text(t[:start]+replacement+t[end:],encoding='utf-8')
+
+          p=Path('fast_engine/tests/test_projectile_named_stack_chain.py')
+          t=p.read_text(encoding='utf-8')
+          start=t.index('    def test_public_rapi_redhood_chain_is_certified(self):\n')
+          end=t.index('\n    def test_cross_actor_weapon_hit_is_not_opened',start)
+          replacement='''    def test_public_rapi_redhood_chain_remains_locally_supported(self):\n        members = list(snapshot.SQUADS["레이드_레드후드퀀시"]["members"])\n        squad = spec.build_squad(members)\n        compiled = compile_moris_squad(squad)\n        blockers = static_score_blockers(compiled)\n        self.assertFalse(any("라피 : 레드 후드" in b for b in blockers), blockers)\n        self.assertIn(\n            "normal_state:프리카:무대, 시작할게. 3:same_timestamp_actor_order", blockers\n        )\n'''
+          p.write_text(t[:start]+replacement+t[end:],encoding='utf-8')
+
+          p=Path('fast_engine/tests/test_damage_helm_bullet_lifetime.py')
+          t=p.read_text(encoding='utf-8')
+          imp='from fast_engine.engine.state import StateStore\n'
+          if t.count(imp)!=1: raise SystemExit('Helm import anchor changed')
+          t=t.replace(imp,imp+'from fast_engine.engine.triggers import TriggerIndex\n',1)
+          start=t.index('    def test_dynamic_charge_owner_consumes_ten_shot_lifetime(self):\n')
+          end=t.index('\n    def test_squad1_helm_charge_lifetime_and_crown_reload_are_certified',start)
+          replacement='''    def test_dynamic_charge_owner_consumes_ten_shot_lifetime(self):\n        compiled, _policy, helm = self._fixture()\n        isolated_helm = replace(helm, effect_id=0, actor_effect_index=0)\n        members = [replace(member, effects=()) for member in compiled.members]\n        members[2] = replace(members[2], effects=(isolated_helm,))\n        isolated = CompiledSquad(\n            tuple(members),\n            TriggerIndex.from_effects((isolated_helm,), actor_count=len(members)),\n        )\n        runtime = BurstRuntime(\n            isolated,\n            BurstPolicy(duration=20.0, first_burst_time=30.0),\n            EnemyStaticProfile(defense=31784.0, duration=20.0),\n        )\n        observer = StaticNormalAttackObserver(runtime, duration=20.0)\n        self.assertIn(2, observer.dynamic_charge_actors)\n        self.assertTrue(runtime.dispatcher.effects.dynamic_bullet_lifetime_supported(2))\n        runtime.dispatcher.effects.activate(isolated_helm, 2, 0.0, runtime.scheduler)\n        self.assertGreater(\n            runtime.dispatcher.effects.sum_stat(2, "charge_dmg_mag_pct", now=0.0), 0.0\n        )\n        runtime.run(duration=20.0, score_observer=observer)\n        lingering = [\n            active\n            for effect, active in runtime.dispatcher.effects.iter_stat(\n                "charge_dmg_mag_pct", now=19.9\n            )\n            if effect.effect_id == isolated_helm.effect_id\n        ]\n        self.assertEqual(lingering, [])\n'''
+          p.write_text(t[:start]+replacement+t[end:],encoding='utf-8')
+          PY
+
+      - name: Focused repaired regressions
+        run: |
+          python -m unittest fast_engine.tests.test_damage_false_supported_guards
+          python -m unittest fast_engine.tests.test_damage_moris_frame_timing
+          python -m unittest fast_engine.tests.test_damage_last_bullet
+          python -m unittest fast_engine.tests.test_damage_helm_bullet_lifetime
+          python -m unittest fast_engine.tests.test_damage_score
+          python -m unittest fast_engine.tests.test_performance_contract
+          python -m unittest fast_engine.tests.test_dynamic_weapon_change
+          python -m unittest fast_engine.tests.test_projectile_named_stack_chain
+
+      - name: Full Fast regression
+        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
+
+      - name: Verify public frontier
+        run: |
+          python - <<'PY'
+          from collections import Counter
+          from context import spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.research.public_ranking_probe import _source_corpus
+          unique={}
+          for members,source in _source_corpus(): unique.setdefault(tuple(members),source)
+          rows=[]; family=Counter()
+          for members,source in unique.items():
+              blockers=static_score_blockers(compile_moris_squad(spec.build_squad(list(members))))
+              rows.append((source,blockers))
+              for b in blockers: family[b.split(':',1)[0]]+=1
+          certified=[source for source,b in rows if not b]
+          red=next(b for source,b in rows if source=='레이드_레드후드퀀시')
+          print('FRONTIER',len(unique),'CERTIFIED',certified,'FAMILIES',dict(family))
+          print('RED',red)
+          assert certified==[], certified
+          assert 'normal_state:프리카:무대, 시작할게. 3:same_timestamp_actor_order' in red, red
+          assert not any('퀀시 : 이스케이프 퀸:루트 탐색 1단계 2:same_timestamp_actor_order' in b for b in red), red
+          PY
+
+      - name: Commit clean semantic checkpoint
+        run: |
+          rm -f .github/workflows/tmp-audit-same-timestamp-ordering.yml
+          rm -f .github/workflows/tmp-close-same-timestamp-ordering.yml
+          rm -f .github/workflows/tmp-find-safe-score-fixture.yml
+          rm -f .github/workflows/tmp-finalize-same-timestamp-ordering.yml
+          git diff --check
+          git config user.name "asdadas1113"
+          git config user.email "crony06@gmail.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Fast: fail closed on cross-actor post-shot ordering"
+          git push origin HEAD:fast-engine-phase2-20260901
