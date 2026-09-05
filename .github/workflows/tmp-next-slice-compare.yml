@@ -8,25 +8,22 @@ on:
       - .github/workflows/tmp-next-slice-compare.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  helm-periodic-ab:
+  promote-helm-periodic:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Apply runner-only Helm candidate and semantic trace
-        run: PYTHONPATH=. python .github/scripts/tmp_next_slice_compare.py
-      - name: Narrow candidate and write permanent regressions in runner
+      - name: Apply exact gated candidate
         run: |
+          PYTHONPATH=. python .github/scripts/tmp_next_slice_compare.py
           PYTHONPATH=. python .github/scripts/tmp_helm_refine_candidate.py
           PYTHONPATH=. python .github/scripts/tmp_helm_periodic_write_tests.py
-      - name: Diff sanity
-        run: git diff --check
-      - name: Focused periodic and damage-state regressions
+      - name: Focused production regressions
         run: |
           python -m unittest -v \
             fast_engine.tests.test_damage_periodic_enemy_received \
@@ -34,7 +31,29 @@ jobs:
             fast_engine.tests.test_damage_state \
             fast_engine.tests.test_damage_spawn_lifecycle \
             fast_engine.tests.test_periodic_runtime
-      - name: Full Fast regressions
+      - name: Full Fast production regressions
         run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
-      - name: Standardized public ranking probe
-        run: PYTHONPATH=. python -m fast_engine.research.public_ranking_probe
+      - name: Verify production diff
+        run: |
+          git add \
+            fast_engine/engine/dispatcher.py \
+            fast_engine/engine/score.py \
+            fast_engine/tests/test_damage_periodic_self_crit.py \
+            fast_engine/tests/test_damage_periodic_enemy_received.py
+          git diff --cached --check
+          printf '%s\n' \
+            fast_engine/engine/dispatcher.py \
+            fast_engine/engine/score.py \
+            fast_engine/tests/test_damage_periodic_enemy_received.py \
+            fast_engine/tests/test_damage_periodic_self_crit.py \
+            | sort > /tmp/expected.txt
+          git diff --cached --name-only | sort > /tmp/actual.txt
+          diff -u /tmp/expected.txt /tmp/actual.txt
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+      - name: Commit production semantic slice
+        run: |
+          git config user.name 'asdadas1113'
+          git config user.email 'crony06@gmail.com'
+          git commit -m 'fast: certify periodic enemy received damage'
+          git push origin HEAD:fast-engine-phase2-20260901
