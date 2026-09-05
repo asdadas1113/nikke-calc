@@ -21,7 +21,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Build concise unique-23 frontier audit
+      - name: Classify current frontier blocker shapes
         run: |
           python - <<'PY'
           from collections import Counter
@@ -43,75 +43,75 @@ jobs:
               seen.add(members)
               compiled = compile_moris_squad(spec.build_squad(list(members)))
               blockers = tuple(static_score_blockers(compiled))
-              rows.append((len(blockers), str(source_name), members, compiled, blockers))
+              rows.append((str(source_name), members, compiled, blockers))
 
-          lines = []
-          emit = lines.append
+          out = []
+          emit = out.append
           emit(f'UNIQUE_COUNT {len(rows)}')
-          emit(f'CERTIFIED_COUNT {sum(1 for row in rows if row[0] == 0)}')
-          fam = Counter(b.split(':', 1)[0] for row in rows for b in row[4])
+          emit(f'CERTIFIED_COUNT {sum(1 for _,_,_,b in rows if not b)}')
+          fam = Counter(b.split(':', 1)[0] for *_, blockers in rows for b in blockers)
           emit('FAMILIES ' + repr(sorted(fam.items(), key=lambda x: (-x[1], x[0]))))
-          exact = Counter(b for row in rows for b in row[4])
-          emit('REPEATED_EXACT')
-          for blocker, count in exact.most_common():
-              if count > 1:
-                  emit(f'{count}\t{blocker}')
+          emit('BLOCKED_EFFECTS')
 
-          emit('TEAMS')
-          for count, source_name, members, compiled, blockers in sorted(rows, key=lambda x: (x[0], x[1])):
-              emit(f'TEAM\t{count}\t{source_name}\t{members!r}')
+          families = {'normal_delivery','skill_state_delivery','skill_damage','normal_state','cadence','periodic_grid','weapon_change'}
+          seen_shapes = set()
+          for source_name, members, compiled, blockers in rows:
               for blocker in blockers:
-                  emit(f'B\t{blocker}')
-              if 0 < count <= 6:
+                  family = blocker.split(':', 1)[0]
+                  if family == 'control':
+                      actor_name = blocker.split(':',1)[1]
+                      for idx, member in enumerate(compiled.members):
+                          if str(getattr(member,'name','')) == actor_name:
+                              shape = ('CONTROL', actor_name, repr(member.weapon.get('control')), str(member.weapon.get('fire_mode')), str(member.weapon.get('weapon_type') or member.weapon_type))
+                              if shape not in seen_shapes:
+                                  seen_shapes.add(shape)
+                                  emit('\t'.join(shape))
+                      continue
+                  if family not in families:
+                      continue
                   for effect in compiled.effects:
-                      cap = effect.capability
-                      cap_blocks = tuple(getattr(cap, 'blockers', ()) or ())
-                      if not cap_blocks:
+                      actor = compiled.members[effect.actor]
+                      actor_name = str(getattr(actor, 'name', effect.actor))
+                      stat = str(effect.stat or '')
+                      name = str(effect.name or '')
+                      labels = {
+                          f'{actor_name}:{name}:{stat}',
+                          f'{actor_name}:{name}',
+                      }
+                      suffix = blocker.split(':',1)[1] if ':' in blocker else blocker
+                      if suffix not in labels:
                           continue
-                      actor = effect.actor
-                      member = compiled.members[actor]
-                      actor_name = getattr(member, 'name', str(actor))
                       triggers = tuple((
-                          getattr(getattr(rule, 'mode', None), 'value', str(getattr(rule, 'mode', None))),
-                          getattr(rule, 'event_key', None),
-                          getattr(rule, 'threshold', None),
-                          getattr(rule, 'modulo', None),
-                          getattr(rule, 'params', None),
-                      ) for rule in effect.triggers)
+                          getattr(getattr(r,'mode',None),'value',str(getattr(r,'mode',None))),
+                          getattr(r,'event_key',None),
+                          getattr(r,'threshold',None),
+                          getattr(r,'modulo',None),
+                          getattr(r,'trigger_count_reducible',None),
+                      ) for r in effect.triggers)
                       conditions = tuple((
-                          getattr(getattr(rule, 'mode', None), 'value', str(getattr(rule, 'mode', None))),
-                          getattr(rule, 'key', None),
-                          getattr(rule, 'value', None),
-                      ) for rule in effect.condition_rules)
-                      target = getattr(effect, 'target_spec', None)
-                      target_mode = getattr(getattr(target, 'mode', None), 'value', str(getattr(target, 'mode', None)))
-                      emit('E\t' + repr({
-                          'actor': actor_name,
-                          'effect_id': effect.effect_id,
-                          'type': effect.effect_type,
-                          'stat': effect.stat,
-                          'value': effect.value,
-                          'duration': effect.duration,
-                          'duration_bullets': getattr(effect, 'duration_bullets', None),
-                          'max_stack': effect.max_stack,
-                          'max_trigger': getattr(effect, 'max_trigger', None),
-                          'tick_interval': getattr(effect, 'tick_interval', None),
-                          'target': target_mode,
-                          'target_runtime': getattr(target, 'runtime_supported', None),
-                          'triggers': triggers,
-                          'conditions': conditions,
-                          'parameters': effect.parameters,
-                          'cap_blockers': cap_blocks,
-                      }))
+                          getattr(getattr(r,'mode',None),'value',str(getattr(r,'mode',None))),
+                          getattr(r,'key',None),
+                          getattr(r,'value',None),
+                      ) for r in effect.condition_rules)
+                      target = getattr(effect,'target_spec',None)
+                      shape = (
+                          family, actor_name, name, stat,
+                          str(effect.effect_type),
+                          str(getattr(getattr(target,'mode',None),'value',getattr(target,'mode',None))),
+                          repr(effect.value), repr(effect.duration), repr(effect.max_stack),
+                          repr(triggers), repr(conditions), repr(effect.parameters),
+                      )
+                      if shape not in seen_shapes:
+                          seen_shapes.add(shape)
+                          emit('\t'.join(shape))
 
-          text = '\n'.join(lines) + '\n'
-          Path('frontier-audit.txt').write_text(text, encoding='utf-8')
-          print(text)
+          Path('frontier-shapes.txt').write_text('\n'.join(out)+'\n', encoding='utf-8')
+          print('\n'.join(out))
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: frontier-audit
-          path: frontier-audit.txt
+          name: frontier-shapes
+          path: frontier-shapes.txt
           retention-days: 1
       - name: Confirm diagnostic only
         run: git diff --exit-code
