@@ -21,7 +21,6 @@ jobs:
       - name: Enumerate state mutators and public dependencies
         run: |
           python - <<'PY'
-          from collections import defaultdict
           from context import spec
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.dispatcher import TriggerDispatcher
@@ -61,11 +60,10 @@ jobs:
                   rows.append({
                       'owner':squad.members[e.actor].name,'name':e.name,'stat':stat,
                       'target':e.target_spec.raw,'target_effect':target_effect,
-                      'timings':tuple(r.raw for r in e.triggers),
-                      'conditions':tuple(r.raw for r in e.condition_rules),
+                      'timings':tuple((r.raw,r.event_key,r.mode.value) for r in e.triggers),
+                      'conditions':tuple((r.mode.value,r.key,r.threshold) for r in e.condition_rules),
                       'possible_targets':possible_ally_targets(squad,e),
                       'exec':TriggerDispatcher.is_executable_effect(e),
-                      'runtime_exec':TriggerDispatcher.is_runtime_executable_effect(e),
                       'providers':provider,
                   })
               if rows:
@@ -84,5 +82,5 @@ jobs:
           for e in squad.effects:
               owner=squad.members[e.actor].name
               if owner=='민트':
-                  print('MINT',e.effect_id,e.name,e.effect_type,e.stat,e.target_spec.raw,tuple(r.raw for r in e.triggers),tuple(r.raw for r in e.condition_rules),dict(e.parameters),'EXEC',TriggerDispatcher.is_executable_effect(e),'RUNTIME',TriggerDispatcher.is_runtime_executable_effect(e))
+                  print('MINT',e.effect_id,e.name,e.effect_type,e.stat,e.target_spec.raw,tuple((r.raw,r.event_key,r.mode.value) for r in e.triggers),tuple((r.mode.value,r.key,r.threshold) for r in e.condition_rules),dict(e.parameters),'EXEC',TriggerDispatcher.is_executable_effect(e))
           PY
