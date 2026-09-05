@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 from context import snapshot, spec
 from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_supported
