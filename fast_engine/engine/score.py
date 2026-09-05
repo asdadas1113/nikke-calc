@@ -21,6 +21,7 @@ from .shot_blocks import (
     static_bullet_lifetime_cadence_safe,
 )
 from .target_scope import possible_ally_targets, target_scope_is_static
+from .targets import TargetMode
 from .triggers import TriggerMode
 from .weapon import (
     StaticCadenceModifiers,
@@ -827,6 +828,60 @@ def _direct_damage_buff_score_supported(squad: CompiledSquad, effect) -> bool:
     )
 
 
+_DYNAMIC_ATK_RANK_TARGET_MODES = frozenset({
+    TargetMode.TOP_ATK,
+    TargetMode.TOP_ATK_EXCL_SELF,
+    TargetMode.LOWEST_ATK_BURST3,
+})
+_ATK_RANK_MUTATION_STATS = frozenset({
+    "atk_pct",
+    "atk_flat",
+    "atk_caster_based_pct",
+    "atk_from_hp_pct",
+    "atk_copy",
+    "atk_buff_mag_pct",
+})
+
+
+def _dynamic_rank_target_transaction_unsafe(squad: CompiledSquad, effect) -> bool:
+    """Fail closed when a rank selector shares a timestamp with ATK mutation.
+
+    Moris resolves ATK-rank targets lazily within the actor/event transaction.
+    Fast currently resolves on activation. The one owned exception is a same-caster
+    sibling using the exact same raw rank selector: TargetResolver deliberately
+    shares that cohort, matching Moris' same-selector identity.
+    """
+
+    if effect.target_spec.mode not in _DYNAMIC_ATK_RANK_TARGET_MODES:
+        return False
+    if _is_patternless_unreachable(effect) or not effect.triggers:
+        return False
+    event_keys = {rule.event_key for rule in effect.triggers if rule.event_key}
+    if not event_keys:
+        return False
+    for other in squad.effects:
+        if other.effect_id == effect.effect_id:
+            continue
+        if (other.stat or "") not in _ATK_RANK_MUTATION_STATS:
+            continue
+        if other.effect_type != "buff":
+            continue
+        if _is_patternless_unreachable(other):
+            continue
+        if not _direct_damage_buff_score_supported(squad, other):
+            continue
+        if not any(rule.event_key in event_keys for rule in other.triggers):
+            continue
+        if (
+            other.actor == effect.actor
+            and other.target_spec.raw == effect.target_spec.raw
+            and other.target_spec.mode == effect.target_spec.mode
+        ):
+            continue
+        return True
+    return False
+
+
 def _unsupported_remove_named_buff_changes_scored_state(
     squad: CompiledSquad,
     effect,
@@ -992,6 +1047,13 @@ def static_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
             owner = squad.members[effect.actor].name
             blockers.append(
                 f"normal_state:{owner}:{effect.name or 'remove_named_buff'}:remove_named_buff"
+            )
+
+    for effect in squad.effects:
+        if _dynamic_rank_target_transaction_unsafe(squad, effect):
+            owner = squad.members[effect.actor].name
+            blockers.append(
+                f"normal_state:{owner}:{effect.name or effect.stat or 'rank_target'}:rank_target_timing"
             )
 
     for effect in squad.effects:

@@ -71,5 +71,25 @@ class FalseSupportedScalingGuardTests(unittest.TestCase):
             "normal_state:라피:AUDIT remove:remove_named_buff", blockers
         )
 
+    def test_rank_target_with_same_event_atk_mutation_fails_closed(self):
+        rank = {
+            "source": "skill1", "type": "buff", "name": "AUDIT rank",
+            "stat": "crit_rate", "fixed_value": 50.0,
+            "polarity": "beneficial", "target": "allies_top_atk:1",
+            "duration": 10.0,
+            "trigger": {"timing": ["full_burst_start"], "condition": []},
+        }
+        atk = {
+            "source": "skill1", "type": "buff", "name": "AUDIT atk",
+            "stat": "atk_pct", "fixed_value": 100.0,
+            "polarity": "beneficial", "target": "self",
+            "duration": 10.0,
+            "trigger": {"timing": ["full_burst_start"], "condition": []},
+        }
+        blockers = static_score_blockers(_compiled([rank, atk]))
+        self.assertIn(
+            "normal_state:라피:AUDIT rank:rank_target_timing", blockers
+        )
+
 if __name__ == "__main__":
     unittest.main()
