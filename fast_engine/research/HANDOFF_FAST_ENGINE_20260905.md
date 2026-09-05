@@ -11,7 +11,8 @@
 가장 먼저 읽을 문서:
 
 1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md`
-2. `fast_engine/research/PATTERNLESS_SQUAD_PART_HIT_CHECKPOINT_20260905.md`
+2. `fast_engine/research/CHARGE_RELOAD_CANCEL_CONTROL_CHECKPOINT_20260905.md`
+3. `fast_engine/research/PATTERNLESS_SQUAD_PART_HIT_CHECKPOINT_20260905.md`
 3. `fast_engine/research/PERIODIC_ENEMY_RECEIVED_DAMAGE_CHECKPOINT_20260905.md`
 3. `fast_engine/research/STAT_APPLIED_CHARGE_SPEED_CHECKPOINT_20260905.md`
 3. `fast_engine/research/FULL_CHARGE_HIT_CHARGE_SPEED_CHECKPOINT_20260905.md`
@@ -26,13 +27,15 @@
 
 현재 최신 production semantic commit:
 
-- `745d9f1afcf10d092bb58bf9e0235724a5c41946` — patternless `squad_part_hit` blocker hygiene
+- `1902a71a4283528f3bea009ee4d3af6aba476a13` — pure charge `reload.cancel_on_full` ownership
 
 직전 production semantic commit:
 
-- `37a7da91974222ab49bb0ef6b869d06a34100a4d` — post-shot `full_charge_hit` next-bullet lifetime delivery
+- `745d9f1afcf10d092bb58bf9e0235724a5c41946` — patternless `squad_part_hit` blocker hygiene
 
 직전 주요 semantic commit:
+
+- `37a7da91974222ab49bb0ef6b869d06a34100a4d` — post-shot `full_charge_hit` next-bullet lifetime delivery
 
 - `4a6cbe388cd0ef32ec07e5b825078fe457619181` — fixed-grid periodic enemy `received_dmg_pct` certification
 - `8880049678c9270de8d7b98c456b93fa00a67502` — recipient-scoped `stat_applied` finite self `charge_speed_pct` certification
@@ -49,7 +52,27 @@
 
 ---
 
-## 0A. 최신 완료 — patternless `squad_part_hit` blocker hygiene
+## 0A. 최신 완료 — pure charge reload cancel-on-full
+
+홍련 : 흑영의 exact pure `reload.cancel_on_full` control을 generic charge control로 소유했다.
+
+production: `1902a71a4283528f3bea009ee4d3af6aba476a13`.
+
+Moris active probe에서 reload `15.05s` 시작 뒤 control ON은 `16.40s` full-refill 시 취소, control OFF는 `16.466666...s` 정상 완료였고 이후 shot들이 약 `0.0666667s` 앞당겨졌다. public 기본 `레이드_볼륨`/`스쿼드4`에서는 reload/cancel 0회이며 control OFF와 damage가 exact same이었다.
+
+지원 shape는 non-clip charge + top-level `reload` only + `cancel_on_full=True` only다. mixed/extra policy는 fail closed다.
+
+public delta: cadence `63 -> 59`, control `6 -> 4`, `레이드_볼륨` `5 -> 1`, `스쿼드4` `6 -> 4`; `23 unique / 2 certified / 21 gaps` 유지.
+
+남은 Volume blocker `화무십일홍 · 수라 2:ammo_charge_pct`는 별도 의미론으로 열지 않았다.
+
+canonical CI `33944434610 / 101247870805` 전체 success, Fast damage `162/162`.
+
+상세: `fast_engine/research/CHARGE_RELOAD_CANCEL_CONTROL_CHECKPOINT_20260905.md`
+
+---
+
+## 0B. 직전 완료 — patternless `squad_part_hit` blocker hygiene
 
 D : 킬러 와이프 `타겟 섬멸 코어`를 anchor로, 표준 patternless enemy에서 도달 불가능한 `squad_part_hit` consumer를 comparison-critical blocker에서만 제외했다.
 
@@ -84,7 +107,7 @@ promotion (`33942326300 / 101242018963`):
 
 ---
 
-## 0B. 직전 완료 — post-shot full-charge next-bullet lifetime
+## 0C. 그 이전 완료 — post-shot full-charge next-bullet lifetime
 
 D : 킬러 와이프 `캄 스나이핑`의 `full_charge_hit:3 -> duration_bullets:1`을 generic post-shot next-bullet lifetime으로 좁게 열었다.
 
@@ -126,7 +149,7 @@ latest standardized public ranking은 Helm periodic enemy candidate gate에서 �
 - pairwise accuracy: `1.0`
 - top-N recall: `1.0`
 
-Helm periodic enemy gate run `33932690769`에서 ranking probe를 재실행했고 certified universe는 이후에도 2개로 유지됐다. 최신 fresh frontier는 cadence `63`, normal delivery `41`, skill-state delivery `43`, skill damage `27`, weapon change `12`, normal state `7`, control `6`, periodic grid `1`이다.
+Helm periodic enemy gate run `33932690769`에서 ranking probe를 재실행했고 certified universe는 이후에도 2개로 유지됐다. 최신 fresh frontier는 cadence `59`, normal delivery `41`, skill-state delivery `43`, skill damage `27`, weapon change `12`, normal state `7`, control `4`, periodic grid `1`이다.
 
 optimizer production integration은 아직 하지 않는다.
 
@@ -418,9 +441,9 @@ Ada 두 public team에서 Ada 자체 blocker는 모두 제거됐지만 다른 bl
 
 ## 7. 다음 단일 checkpoint
 
-최신 production semantic은 patternless `squad_part_hit` blocker hygiene까지 완료됐다.
+최신 production semantic은 pure charge `reload.cancel_on_full` ownership까지 완료됐다.
 
-다음에는 현재 HEAD에서 unique-23 frontier를 다시 fresh audit하고 **비보류 small generic ownership 하나만** 고른다.
+현재 `레이드_볼륨`은 `cadence:홍련 : 흑영:화무십일홍 · 수라 2:ammo_charge_pct` 하나만 남았다. 다음에는 current HEAD에서 unique-23 frontier를 fresh audit한 뒤 이 one-blocker effect의 실제 Moris ammo/cadence chronology를 먼저 조사한다. one-blocker라는 이유만으로 자동 certification하지 않는다.
 
 현재 낮은 blocker 팀은 이미 보류 근거가 있는 축 비중이 높으므로 blocker 수만 보고 열지 않는다. 특히 다음은 그대로 우회한다.
 
@@ -456,34 +479,31 @@ Ada 두 public team에서 Ada 자체 blocker는 모두 제거됐지만 다른 bl
 
 최신 production semantic commit:
 
-- `745d9f1afcf10d092bb58bf9e0235724a5c41946` — patternless `squad_part_hit` blocker hygiene
+- `1902a71a4283528f3bea009ee4d3af6aba476a13` — pure charge `reload.cancel_on_full` ownership
 
 semantic cleanup HEAD:
 
-- `41d9d6630c303ae13435fa00e4c391683e15648f`
+- `fe13e3f2ae717c056167e0f4ec94cded69d633bc`
 
 clean canonical CI:
 
-- run `33942375704`
-- job `101242188029`
+- run `33944434610`
+- job `101247870805`
 - result `success`
-- Fast damage `159/159`
+- Fast damage `162/162`
 - calculator `137/137` (1 skip)
 - optimizer `374/374`
 - bridge `31/31` (1 skip)
 - site `385/385`
 - golden snapshot `29/29`
+- Fast static 180s median `69.08ms` (`events=368`)
 
-checkpoint 문서 commit:
-
-- `68c96ce88c7a23f29612cfc911875e30515c8305`
-
-이 HEAD의 canonical CI도 `33942586974 / 101242734277`에서 전체 `success`다.
-
-`.github/workflows`는 handoff 갱신용 임시 workflow까지 제거한 뒤 `ci.yml`, `pages.yml`만 남겨야 한다.
+`.github/workflows`는 `ci.yml`, `pages.yml`만 남긴다.
 
 ### 다음 재개 지점
 
-coverage expansion을 계속한다. current HEAD에서 unique-23 frontier를 fresh audit하고 **비보류 small generic ownership 하나만** 새로 선정한다.
+coverage expansion을 계속한다. current HEAD에서 unique-23 frontier를 fresh audit하고 `레이드_볼륨`의 마지막 `화무십일홍 · 수라 2:ammo_charge_pct`를 우선 조사하되 실제 Moris chronology가 좁게 소유 가능할 때만 다음 slice로 채택한다.
+
+기존 deferred 축은 그대로 우회한다.
 
 `master`는 수정하거나 병합하지 않는다.
