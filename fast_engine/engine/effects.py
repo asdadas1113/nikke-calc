@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import inf
-from typing import TYPE_CHECKING, Iterable
+from typing import Callable, TYPE_CHECKING, Iterable
 
 from .scheduler import EventKind, EventScheduler, ScheduledEvent
 from .shot_blocks import next_static_shot_after
@@ -38,6 +38,18 @@ class EffectExpiryToken:
     post_shot: bool = False
 
 
+@dataclass(slots=True)
+class PendingTargetEffect:
+    """One Moris-style lazy target buff waiting for its first stat read."""
+
+    effect_id: int
+    source_actor: int
+    activated_at: float
+    expires_at: float
+    stacks: float
+    scheduler: EventScheduler
+
+
 class ActiveEffectStore:
     """Compact active-buff/state table preserving Moris target-cohort semantics.
 
@@ -57,7 +69,8 @@ class ActiveEffectStore:
     __slots__ = (
         "squad", "state", "_effects", "_active", "_by_target_stat",
         "_by_target_name", "_generation", "_dynamic_bullet_targets",
-        "_bullet_remaining",
+        "_bullet_remaining", "_pending_target", "_lazy_target_resolver",
+        "_resolving_lazy_target",
     )
 
     def __init__(self, squad: "CompiledSquad", state: StateStore) -> None:
@@ -70,6 +83,102 @@ class ActiveEffectStore:
         self._generation = 0
         self._dynamic_bullet_targets: frozenset[int] = frozenset()
         self._bullet_remaining: dict[ActiveKey, int] = {}
+        self._pending_target: dict[int, PendingTargetEffect] = {}
+        self._lazy_target_resolver: Callable[["CompiledEffect", float, float], tuple[int, ...]] | None = None
+        self._resolving_lazy_target = False
+
+    def attach_lazy_target_resolver(
+        self,
+        resolver: Callable[["CompiledEffect", float, float], tuple[int, ...]],
+    ) -> None:
+        """Attach the rank resolver after TargetResolver is constructed."""
+
+        self._lazy_target_resolver = resolver
+
+    def defer_target_group(
+        self,
+        effect: "CompiledEffect",
+        now: float,
+        scheduler: EventScheduler,
+    ) -> None:
+        """Register one unresolved target cohort without guessing its recipient.
+
+        Moris keeps lazy rank buffs active with target_chars=None.  A refresh of
+        an already-resolved buff keeps that cohort; a refresh before first read
+        merely moves the unresolved activation timestamp.  Pending activation
+        invalidates ally EFFECT caches conservatively because the future cohort
+        is not known yet.
+        """
+
+        max_stack = effect.max_stack if effect.max_stack is not None else 1.0
+        if float(max_stack) != 1.0:
+            raise NotImplementedError(
+                "Fast lazy rank target currently requires max_stack=1"
+            )
+
+        live = tuple(
+            active
+            for active in self._active.values()
+            if active.effect_id == effect.effect_id and active.active(now)
+        )
+        if live:
+            cohort = max(live, key=lambda active: active.generation).cohort
+            for target in cohort:
+                self._activate_one(effect, target, cohort, now, scheduler)
+            return
+
+        duration = effect.duration
+        expires = inf if duration is None or duration == -1 else now + max(0.0, duration)
+        self._pending_target[effect.effect_id] = PendingTargetEffect(
+            effect.effect_id,
+            effect.actor,
+            float(now),
+            float(expires),
+            1.0,
+            scheduler,
+        )
+        # DamageTermResolver caches by concrete actor EFFECT versions.  Until the
+        # lazy cohort is known every ally is a possible recipient, so invalidate
+        # those snapshots without materializing a target.
+        for actor in range(len(self.squad.members)):
+            self.state.touch(actor, StateDomain.EFFECT)
+
+    def _materialize_pending_stat(self, stat: str, now: float) -> None:
+        """Resolve pending buffs of ``stat`` on their first observable read."""
+
+        if self._resolving_lazy_target or self._lazy_target_resolver is None:
+            return
+        for effect_id, pending in tuple(self._pending_target.items()):
+            effect = self._effects[effect_id]
+            if (effect.stat or "") != stat:
+                continue
+            if pending.expires_at != inf and now >= pending.expires_at:
+                self._pending_target.pop(effect_id, None)
+                continue
+
+            self._resolving_lazy_target = True
+            try:
+                targets = self._lazy_target_resolver(
+                    effect, pending.activated_at, float(now)
+                )
+            finally:
+                self._resolving_lazy_target = False
+
+            self._pending_target.pop(effect_id, None)
+            cohort = self._cohort(targets)
+            if not cohort:
+                continue
+            # Lifetimes start at activation, not at first read.  This slice does
+            # not defer duration_bullets, so scheduling from activated_at cannot
+            # create a missed post-shot expiry.
+            for target in cohort:
+                self._activate_one(
+                    effect,
+                    target,
+                    cohort,
+                    pending.activated_at,
+                    pending.scheduler,
+                )
 
     def enable_dynamic_bullet_lifetime_targets(self, actors: Iterable[int]) -> None:
         """Register actors whose physical shots consume bullet lifetimes live."""
@@ -527,9 +636,11 @@ class ActiveEffectStore:
         return tuple(changed)
 
     def has_stat(self, target: int, stat: str, *, now: float) -> bool:
+        self._materialize_pending_stat(stat, now)
         return bool(self._active_keys(self._by_target_stat, target, stat, now))
 
     def sum_stat(self, target: int, stat: str, *, now: float) -> float:
+        self._materialize_pending_stat(stat, now)
         total = 0.0
         for key in self._active_keys(self._by_target_stat, target, stat, now):
             active = self._active[key]
@@ -538,17 +649,28 @@ class ActiveEffectStore:
         return total
 
     def effective_atk(self, actor: int, *, now: float) -> float:
-        base = float(self.squad.members[actor].base_atk)
-        atk_pct = self.sum_stat(actor, "atk_pct", now=now)
-        atk_flat = self.sum_stat(actor, "atk_flat", now=now)
-        for key in self._active_keys(
-            self._by_target_stat, actor, "atk_caster_based_pct", now
-        ):
-            active = self._active[key]
-            effect = self._effects[active.effect_id]
-            caster_base = float(self.squad.members[active.source_actor].base_atk)
-            atk_flat += caster_base * float(effect.value or 0.0) * active.stacks / 100.0
-        return base * (1.0 + atk_pct / 100.0) + atk_flat
+        """Return current ATK without forcing unresolved rank buffs to resolve.
+
+        Moris _effective_atk sees lazy ActiveBuff rows with target_chars=None and
+        therefore excludes them while choosing that very cohort.
+        """
+
+        previous = self._resolving_lazy_target
+        self._resolving_lazy_target = True
+        try:
+            base = float(self.squad.members[actor].base_atk)
+            atk_pct = self.sum_stat(actor, "atk_pct", now=now)
+            atk_flat = self.sum_stat(actor, "atk_flat", now=now)
+            for key in self._active_keys(
+                self._by_target_stat, actor, "atk_caster_based_pct", now
+            ):
+                active = self._active[key]
+                effect = self._effects[active.effect_id]
+                caster_base = float(self.squad.members[active.source_actor].base_atk)
+                atk_flat += caster_base * float(effect.value or 0.0) * active.stacks / 100.0
+            return base * (1.0 + atk_pct / 100.0) + atk_flat
+        finally:
+            self._resolving_lazy_target = previous
 
     def iter_stat_prefix(self, prefix: str, *, now: float):
         seen: set[ActiveKey] = set()
@@ -564,6 +686,7 @@ class ActiveEffectStore:
                     yield self._effects[active.effect_id], active
 
     def iter_stat(self, stat: str, *, now: float):
+        self._materialize_pending_stat(stat, now)
         seen: set[ActiveKey] = set()
         for (target, key_stat), keys in tuple(self._by_target_stat.items()):
             if key_stat != stat:

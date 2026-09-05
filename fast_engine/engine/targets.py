@@ -199,11 +199,17 @@ class TargetResolver:
         self._selection_cache: dict[tuple[int, float, str], tuple[int, ...]] = {}
 
     def _cache_key(
-        self, spec: TargetSpec, *, owner_actor: int, now: float
+        self,
+        spec: TargetSpec,
+        *,
+        owner_actor: int,
+        now: float,
+        selection_time: float | None = None,
     ) -> tuple[int, float, str] | None:
         if spec.mode not in _SHARED_SELECTION_MODES or not isinstance(spec.raw, str):
             return None
-        return owner_actor, float(now), spec.raw
+        identity_time = now if selection_time is None else selection_time
+        return owner_actor, float(identity_time), spec.raw
 
     def _remember(
         self,
@@ -211,16 +217,34 @@ class TargetResolver:
         *,
         owner_actor: int,
         now: float,
+        selection_time: float | None = None,
         targets: tuple[int, ...],
     ) -> tuple[int, ...]:
-        key = self._cache_key(spec, owner_actor=owner_actor, now=now)
+        key = self._cache_key(
+            spec,
+            owner_actor=owner_actor,
+            now=now,
+            selection_time=selection_time,
+        )
         if key is not None:
             self._selection_cache.setdefault(key, targets)
             return self._selection_cache[key]
         return targets
 
-    def resolve(self, spec: TargetSpec, *, owner_actor: int, now: float) -> tuple[int, ...]:
-        key = self._cache_key(spec, owner_actor=owner_actor, now=now)
+    def resolve(
+        self,
+        spec: TargetSpec,
+        *,
+        owner_actor: int,
+        now: float,
+        selection_time: float | None = None,
+    ) -> tuple[int, ...]:
+        key = self._cache_key(
+            spec,
+            owner_actor=owner_actor,
+            now=now,
+            selection_time=selection_time,
+        )
         if key is not None and key in self._selection_cache:
             return self._selection_cache[key]
 
@@ -239,7 +263,7 @@ class TargetResolver:
         if mode is TargetMode.COMPOSITE:
             out: list[int] = []
             for child in spec.children:
-                for actor in self.resolve(child, owner_actor=owner_actor, now=now):
+                for actor in self.resolve(child, owner_actor=owner_actor, now=now, selection_time=selection_time):
                     if actor not in out:
                         out.append(actor)
             return tuple(out)
@@ -310,6 +334,7 @@ class TargetResolver:
                 spec,
                 owner_actor=owner_actor,
                 now=now,
+                selection_time=selection_time,
                 targets=tuple(cand[: max(0, spec.count or 0)]),
             )
         if mode is TargetMode.LOWEST_ATK_BURST3:
@@ -324,6 +349,7 @@ class TargetResolver:
                 spec,
                 owner_actor=owner_actor,
                 now=now,
+                selection_time=selection_time,
                 targets=tuple(cand[: max(0, spec.count or 0)]),
             )
         if mode in {TargetMode.LOWEST_HP, TargetMode.LOWEST_HP_EXCL_SELF}:
@@ -341,6 +367,7 @@ class TargetResolver:
                 spec,
                 owner_actor=owner_actor,
                 now=now,
+                selection_time=selection_time,
                 targets=tuple(cand[: max(0, spec.count or 0)]),
             )
         if mode is TargetMode.TOP_DEF:
@@ -351,6 +378,7 @@ class TargetResolver:
                 spec,
                 owner_actor=owner_actor,
                 now=now,
+                selection_time=selection_time,
                 targets=tuple(cand[: max(0, spec.count or 0)]),
             )
         if mode is TargetMode.RANDOM:

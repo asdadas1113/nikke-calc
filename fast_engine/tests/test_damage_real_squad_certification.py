@@ -27,15 +27,15 @@ class RealSquadCertificationTests(unittest.TestCase):
         enemy = EnemyStaticProfile(defense=31784.0, element=None, core_uptime=0.0, core_px=0.0, duration=180.0)
         return moris, compiled, policy, enemy
 
-    def test_miranda_mihara_control_is_safe_but_rank_timing_fails_closed(self):
+    def test_miranda_mihara_control_and_lazy_rank_are_certified(self):
         _moris, compiled, policy, enemy = self._fixture()
         self.assertEqual(compiled.members[4].weapon.get("control"), {"cover": {"policy": "own_full_burst"}})
         blockers = static_score_blockers(compiled)
         self.assertNotIn("control:미하라 : 본딩 체인", blockers)
-        self.assertIn("normal_state:미란다:파워 업!:rank_target_timing", blockers)
-        self.assertIn("normal_state:미란다:파워 업! 2:rank_target_timing", blockers)
-        with self.assertRaises(NotImplementedError):
-            score_static_squad(compiled, policy, enemy, duration=30.0)
+        self.assertFalse(any("rank_target_timing" in item for item in blockers), blockers)
+        self.assertEqual(blockers, ())
+        score = score_static_squad(compiled, policy, enemy, duration=30.0)
+        self.assertGreater(score.squad_total, 0.0)
 
     def test_miranda_wakeup_one_shot_crit_expires_after_recipient_shot(self):
         moris = build_squad(NAMES)

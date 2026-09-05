@@ -43,7 +43,7 @@ class MorisFrameTimingTest(unittest.TestCase):
         self.assertTrue(effect.active(26.4))
         self.assertFalse(effect.active(effect.expires_at))
 
-    def test_def55_near_tie_withdraws_unowned_miranda_side(self):
+    def test_def55_near_tie_preserves_moris_order(self):
         mm = (
             "미란다", "브리드 : 사일런트 트랙", "헬름", "루주", "미하라 : 본딩 체인",
         )
@@ -62,28 +62,30 @@ class MorisFrameTimingTest(unittest.TestCase):
             duration=duration,
         )
 
-        mm_squad = spec.build_squad(list(mm))
-        mm_compiled = compile_moris_squad(mm_squad)
-        mm_blockers = static_score_blockers(mm_compiled)
-        self.assertIn("normal_state:미란다:파워 업!:rank_target_timing", mm_blockers)
-        self.assertIn("normal_state:미란다:파워 업! 2:rank_target_timing", mm_blockers)
-        mm_policy = compile_burst_policy(mm_squad, mm_compiled, dict(cfg))
-        with self.assertRaises(NotImplementedError):
-            score_static_squad(mm_compiled, mm_policy, profile, duration=duration)
+        def run(names):
+            squad = spec.build_squad(list(names))
+            compiled = compile_moris_squad(squad)
+            self.assertEqual(static_score_blockers(compiled), ())
+            policy = compile_burst_policy(squad, compiled, dict(cfg))
+            moris = simulate(
+                squad,
+                config=spec.build_config(squad, dict(cfg)),
+                enemy=enemy,
+                seed=42,
+                verbose=False,
+            )
+            fast = score_static_squad(compiled, policy, profile, duration=duration)
+            return float(moris.squad_total), float(fast.squad_total)
 
-        rhq_squad = spec.build_squad(list(rhq))
-        rhq_compiled = compile_moris_squad(rhq_squad)
-        self.assertEqual(static_score_blockers(rhq_compiled), ())
-        rhq_policy = compile_burst_policy(rhq_squad, rhq_compiled, dict(cfg))
-        rhq_moris = simulate(
-            rhq_squad,
-            config=spec.build_config(rhq_squad, dict(cfg)),
-            enemy=enemy,
-            seed=42,
-            verbose=False,
-        )
-        rhq_fast = score_static_squad(rhq_compiled, rhq_policy, profile, duration=duration)
-        self.assertLess(abs(float(rhq_fast.squad_total) / float(rhq_moris.squad_total) - 1.0), 0.001)
+        mm_m, mm_f = run(mm)
+        rhq_m, rhq_f = run(rhq)
+        moris_margin = (mm_m - rhq_m) / max(mm_m, rhq_m)
+        fast_margin = (mm_f - rhq_f) / max(mm_f, rhq_f)
+        self.assertGreater(moris_margin, 0.0)
+        self.assertGreater(fast_margin, 0.0)
+        self.assertLess(abs(mm_f / mm_m - 1.0), 0.001)
+        self.assertLess(abs(rhq_f / rhq_m - 1.0), 0.001)
+        self.assertLess(abs(fast_margin - moris_margin), 0.0005)
 
 
 

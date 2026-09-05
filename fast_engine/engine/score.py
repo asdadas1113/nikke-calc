@@ -843,6 +843,26 @@ _ATK_RANK_MUTATION_STATS = frozenset({
 })
 
 
+def _lazy_rank_target_score_safe(squad: CompiledSquad, effect) -> bool:
+    if not TriggerDispatcher._lazy_rank_target_shape_supported(effect):
+        return False
+    if not effect.name:
+        return True
+    named_event_key = f"event:{effect.name}"
+    if any(
+        any((rule.event_key or "") == named_event_key for rule in other.triggers)
+        for other in squad.effects
+        if other.effect_id != effect.effect_id
+    ):
+        return False
+    return not any(
+        rule.key == effect.name
+        for other in squad.effects
+        if other.effect_id != effect.effect_id
+        for rule in other.condition_rules
+    )
+
+
 def _dynamic_rank_target_transaction_unsafe(squad: CompiledSquad, effect) -> bool:
     """Fail closed when a rank selector shares a timestamp with ATK mutation.
 
@@ -853,6 +873,8 @@ def _dynamic_rank_target_transaction_unsafe(squad: CompiledSquad, effect) -> boo
     """
 
     if effect.target_spec.mode not in _DYNAMIC_ATK_RANK_TARGET_MODES:
+        return False
+    if _lazy_rank_target_score_safe(squad, effect):
         return False
     if _is_patternless_unreachable(effect) or not effect.triggers:
         return False

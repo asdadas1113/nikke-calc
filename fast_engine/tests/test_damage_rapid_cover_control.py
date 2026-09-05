@@ -99,7 +99,7 @@ class RapidCoverControlTests(unittest.TestCase):
             ("control:synthetic-reload",),
         )
 
-    def test_real_miranda_mihara_squad_clears_control_but_not_rank_timing(self):
+    def test_real_miranda_mihara_squad_clears_control_and_rank_timing(self):
         moris = build_squad(REAL_NAMES)
         compiled = compile_moris_squad(moris)
         policy = compile_burst_policy(
@@ -121,10 +121,10 @@ class RapidCoverControlTests(unittest.TestCase):
         )
         blockers = static_score_blockers(compiled)
         self.assertNotIn("control:미하라 : 본딩 체인", blockers)
-        self.assertIn("normal_state:미란다:파워 업!:rank_target_timing", blockers)
-        self.assertIn("normal_state:미란다:파워 업! 2:rank_target_timing", blockers)
-        with self.assertRaises(NotImplementedError):
-            score_static_squad(compiled, policy, enemy, duration=30.0)
+        self.assertFalse(any("rank_target_timing" in item for item in blockers), blockers)
+        self.assertEqual(blockers, ())
+        score = score_static_squad(compiled, policy, enemy, duration=30.0)
+        self.assertGreater(score.squad_total, 0.0)
 
 
 if __name__ == "__main__":

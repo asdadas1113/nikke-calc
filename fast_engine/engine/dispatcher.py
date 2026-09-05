@@ -125,6 +125,7 @@ class TriggerDispatcher:
         self.damage_sink = damage_sink
         self.effects = ActiveEffectStore(squad, state)
         self.targets = TargetResolver(squad, state, self.effects, burst)
+        self.effects.attach_lazy_target_resolver(self._resolve_lazy_rank_targets)
         self.conditions = ConditionEvaluator(squad, state, self.effects, enemy, burst)
         self._effect_table = tuple(squad.effects)
         self._event_counts: dict[tuple[int, str], int] = defaultdict(int)
@@ -1151,6 +1152,56 @@ class TriggerDispatcher:
 
     _is_executable = is_executable_effect
 
+    _LAZY_ATK_RANK_MODES = frozenset({
+        TargetMode.TOP_ATK,
+        TargetMode.TOP_ATK_EXCL_SELF,
+        TargetMode.LOWEST_ATK_BURST3,
+    })
+
+    @staticmethod
+    def _lazy_rank_target_shape_supported(effect: "CompiledEffect") -> bool:
+        """Own simple Moris lazy ATK-rank direct buffs without bullet lifetimes."""
+
+        max_stack = effect.max_stack if effect.max_stack is not None else 1.0
+        return (
+            effect.effect_type == "buff"
+            and effect.target_spec.mode in TriggerDispatcher._LAZY_ATK_RANK_MODES
+            and is_direct_damage_buff_runtime_supported(effect)
+            and float(max_stack) == 1.0
+            and effect.max_trigger is None
+            and effect.tick_interval is None
+            and effect.parameters.get("duration_bullets") is None
+            and effect.parameters.get("event_scope") != "recipients"
+            and not effect.condition_rules
+        )
+
+    def _lazy_rank_target_runtime_supported(self, effect: "CompiledEffect") -> bool:
+        if not self._lazy_rank_target_shape_supported(effect):
+            return False
+        if effect.name:
+            if effect.name in self._named_event_names_needed:
+                return False
+            if any(
+                rule.key == effect.name
+                for candidate in self._effect_table
+                for rule in candidate.condition_rules
+            ):
+                return False
+        return True
+
+    def _resolve_lazy_rank_targets(
+        self,
+        effect: "CompiledEffect",
+        activated_at: float,
+        now: float,
+    ) -> tuple[int, ...]:
+        return self.targets.resolve(
+            effect.target_spec,
+            owner_actor=effect.actor,
+            now=now,
+            selection_time=activated_at,
+        )
+
     def _bullet_lifetime_runtime_safe(self, effect: "CompiledEffect") -> bool:
         if effect.parameters.get("duration_bullets") is None:
             return True
@@ -1464,6 +1515,14 @@ class TriggerDispatcher:
             context=context,
         ):
             return False
+
+        if (
+            target_owner_actor is None
+            and self._lazy_rank_target_runtime_supported(effect)
+        ):
+            self.effects.defer_target_group(effect, now, self.scheduler)
+            self._activation_counts[effect.effect_id] += 1
+            return True
 
         targets = self.targets.resolve(
             effect.target_spec,

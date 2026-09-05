@@ -5,6 +5,8 @@ from unittest.mock import patch
 
 from calculator.buff_manager import BuffManager
 from context.spec import build_squad
+from fast_engine.engine.burst import BurstPolicy, BurstSignal
+from fast_engine.engine.burst_runtime import BurstRuntime
 from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.score import static_score_blockers
 
@@ -71,7 +73,7 @@ class FalseSupportedScalingGuardTests(unittest.TestCase):
             "normal_state:라피:AUDIT remove:remove_named_buff", blockers
         )
 
-    def test_rank_target_with_same_event_atk_mutation_fails_closed(self):
+    def test_rank_target_resolves_after_same_event_atk_mutation(self):
         rank = {
             "source": "skill1", "type": "buff", "name": "AUDIT rank",
             "stat": "crit_rate", "fixed_value": 50.0,
@@ -79,17 +81,48 @@ class FalseSupportedScalingGuardTests(unittest.TestCase):
             "duration": 10.0,
             "trigger": {"timing": ["full_burst_start"], "condition": []},
         }
-        atk = {
-            "source": "skill1", "type": "buff", "name": "AUDIT atk",
-            "stat": "atk_pct", "fixed_value": 100.0,
-            "polarity": "beneficial", "target": "self",
+        sibling = {
+            "source": "skill1", "type": "buff", "name": "AUDIT rank sibling",
+            "stat": "crit_dmg", "fixed_value": 20.0,
+            "polarity": "beneficial", "target": "allies_top_atk:1",
             "duration": 10.0,
             "trigger": {"timing": ["full_burst_start"], "condition": []},
         }
-        blockers = static_score_blockers(_compiled([rank, atk]))
-        self.assertIn(
+        atk = {
+            "source": "skill1", "type": "buff", "name": "AUDIT atk",
+            "stat": "atk_pct", "fixed_value": 10000.0,
+            "polarity": "beneficial", "target": "폴리",
+            "duration": 10.0,
+            "trigger": {"timing": ["full_burst_start"], "condition": []},
+        }
+        compiled = _compiled([rank, sibling, atk])
+        blockers = static_score_blockers(compiled)
+        self.assertNotIn(
             "normal_state:라피:AUDIT rank:rank_target_timing", blockers
         )
+        runtime = BurstRuntime(
+            compiled,
+            BurstPolicy(duration=2.0, first_burst_time=2.0, max_burst_count=0),
+        )
+        runtime.dispatcher.dispatch(BurstSignal(1.0, "full_burst_start", 0, 0))
+        poli = _NAMES.index("폴리")
+        # Query the sibling first: both same caster/time/raw effects must share
+        # the post-mutation cohort even when their stats are read in reverse order.
+        self.assertEqual(
+            runtime.dispatcher.effects.sum_stat(poli, "crit_dmg", now=1.0),
+            20.0,
+        )
+        self.assertEqual(
+            runtime.dispatcher.effects.sum_stat(poli, "crit_rate", now=1.0),
+            50.0,
+        )
+        for actor in range(len(_NAMES)):
+            if actor == poli:
+                continue
+            self.assertEqual(
+                runtime.dispatcher.effects.sum_stat(actor, "crit_rate", now=1.0),
+                0.0,
+            )
 
 if __name__ == "__main__":
     unittest.main()

@@ -40,6 +40,34 @@ class TargetSnapshotTests(unittest.TestCase):
         next_activation = resolver.resolve(spec, owner_actor=0, now=5.1)
         self.assertEqual(next_activation, (2,))
 
+    def test_lazy_selection_identity_uses_activation_time_but_live_rank_state(self):
+        runtime = self._runtime()
+        resolver = runtime.dispatcher.targets
+        actor_by_name = {
+            member.name: actor for actor, member in enumerate(runtime.squad.members)
+        }
+        spec = compile_target("allies_top_atk:1", actor_by_name=actor_by_name)
+
+        first = resolver.resolve(
+            spec, owner_actor=0, now=5.1, selection_time=5.0
+        )
+        # A later read of the same activation keeps the already chosen cohort,
+        # even though its wall-clock query time changed.
+        runtime.dispatcher.effects.activate(
+            next(
+                e for e in runtime.squad.effects
+                if e.effect_type == "buff" and (e.stat or "") == "atk_pct"
+                and e.target_spec.mode.value == "self"
+            ),
+            1,
+            5.15,
+            runtime.scheduler,
+        )
+        same = resolver.resolve(
+            spec, owner_actor=0, now=5.2, selection_time=5.0
+        )
+        self.assertEqual(same, first)
+
     def test_lowest_atk_burst3_uses_base_stage_and_effective_atk(self):
         runtime = self._runtime()
         resolver = runtime.dispatcher.targets
