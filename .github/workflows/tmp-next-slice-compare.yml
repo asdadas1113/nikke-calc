@@ -1,0 +1,22 @@
+name: tmp-next-slice-compare
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+    paths:
+      - .github/workflows/tmp-next-slice-compare.yml
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compare narrow candidates
+        run: PYTHONPATH=. python .github/scripts/tmp_next_slice_compare.py
