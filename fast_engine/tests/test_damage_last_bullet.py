@@ -31,14 +31,15 @@ class LastBulletDamageStateTests(unittest.TestCase):
         )
         return moris_squad, compiled, helm
 
-    def test_post_shot_last_bullet_is_certified_without_aliasing_pre_shot_signal(self):
+    def test_post_shot_last_bullet_delivery_is_owned_but_cross_actor_order_fails_closed(self):
         _moris_squad, compiled, helm = self._helm_fixture()
 
         self.assertEqual(tuple(rule.event_key for rule in helm.triggers), ("last_bullet",))
         self.assertTrue(is_direct_damage_buff_runtime_supported(helm))
-        self.assertFalse(
-            any("헬름:진두지휘" in blocker for blocker in static_score_blockers(compiled))
-        )
+        blockers = static_score_blockers(compiled)
+        self.assertIn("normal_state:헬름:진두지휘:same_timestamp_actor_order", blockers)
+        self.assertNotIn("normal_delivery:헬름:진두지휘:normal_atk_crit_rate", blockers)
+        self.assertNotIn("skill_state_delivery:헬름:진두지휘:normal_atk_crit_rate", blockers)
 
         # Moris last_bullet_fire is a different pre-shot notification. It must not
         # become score-safe merely because post-shot last_bullet is now supported.

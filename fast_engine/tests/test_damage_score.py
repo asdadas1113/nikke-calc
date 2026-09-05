@@ -19,7 +19,7 @@ from fast_engine.engine.score import (
 
 
 class StaticNormalScoreParityTests(unittest.TestCase):
-    NAMES = ["라피", "폴리", "프로덕트 12", "델타", "아니스"]
+    NAMES = ["라피", "델타", "프로덕트 12", "iDoll 오션", "iDoll 썬"]
     DURATION = 180.0
 
     @classmethod

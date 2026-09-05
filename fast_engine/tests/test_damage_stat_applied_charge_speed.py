@@ -79,7 +79,7 @@ class StatAppliedChargeSpeedTests(unittest.TestCase):
                     matches.add((compiled.members[effect.actor].name, effect.name, key))
 
         self.assertEqual(len(seen), 23)
-        self.assertEqual(certified, 1)
+        self.assertEqual(certified, 0)
         self.assertEqual(cadence, 62)
         self.assertEqual(matches, set())
 

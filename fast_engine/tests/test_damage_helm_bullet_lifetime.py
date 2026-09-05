@@ -15,6 +15,7 @@ from fast_engine.engine.scheduler import EventKind, EventScheduler
 from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
 from fast_engine.engine.shot_blocks import next_static_shot_after
 from fast_engine.engine.state import StateStore
+from fast_engine.engine.triggers import TriggerIndex
 
 
 NAMES = ["미란다", "브리드 : 사일런트 트랙", "헬름", "루주", "미하라 : 본딩 체인"]
@@ -168,19 +169,24 @@ class HelmTenShotLifetimeTests(unittest.TestCase):
 
     def test_dynamic_charge_owner_consumes_ten_shot_lifetime(self):
         compiled, _policy, helm = self._fixture()
+        isolated_helm = replace(helm, effect_id=0, actor_effect_index=0)
+        members = [replace(member, effects=()) for member in compiled.members]
+        members[2] = replace(members[2], effects=(isolated_helm,))
+        isolated = CompiledSquad(
+            tuple(members),
+            TriggerIndex.from_effects((isolated_helm,), actor_count=len(members)),
+        )
         runtime = BurstRuntime(
-            compiled,
+            isolated,
             BurstPolicy(duration=20.0, first_burst_time=30.0),
             EnemyStaticProfile(defense=31784.0, duration=20.0),
         )
         observer = StaticNormalAttackObserver(runtime, duration=20.0)
         self.assertIn(2, observer.dynamic_charge_actors)
         self.assertTrue(runtime.dispatcher.effects.dynamic_bullet_lifetime_supported(2))
-
-        runtime.dispatcher.effects.activate(helm, 2, 0.0, runtime.scheduler)
+        runtime.dispatcher.effects.activate(isolated_helm, 2, 0.0, runtime.scheduler)
         self.assertGreater(
-            runtime.dispatcher.effects.sum_stat(2, "charge_dmg_mag_pct", now=0.0),
-            0.0,
+            runtime.dispatcher.effects.sum_stat(2, "charge_dmg_mag_pct", now=0.0), 0.0
         )
         runtime.run(duration=20.0, score_observer=observer)
         lingering = [
@@ -188,7 +194,7 @@ class HelmTenShotLifetimeTests(unittest.TestCase):
             for effect, active in runtime.dispatcher.effects.iter_stat(
                 "charge_dmg_mag_pct", now=19.9
             )
-            if effect.effect_id == helm.effect_id
+            if effect.effect_id == isolated_helm.effect_id
         ]
         self.assertEqual(lingering, [])
 
