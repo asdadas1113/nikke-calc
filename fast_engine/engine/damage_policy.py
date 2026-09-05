@@ -3,6 +3,7 @@ from __future__ import annotations
 from .conditions import ConditionMode
 from .core_events import is_static_expected_core_count_rule
 from .targets import TargetMode
+from .target_scope import target_scope_is_static
 from .triggers import TriggerMode
 
 # Damage-facing states that the Fast score path can lower directly without
@@ -196,6 +197,41 @@ def _one_shot_lifetime_supported(effect) -> bool:
     return True
 
 
+def _conditional_passive_runtime_owned(effect) -> bool:
+    """Only accept permanent passive condition families with sparse edge sync.
+
+    A Moris ``passive`` is registered at battle start even while its condition is
+    false. Fast currently owns only the self-stack and named self-state variants,
+    which dispatcher materializes on their sparse state edges. Other conditional
+    passives (for example ``during_full_burst``) must fail closed until an
+    equivalent edge bridge exists.
+    """
+
+    if not (
+        len(effect.triggers) == 1
+        and effect.triggers[0].raw == "passive"
+        and effect.condition_rules
+    ):
+        return True
+    if (
+        effect.duration not in (None, -1.0)
+        or effect.max_stack not in (None, 1, 1.0)
+        or not target_scope_is_static(effect.target_spec)
+        or not effect.target_spec.runtime_supported
+    ):
+        return False
+    if all(
+        rule.mode is ConditionMode.SELF_STACK_AT_LEAST and bool(rule.key)
+        for rule in effect.condition_rules
+    ):
+        return True
+    return all(
+        rule.mode in {ConditionMode.SELF_STATE, ConditionMode.NOT_SELF_STATE}
+        and bool(rule.key)
+        for rule in effect.condition_rules
+    )
+
+
 def is_static_element_override_score_supported(effect) -> bool:
     """Certify immutable battle-start element-advantage overrides for scoring.
 
@@ -239,6 +275,8 @@ def is_direct_damage_buff_runtime_supported(effect) -> bool:
     if not _one_shot_lifetime_supported(effect):
         return False
     if not _target_supported(effect.target_spec):
+        return False
+    if not _conditional_passive_runtime_owned(effect):
         return False
     unsupported_conditions = tuple(
         rule for rule in effect.condition_rules if rule.mode not in _SAFE_CONDITIONS

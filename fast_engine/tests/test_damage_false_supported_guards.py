@@ -18,6 +18,15 @@ def _effect(name: str, stat: str, *, target: str, duration: float, timing: str):
         "scaling": "stack_count", "scaling_ref": "AUDIT reference",
     }
 
+
+def _conditional_passive(name: str, stat: str, condition: str):
+    return {
+        "source": "skill1", "type": "buff", "name": name, "stat": stat,
+        "fixed_value": 100.0, "polarity": "beneficial", "target": "self",
+        "duration": -1.0,
+        "trigger": {"timing": ["passive"], "condition": [condition]},
+    }
+
 def _compiled(raw_effects):
     mapping = {_NAMES[0]: raw_effects}
     def fake_char_effects(self, name):
@@ -35,6 +44,14 @@ class FalseSupportedScalingGuardTests(unittest.TestCase):
     def test_reference_scaled_permanent_cadence_buff_is_not_static_folded(self):
         squad = _compiled([_effect("AUDIT scaled reload", "reload_speed_pct", target="self", duration=-1.0, timing="battle_start")])
         self.assertIn("cadence:라피:AUDIT scaled reload:reload_speed_pct", static_score_blockers(squad))
+
+    def test_unowned_full_burst_conditional_passive_fails_closed(self):
+        squad = _compiled([_conditional_passive(
+            "AUDIT conditional", "atk_pct", "during_full_burst"
+        )])
+        blockers = static_score_blockers(squad)
+        self.assertIn("normal_delivery:라피:AUDIT conditional:atk_pct", blockers)
+        self.assertIn("skill_state_delivery:라피:AUDIT conditional:atk_pct", blockers)
 
 if __name__ == "__main__":
     unittest.main()
