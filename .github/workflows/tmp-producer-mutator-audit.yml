@@ -12,8 +12,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      - run: pip install -r requirements.txt
+          python-version: '3.13'
       - name: Audit public remove_named_buff dependencies
         run: |
           python - <<'PY'
@@ -54,10 +53,9 @@ jobs:
               members = tuple(str(m) for m in case['members'])
               if len(members) != 5 or any(m.startswith('test_') for m in members):
                   continue
-              key = members
-              if key in seen:
+              if members in seen:
                   continue
-              seen.add(key)
+              seen.add(members)
               compiled = compile_moris_squad(spec.build_squad(list(members)))
               blockers = static_score_blockers(compiled)
               for remover in compiled.effects:
