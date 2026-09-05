@@ -136,7 +136,7 @@ def compile_target(raw: Any, *, actor_by_name: dict[str, int]) -> TargetSpec:
         return TargetSpec(raw, TargetMode.BURST_CASTED_B3)
     if raw.startswith("allies_burst_casted_weapon:"):
         return TargetSpec(raw, TargetMode.BURST_CASTED_WEAPON, arg=raw.split(":", 1)[1])
-    if raw.startswith("allies_burst3"):
+    if raw == "allies_burst3":
         return TargetSpec(raw, TargetMode.BURST3)
 
     if raw.startswith("allies_lowest_atk_burst3:"):
