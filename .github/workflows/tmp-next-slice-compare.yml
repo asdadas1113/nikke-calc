@@ -18,13 +18,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Apply runner-only Helm candidate and semantic trace v2
+      - name: Apply runner-only Helm candidate and semantic trace
         run: PYTHONPATH=. python .github/scripts/tmp_next_slice_compare.py
+      - name: Narrow candidate and write permanent regressions in runner
+        run: |
+          PYTHONPATH=. python .github/scripts/tmp_helm_refine_candidate.py
+          PYTHONPATH=. python .github/scripts/tmp_helm_periodic_write_tests.py
       - name: Diff sanity
         run: git diff --check
       - name: Focused periodic and damage-state regressions
         run: |
           python -m unittest -v \
+            fast_engine.tests.test_damage_periodic_enemy_received \
             fast_engine.tests.test_damage_periodic_self_crit \
             fast_engine.tests.test_damage_state \
             fast_engine.tests.test_damage_spawn_lifecycle \
