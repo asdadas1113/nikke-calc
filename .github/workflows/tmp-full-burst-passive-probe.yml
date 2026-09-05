@@ -13,43 +13,54 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Probe public full-burst permanent condition surfaces
+      - name: Trace Moris and Fast full-burst passive edges
         run: |
           python - <<'PY'
-          from collections import defaultdict
-          from context import spec
+          from unittest.mock import patch
+          from calculator.timeline import simulate
+          from context import snapshot, spec
+          from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.dispatcher import TriggerDispatcher
+          from fast_engine.engine.effects import ActiveEffectStore
           from fast_engine.engine.score import static_score_blockers
-          from fast_engine.research.public_ranking_probe import _source_corpus
-          from fast_engine.engine.conditions import ConditionMode
 
-          unique = {}
-          for members, source in _source_corpus():
-              unique.setdefault(tuple(members), source)
+          members = list(snapshot.SQUADS['스쿼드3']['members'])
+          moris_squad = spec.build_squad(members)
+          compiled = compile_moris_squad(moris_squad)
+          actor = next(i for i,m in enumerate(compiled.members) if m.name == '도로시 : 세렌디피티')
+          effect = next(e for e in compiled.members[actor].effects if e.name == '광익 2')
+          print('EFFECT', effect)
+          print('BLOCKERS', tuple(b for b in static_score_blockers(compiled) if ':도로시 : 세렌디피티:광익 2:' in b))
 
-          modes = {ConditionMode.DURING_FULL_BURST, ConditionMode.NOT_DURING_FULL_BURST}
-          rows = []
-          for members, source in unique.items():
-              squad = compile_moris_squad(spec.build_squad(list(members)))
-              blockers = static_score_blockers(squad)
-              for e in squad.effects:
-                  if e.effect_type != 'buff' or e.duration not in (None, -1, -1.0):
-                      continue
-                  if not any(r.mode in modes for r in e.condition_rules):
-                      continue
-                  actor = squad.members[e.actor].name
-                  rows.append((
-                      source, actor, e.name, e.stat, e.value, e.max_stack,
-                      e.target_spec.raw, e.polarity,
-                      tuple(r.raw for r in e.condition_rules),
-                      tuple((r.mode.value, r.event_key, r.threshold, r.interval) for r in e.triggers),
-                      e.capability.disposition.value,
-                      tuple(e.capability.blockers),
-                      TriggerDispatcher.is_executable_effect(e),
-                      tuple(b for b in blockers if f':{actor}:{e.name}:' in b),
-                  ))
-          print('CANDIDATE_COUNT', len(rows))
-          for row in rows:
-              print('CANDIDATE', repr(row))
+          fast_events=[]
+          original_activate = ActiveEffectStore.activate_group
+          original_deactivate = ActiveEffectStore.deactivate_group
+          def traced_activate(store, candidate, targets, now, scheduler):
+              out = original_activate(store, candidate, targets, now, scheduler)
+              if candidate.effect_id == effect.effect_id and out:
+                  fast_events.append(('activate', float(now), tuple(targets)))
+              return out
+          def traced_deactivate(store, effect_id, targets, now):
+              out = original_deactivate(store, effect_id, targets, now=now)
+              if effect_id == effect.effect_id and out:
+                  fast_events.append(('expire', float(now), tuple(targets)))
+              return out
+
+          duration=30.0
+          policy=compile_burst_policy(moris_squad, compiled, {'duration':duration})
+          with patch.object(ActiveEffectStore,'activate_group',new=traced_activate), patch.object(ActiveEffectStore,'deactivate_group',new=traced_deactivate):
+              runtime = BurstRuntime(compiled, policy)
+              result = runtime.run(duration=duration)
+          print('FAST_FB_STARTS', result.full_burst_starts)
+          print('FAST_FB_ENDS', result.full_burst_ends)
+          print('FAST_PASSIVE_EVENTS', fast_events)
+          print('FAST_FINAL_ATK_PCT', runtime.dispatcher.effects.sum_stat(actor,'atk_pct',now=29.999))
+
+          moris = simulate(moris_squad, config={'duration':duration,'rng_mode':'expected'}, verbose=True)
+          rows=[]
+          for row in moris.log.buff_events:
+              if row.name == '광익 2':
+                  rows.append((row.kind, float(row.t), row.caster, row.target, row.value, row.stat, row.stack))
+          print('MORIS_PASSIVE_EVENTS', rows)
           PY
