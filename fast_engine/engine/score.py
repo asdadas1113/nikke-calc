@@ -934,6 +934,44 @@ def _dynamic_rank_target_transaction_unsafe(squad: CompiledSquad, effect) -> boo
     return False
 
 
+def _roster_static_burst1_condition_unreachable(
+    squad: CompiledSquad, effect
+) -> bool:
+    """Prove a has/no-B1 condition false from the immutable roster.
+
+    Fast evaluates these conditions through ``BurstMachine.stage_for()``, so the
+    compiled burst stage is static only while no *other* actor can mutate its
+    stage. Re-enter overrides are owner-local and do not alter an ally's stage,
+    but any ``burst_stage_override:*`` effect on another actor makes this proof
+    fail closed.
+    """
+
+    if len(effect.condition_rules) != 1:
+        return False
+    rule = effect.condition_rules[0]
+    if rule.mode not in {
+        ConditionMode.HAS_BURST1_ALLY,
+        ConditionMode.NO_BURST1_ALLY,
+    }:
+        return False
+    if any(
+        other.actor != effect.actor
+        and (other.stat or "").startswith("burst_stage_override:")
+        for other in squad.effects
+    ):
+        return False
+
+    has_burst1_ally = any(
+        actor != effect.actor and member.burst_stage == "1"
+        for actor, member in enumerate(squad.members)
+    )
+    return (
+        not has_burst1_ally
+        if rule.mode is ConditionMode.HAS_BURST1_ALLY
+        else has_burst1_ally
+    )
+
+
 def _unsupported_remove_named_buff_changes_scored_state(
     squad: CompiledSquad,
     effect,
@@ -950,6 +988,8 @@ def _unsupported_remove_named_buff_changes_scored_state(
     if (effect.stat or "") != "remove_named_buff" or effect.effect_type != "instant":
         return False
     if _is_patternless_unreachable(effect):
+        return False
+    if _roster_static_burst1_condition_unreachable(squad, effect):
         return False
     if TriggerDispatcher._full_burst_end_self_direct_remove_dependency_supported(
         squad, effect
