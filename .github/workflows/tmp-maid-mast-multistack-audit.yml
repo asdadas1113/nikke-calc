@@ -6,6 +6,7 @@ on:
       - 'fast_engine/research/tmp_maid_mast_multistack_audit.py'
       - 'fast_engine/research/tmp_maid_mast_b1_trace.py'
       - 'fast_engine/research/tmp_maid_mast_fast_probe.py'
+      - 'fast_engine/research/tmp_anchor_harmful_stack_scope.py'
       - '.github/workflows/tmp-maid-mast-multistack-audit.yml'
 jobs:
   audit:
@@ -17,5 +18,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Probe Fast Maid Mast stack ownership
-        run: PYTHONPATH=. python fast_engine/research/tmp_maid_mast_fast_probe.py
+      - name: Audit Anchor harmful-stack scope
+        run: PYTHONPATH=. python fast_engine/research/tmp_anchor_harmful_stack_scope.py
