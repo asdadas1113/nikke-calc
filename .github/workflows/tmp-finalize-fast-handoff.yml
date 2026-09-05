@@ -1,0 +1,49 @@
+name: tmp-finalize-fast-handoff
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+    paths:
+      - .github/workflows/tmp-finalize-fast-handoff.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Apply final handoff updates
+        run: PYTHONPATH=. python .github/scripts/tmp_finalize_fast_handoff.py
+      - name: Validate handoff docs
+        run: |
+          python -m context.doclint
+          grep -F 'run `33933054253`' fast_engine/research/PERIODIC_ENEMY_RECEIVED_DAMAGE_CHECKPOINT_20260905.md
+          grep -F 'Fast damage `155/155`' fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md
+      - name: Verify master unchanged
+        run: |
+          test "$(git rev-parse origin/master)" = 'fb2fd9157aa14499daf6b9f185beb685d4393f90'
+      - name: Remove temporary handoff files
+        run: |
+          git rm fast_engine/research/PERIODIC_ENEMY_CANONICAL_CI_TRIGGER_20260905.md
+          git rm .github/scripts/tmp_finalize_fast_handoff.py
+          git rm .github/workflows/tmp-finalize-fast-handoff.yml
+      - name: Verify final diff
+        run: |
+          git add fast_engine/research/PERIODIC_ENEMY_RECEIVED_DAMAGE_CHECKPOINT_20260905.md fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md
+          git diff --cached --check
+          test -z "$(git diff --name-only)"
+          test -z "$(git ls-files --others --exclude-standard)"
+      - name: Commit final handoff
+        run: |
+          git config user.name 'asdadas1113'
+          git config user.email 'crony06@gmail.com'
+          git commit -m 'docs: hand off Helm periodic checkpoint'
+          git push origin HEAD:fast-engine-phase2-20260901
