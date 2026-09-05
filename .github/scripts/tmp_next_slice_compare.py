@@ -5,8 +5,6 @@ from unittest.mock import patch
 
 from calculator.timeline import DEFAULT_ENEMY, simulate
 from context import snapshot, spec
-from fast_engine.engine.burst import compile_burst_policy
-from fast_engine.engine.model import EnemyStaticProfile
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -89,9 +87,13 @@ def apply_candidate() -> None:
 
 
 def run_probe() -> None:
+    # Import Fast only after the runner-only source patch so Python does not cache
+    # the pre-patch dispatcher/score modules.
+    from fast_engine.engine.burst import compile_burst_policy
     from fast_engine.engine.burst_runtime import BurstRuntime
     from fast_engine.engine.compiler import compile_moris_squad
     from fast_engine.engine.dispatcher import TriggerDispatcher
+    from fast_engine.engine.model import EnemyStaticProfile
     from fast_engine.engine.score import static_score_blockers
     from fast_engine.engine.state import ENEMY
 
@@ -169,7 +171,6 @@ def run_probe() -> None:
     for (actual, _stack, _value), expected in zip(fast_trace, moris_times):
         assert abs(actual - expected) <= 1e-9, (actual, expected)
 
-    # Non-matching target code must activate neither runtime.
     mismatch_enemy = dict(enemy)
     mismatch_enemy["code"] = "작열"
     mismatch_fast = EnemyStaticProfile(
