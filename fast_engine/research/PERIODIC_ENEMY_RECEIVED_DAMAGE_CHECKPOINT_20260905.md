@@ -173,6 +173,30 @@ clean canonical CI까지 닫은 뒤 unique-23 frontier를 다시 보고 다음 �
 
 ## 8. canonical CI
 
-production promotion에서 full Fast `262/262`까지 검증했다.
+production promotion에서 full Fast `262/262`까지 검증한 뒤, 조사용 temp workflow/scripts를 제거한 clean tree에서 canonical CI를 다시 실행했다.
 
-cleanup 뒤 `.github/workflows`를 `ci.yml`, `pages.yml`만 남긴 clean HEAD에서 canonical CI를 다시 실행하고 최종 run/job/count를 이 절에 기록한다.
+clean cleanup HEAD:
+
+- `38ce5d1d342afc82490769f76c3663cf3476fd9e`
+- `.github/workflows`: `ci.yml`, `pages.yml` only
+
+canonical trigger HEAD:
+
+- `d837729a42d857a73e6d840fa6582be7c13c0662`
+
+canonical CI:
+
+- run `33933054253`
+- job `101215498281`
+- result `success`
+- Fast damage `155/155`
+- calculator `137/137` (1 skip)
+- optimizer `374/374`
+- bridge `31/31` (1 skip)
+- site `385/385`
+- golden snapshot `29/29`
+- Fast static 180s score median `101.28ms` (`events=368`)
+
+따라서 Helm periodic enemy checkpoint는 semantic A/B / production promotion / permanent regression / standardized ranking / clean canonical CI까지 모두 닫혔다.
+
+canonical CI를 발생시키기 위한 `PERIODIC_ENEMY_CANONICAL_CI_TRIGGER_20260905.md`는 최종 handoff 정리에서 제거한다.
