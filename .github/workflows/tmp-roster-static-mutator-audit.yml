@@ -1,0 +1,22 @@
+name: tmp roster static mutator audit
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+    paths:
+      - '.github/workflows/tmp-roster-static-mutator-audit.yml'
+      - 'fast_engine/research/tmp_roster_static_mutator_audit.py'
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fast-engine-phase2-20260901
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Audit roster-static producer/remover pairs
+        run: python fast_engine/research/tmp_roster_static_mutator_audit.py
