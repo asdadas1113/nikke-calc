@@ -25,9 +25,9 @@ jobs:
       - name: Validate and clean temporary recorder files
         run: |
           python -m context.doclint
-          rm .tmp_record_charge_reload_checkpoint.py
-          rm .github/workflows/tmp-record-charge-reload-checkpoint.yml
-          rm .github/workflows/tmp-finish-charge-reload-checkpoint.yml
+          rm -f .tmp_record_charge_reload_checkpoint.py
+          rm -f .github/workflows/tmp-record-charge-reload-checkpoint.yml
+          rm -f .github/workflows/tmp-finish-charge-reload-checkpoint.yml
           git diff --check
       - name: Commit final checkpoint cleanup
         run: |
