@@ -71,32 +71,6 @@ class FalseSupportedScalingGuardTests(unittest.TestCase):
             "normal_state:라피:AUDIT remove:remove_named_buff", blockers
         )
 
-    def test_cross_actor_post_shot_buff_fails_closed(self):
-        effect = {
-            "source": "skill1", "type": "buff", "name": "AUDIT post shot",
-            "stat": "atk_pct", "fixed_value": 100.0,
-            "polarity": "beneficial", "target": "all_allies",
-            "duration": 10.0,
-            "trigger": {"timing": ["hit_count:1"], "condition": []},
-        }
-        blockers = static_score_blockers(_compiled([effect]))
-        self.assertIn(
-            "normal_state:라피:AUDIT post shot:same_timestamp_actor_order", blockers
-        )
-
-    def test_self_post_shot_buff_does_not_get_cross_actor_blocker(self):
-        effect = {
-            "source": "skill1", "type": "buff", "name": "AUDIT self post shot",
-            "stat": "atk_pct", "fixed_value": 100.0,
-            "polarity": "beneficial", "target": "self",
-            "duration": 10.0,
-            "trigger": {"timing": ["hit_count:1"], "condition": []},
-        }
-        blockers = static_score_blockers(_compiled([effect]))
-        self.assertNotIn(
-            "normal_state:라피:AUDIT self post shot:same_timestamp_actor_order", blockers
-        )
-
     def test_rank_target_with_same_event_atk_mutation_fails_closed(self):
         rank = {
             "source": "skill1", "type": "buff", "name": "AUDIT rank",

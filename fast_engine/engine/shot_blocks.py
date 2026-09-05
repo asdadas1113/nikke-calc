@@ -4,6 +4,7 @@ import math
 from dataclasses import dataclass
 
 from .model import CompiledSquad
+from .scheduler import score_actor_cutoff
 from .weapon import (
     StaticCadenceModifiers,
     WeaponCadenceMachine,
@@ -313,18 +314,30 @@ def compile_static_shot_blocks(
 class ShotBlockCursor:
     """Consume compressed shot timestamps without expanding them into objects."""
 
-    __slots__ = ("blocks", "block_index", "shot_offset")
+    __slots__ = ("blocks", "block_index", "shot_offset", "actor")
 
     def __init__(self, blocks: tuple[ShotBlock, ...]) -> None:
         self.blocks = blocks
         self.block_index = 0
         self.shot_offset = 0
+        self.actor = blocks[0].actor if blocks else -1
 
     def consume_until(self, time: float, *, inclusive: bool) -> int:
-        """Consume shots ``<= time`` or strictly ``< time``."""
+        """Consume shots ``<= time`` or strictly ``< time``.
+
+        During one sparse phase-30 Moris actor transaction, an inclusive consume
+        keeps exact-``time`` shots from later roster actors queued until their
+        actor turn. Earlier timestamps are unaffected.
+        """
 
         total = 0
         eps = 1e-9
+        effective_inclusive = inclusive
+        if inclusive:
+            cutoff = score_actor_cutoff(time)
+            if cutoff is not None and self.actor > cutoff:
+                effective_inclusive = False
+
         while self.block_index < len(self.blocks):
             block = self.blocks[self.block_index]
             remaining = block.count - self.shot_offset
@@ -335,11 +348,15 @@ class ShotBlockCursor:
 
             first = block.first_time + self.shot_offset * block.interval
             if block.interval <= 0.0:
-                due = first <= time + eps if inclusive else first < time - eps
+                due = (
+                    first <= time + eps
+                    if effective_inclusive
+                    else first < time - eps
+                )
                 if not due:
                     break
                 take = remaining
-            elif inclusive:
+            elif effective_inclusive:
                 if first > time + eps:
                     break
                 relative = (time - first) / block.interval

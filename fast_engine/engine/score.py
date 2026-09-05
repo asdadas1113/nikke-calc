@@ -882,43 +882,6 @@ def _dynamic_rank_target_transaction_unsafe(squad: CompiledSquad, effect) -> boo
     return False
 
 
-_POST_SHOT_CROSS_ACTOR_EVENT_KEYS = frozenset({
-    "on_attack",
-    "hit_count",
-    "pellet_hit",
-    "full_charge_hit",
-    "last_bullet",
-    "core_hit",
-    "squad_body_hit",
-})
-
-
-def _post_shot_cross_actor_score_unsafe(squad: CompiledSquad, effect) -> bool:
-    """Fail closed when a post-shot state can affect later Moris actors.
-
-    Moris processes weapon actors in roster order inside one frame, so a post-shot
-    buff from actor N may affect same-frame shots from actors N+1..end. Fast's
-    static observer currently consumes every actor's shot at t before phase-30
-    trigger dispatch, flattening that transaction. Self-only and earlier-only
-    targets are safe from this specific ordering hole.
-    """
-    if effect.effect_type != "buff" or _is_patternless_unreachable(effect):
-        return False
-    if not TriggerDispatcher.is_executable_effect(effect):
-        return False
-    if not _direct_damage_buff_score_supported(squad, effect):
-        return False
-    if not any(
-        (rule.event_key or "") in _POST_SHOT_CROSS_ACTOR_EVENT_KEYS
-        or (rule.event_key or "").startswith("weapon_hit:")
-        for rule in effect.triggers
-    ):
-        return False
-    if effect.target_spec.mode.value == "enemy":
-        return effect.actor < len(squad.members) - 1
-    return any(target > effect.actor for target in _possible_ally_targets(squad, effect))
-
-
 def _unsupported_remove_named_buff_changes_scored_state(
     squad: CompiledSquad,
     effect,
@@ -1001,11 +964,6 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
 
         if _is_patternless_unreachable(effect):
             continue
-
-        if _post_shot_cross_actor_score_unsafe(squad, effect):
-            blockers.append(
-                f"normal_state:{owner}:{effect.name or stat}:same_timestamp_actor_order"
-            )
 
         if (
             _has_unowned_reference_stack_scaling(effect)
