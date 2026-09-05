@@ -2,8 +2,11 @@ name: tmp producer mutator audit
 
 on:
   push:
-    branches: [fast-engine-phase2-20260901]
-    paths: [.github/workflows/tmp-producer-mutator-audit.yml]
+    branches:
+      - fast-engine-phase2-20260901
+    paths:
+      - '.github/workflows/tmp-producer-mutator-audit.yml'
+      - 'fast_engine/research/tmp_arcana_remove_patch.py'
 
 permissions:
   contents: write
@@ -18,129 +21,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Apply narrow producer/remover ownership
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          p = Path('fast_engine/engine/dispatcher.py')
-          s = p.read_text(encoding='utf-8')
-          old = '''    def _self_stack_remove_runtime_supported(self, effect: "CompiledEffect") -> bool:\n        return (\n            self._self_stack_remove_shape_supported(effect)\n            and self._stack_reach_source_shape_supported(self.squad, effect)\n        )\n\n'''
-          new = old + '''    @classmethod\n    def _full_burst_end_self_direct_remove_dependency_supported(\n        cls, squad: "CompiledSquad", effect: "CompiledEffect"\n    ) -> bool:\n        """Own one globally-unambiguous permanent self provider/remover pair.\n\n        Moris ``remove_named_buff`` removes every active row sharing the name,\n        regardless of its declared target.  Fast's first score-bearing remover\n        slice therefore requires the named provider to be globally unique, on\n        the same actor/self cohort, and free of any other named-state consumer\n        or mutator.  Permanent one-stack providers avoid expiry/refresh races;\n        the only owned transaction is burst_cast -> full_burst_end removal.\n        """\n        name = effect.parameters.get("target_effect")\n        if not (\n            effect.effect_type == "instant"\n            and (effect.stat or "") == "remove_named_buff"\n            and effect.target_spec.mode is TargetMode.SELF\n            and effect.target_spec.runtime_supported\n            and effect.value is None\n            and effect.duration is None\n            and effect.max_stack is None\n            and effect.max_trigger is None\n            and effect.tick_interval is None\n            and isinstance(name, str)\n            and bool(name)\n            and set(effect.parameters) == {"target_effect"}\n            and not effect.condition_rules\n            and len(effect.triggers) == 1\n            and effect.triggers[0].mode is TriggerMode.EVENT\n            and effect.triggers[0].event_key == "full_burst_end"\n        ):\n            return False\n\n        providers = tuple(\n            provider\n            for provider in squad.effects\n            if provider.effect_id != effect.effect_id and provider.name == name\n        )\n        if len(providers) != 1:\n            return False\n        provider = providers[0]\n        if not (\n            provider.actor == effect.actor\n            and provider.effect_type == "buff"\n            and (provider.stat or "") in {"crit_rate", "atk_dmg_pct"}\n            and provider.target_spec.mode is TargetMode.SELF\n            and provider.target_spec.runtime_supported\n            and provider.value is not None\n            and provider.duration in (None, -1, -1.0)\n            and provider.max_stack in (None, 1, 1.0)\n            and provider.max_trigger is None\n            and provider.tick_interval is None\n            and not provider.parameters\n            and not provider.condition_rules\n            and len(provider.triggers) == 1\n            and provider.triggers[0].mode is TriggerMode.EVENT\n            and provider.triggers[0].event_key == "burst_cast"\n            and is_direct_damage_buff_runtime_supported(provider)\n            and cls.is_executable_effect(provider)\n        ):\n            return False\n\n        state_end_key = f"event:state_end:{name}"\n        if any(\n            other.effect_id != effect.effect_id\n            and any((rule.event_key or "") == state_end_key for rule in other.triggers)\n            for other in squad.effects\n        ):\n            return False\n        if any(\n            other.effect_id != effect.effect_id\n            and any(rule.key == name for rule in other.condition_rules)\n            for other in squad.effects\n        ):\n            return False\n        if any(\n            other.effect_id != effect.effect_id\n            and other.parameters.get("target_effect") == name\n            for other in squad.effects\n        ):\n            return False\n        return True\n\n'''
-          if old not in s:
-              raise SystemExit('dispatcher helper anchor not found')
-          s = s.replace(old, new, 1)
-
-          old = '''        if self._enemy_remove_named_state_runtime_supported(effect):\n            return True\n        family = self._gauge_family(effect)\n'''
-          new = '''        if self._enemy_remove_named_state_runtime_supported(effect):\n            return True\n        if self._full_burst_end_self_direct_remove_dependency_supported(self.squad, effect):\n            return True\n        family = self._gauge_family(effect)\n'''
-          if old not in s:
-              raise SystemExit('runtime executable anchor not found')
-          s = s.replace(old, new, 1)
-
-          old = '''            elif stat == "remove_named_buff" and self._enemy_remove_named_state_runtime_supported(effect):\n                name = str(effect.parameters.get("target_effect") or "")\n                if tuple(targets) != (ENEMY,):\n                    return False\n                self.effects.remove_named_state(ENEMY, name, now=now)\n            elif stat in self._GAUGE_STATS:\n'''
-          new = '''            elif stat == "remove_named_buff" and self._enemy_remove_named_state_runtime_supported(effect):\n                name = str(effect.parameters.get("target_effect") or "")\n                if tuple(targets) != (ENEMY,):\n                    return False\n                self.effects.remove_named_state(ENEMY, name, now=now)\n            elif (\n                stat == "remove_named_buff"\n                and self._full_burst_end_self_direct_remove_dependency_supported(self.squad, effect)\n            ):\n                name = str(effect.parameters.get("target_effect") or "")\n                if tuple(targets) != (effect.actor,):\n                    return False\n                self.effects.remove_named_state(effect.actor, name, now=now)\n            elif stat in self._GAUGE_STATS:\n'''
-          if old not in s:
-              raise SystemExit('instant remover anchor not found')
-          s = s.replace(old, new, 1)
-          p.write_text(s, encoding='utf-8')
-
-          p = Path('fast_engine/engine/score.py')
-          s = p.read_text(encoding='utf-8')
-          old = '''    if _is_patternless_unreachable(effect):\n        return False\n    if damage_sink.supports_state_operation(effect):\n        return False\n'''
-          new = '''    if _is_patternless_unreachable(effect):\n        return False\n    if TriggerDispatcher._full_burst_end_self_direct_remove_dependency_supported(\n        squad, effect\n    ):\n        return False\n    if damage_sink.supports_state_operation(effect):\n        return False\n'''
-          if old not in s:
-              raise SystemExit('score remover guard anchor not found')
-          s = s.replace(old, new, 1)
-          p.write_text(s, encoding='utf-8')
-
-          Path('fast_engine/tests/test_damage_named_remove_dependency.py').write_text(r'''from __future__ import annotations
-
-from dataclasses import replace
-import unittest
-
-from calculator.timeline import simulate
-from context import snapshot, spec
-from fast_engine.engine.burst import BurstMachine, BurstSignal, compile_burst_policy
-from fast_engine.engine.compiler import compile_moris_squad
-from fast_engine.engine.conditions import compile_condition
-from fast_engine.engine.dispatcher import TriggerDispatcher
-from fast_engine.engine.model import EnemyStaticProfile
-from fast_engine.engine.scheduler import EventScheduler
-from fast_engine.engine.score import static_score_blockers
-from fast_engine.engine.state import StateStore
-from fast_engine.engine.targets import TargetMode
-
-
-class NamedRemoveDependencyTests(unittest.TestCase):
-    def _fixture(self):
-        members = list(snapshot.SQUADS['스쿼드3']['members'])
-        squad = spec.build_squad(members)
-        compiled = compile_moris_squad(squad)
-        actor = members.index('아르카나 : 포츈 메이트')
-        removers = tuple(e for e in compiled.members[actor].effects if e.name in {'쌓여가는 사진첩 2', '쌓여가는 사진첩 3'})
-        providers = tuple(e for e in compiled.members[actor].effects if e.name in {'추억 남기기', '추억 남기기 3'})
-        return squad, compiled, actor, removers, providers
-
-    def test_real_arcana_pairs_are_owned_and_remove_only_their_two_state_blockers(self):
-        _squad, compiled, _actor, removers, _providers = self._fixture()
-        self.assertEqual(len(removers), 2)
-        for remover in removers:
-            self.assertTrue(TriggerDispatcher._full_burst_end_self_direct_remove_dependency_supported(compiled, remover))
-        blockers = set(static_score_blockers(compiled))
-        self.assertNotIn('normal_state:아르카나 : 포츈 메이트:쌓여가는 사진첩 2:remove_named_buff', blockers)
-        self.assertNotIn('normal_state:아르카나 : 포츈 메이트:쌓여가는 사진첩 3:remove_named_buff', blockers)
-        self.assertTrue(any('아르카나 : 포츈 메이트' in b for b in blockers))
-
-    def test_dispatcher_removes_at_full_burst_end_and_next_burst_reactivates(self):
-        squad, compiled, actor, removers, providers = self._fixture()
-        policy = compile_burst_policy(squad, compiled, {'duration': 30.0, 'first_burst_time': 3.0})
-        state = StateStore.from_compiled_squad(compiled)
-        scheduler = EventScheduler()
-        dispatcher = TriggerDispatcher(compiled, state, EnemyStaticProfile(duration=30.0), BurstMachine(compiled, policy), scheduler)
-        names = tuple(p.name for p in providers)
-        self.assertEqual(set(names), {'추억 남기기', '추억 남기기 3'})
-        self.assertTrue(all(dispatcher.can_activate_effect(r) for r in removers))
-        for cast_t, end_t in ((3.2, 13.4), (15.7333333333, 25.9333333333)):
-            dispatcher.dispatch(BurstSignal(cast_t, 'burst_cast', actor, actor))
-            self.assertTrue(all(dispatcher.effects.has_named_state(actor, name, now=cast_t) for name in names))
-            dispatcher.dispatch(BurstSignal(end_t, 'full_burst_end', actor, actor))
-            self.assertTrue(all(not dispatcher.effects.has_named_state(actor, name, now=end_t) for name in names))
-
-    def test_moris_removes_exactly_on_full_burst_end_without_frame_delay(self):
-        squad, _compiled, _actor, _removers, _providers = self._fixture()
-        result = simulate(squad, config={'duration': 30.0, 'first_burst_time': 3.0, 'rng_mode': 'expected'}, seed=42, verbose=True)
-        ends = [float(row.t) for row in result.log.burst_log if row.event == 'full_burst 종료']
-        self.assertEqual(len(ends), 2)
-        for name in ('추억 남기기', '추억 남기기 3'):
-            expiries = [float(row.t) for row in result.log.buff_events if row.name == name and row.kind == 'expire']
-            self.assertEqual(expiries, ends)
-
-    def test_neighboring_or_ambiguous_shapes_remain_fail_closed(self):
-        _squad, compiled, _actor, removers, providers = self._fixture()
-        remover = removers[0]
-        provider = next(p for p in providers if p.name == remover.parameters['target_effect'])
-        self.assertFalse(TriggerDispatcher._full_burst_end_self_direct_remove_dependency_supported(compiled, replace(remover, target_spec=replace(remover.target_spec, mode=TargetMode.ENEMY))))
-        self.assertFalse(TriggerDispatcher._full_burst_end_self_direct_remove_dependency_supported(compiled, replace(remover, conditions=('during_full_burst',), condition_rules=(compile_condition('during_full_burst'),))))
-        self.assertFalse(TriggerDispatcher._full_burst_end_self_direct_remove_dependency_supported(compiled, replace(remover, triggers=(replace(remover.triggers[0], raw='on_attack', event_key='on_attack'),))))
-        finite = replace(provider, duration=10.0)
-        finite_squad = replace(compiled, effects=tuple(finite if e.effect_id == provider.effect_id else e for e in compiled.effects))
-        self.assertFalse(TriggerDispatcher._full_burst_end_self_direct_remove_dependency_supported(finite_squad, remover))
-        duplicate = replace(provider, effect_id=max(e.effect_id for e in compiled.effects) + 1)
-        ambiguous = replace(compiled, effects=compiled.effects + (duplicate,))
-        self.assertFalse(TriggerDispatcher._full_burst_end_self_direct_remove_dependency_supported(ambiguous, remover))
-
-
-if __name__ == '__main__':
-    unittest.main()
-''', encoding='utf-8')
-          PY
+      - name: Apply patch
+        run: python fast_engine/research/tmp_arcana_remove_patch.py
       - name: Run focused regressions
-        run: |
-          python -m unittest fast_engine.tests.test_damage_named_remove_dependency fast_engine.tests.test_damage_false_supported_guards fast_engine.tests.test_damage_real_squad_certification fast_engine.tests.test_damage_full_burst_conditional_passive -v
+        run: >-
+          python -m unittest
+          fast_engine.tests.test_damage_named_remove_dependency
+          fast_engine.tests.test_damage_false_supported_guards
+          fast_engine.tests.test_damage_real_squad_certification
+          fast_engine.tests.test_damage_full_burst_conditional_passive -v
       - name: Commit semantic patch
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add fast_engine/engine/dispatcher.py fast_engine/engine/score.py fast_engine/tests/test_damage_named_remove_dependency.py
-          git commit -m "Fast: own full-burst-end named self removal"
+          git commit -m 'Fast: own full-burst-end named self removal'
           git push origin HEAD:fast-engine-phase2-20260901
