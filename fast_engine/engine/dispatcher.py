@@ -738,6 +738,93 @@ class TriggerDispatcher:
         )
 
     @classmethod
+    def _full_burst_end_self_direct_remove_dependency_supported(
+        cls, squad: "CompiledSquad", effect: "CompiledEffect"
+    ) -> bool:
+        """Own one unambiguous permanent self provider/remover transaction.
+
+        Moris removes every active row sharing ``target_effect`` by name. Fast's
+        first score-bearing remover slice therefore requires one globally unique
+        provider on the same actor/self cohort. The provider is a permanent
+        one-stack burst-cast ``atk_dmg_pct`` state and the remover is an
+        unconditional full-burst-end event. Any consumer that can observe the
+        provider's removal keeps the pair fail-closed.
+        """
+        name = effect.parameters.get("target_effect")
+        if not (
+            effect.effect_type == "instant"
+            and (effect.stat or "") == "remove_named_buff"
+            and effect.target_spec.mode is TargetMode.SELF
+            and effect.target_spec.runtime_supported
+            and effect.value is None
+            and effect.duration is None
+            and effect.max_stack is None
+            and effect.max_trigger is None
+            and effect.tick_interval is None
+            and isinstance(name, str)
+            and bool(name)
+            and set(effect.parameters) == {"target_effect"}
+            and not effect.condition_rules
+            and len(effect.triggers) == 1
+            and effect.triggers[0].mode is TriggerMode.EVENT
+            and effect.triggers[0].event_key == "full_burst_end"
+        ):
+            return False
+
+        providers = tuple(
+            provider
+            for provider in squad.effects
+            if provider.effect_id != effect.effect_id and provider.name == name
+        )
+        if len(providers) != 1:
+            return False
+        provider = providers[0]
+        if not (
+            provider.actor == effect.actor
+            and provider.effect_type == "buff"
+            and (provider.stat or "") == "atk_dmg_pct"
+            and provider.target_spec.mode is TargetMode.SELF
+            and provider.target_spec.runtime_supported
+            and provider.value is not None
+            and provider.duration in (None, -1, -1.0)
+            and provider.max_stack in (None, 1, 1.0)
+            and provider.max_trigger is None
+            and provider.tick_interval is None
+            and not provider.parameters
+            and not provider.condition_rules
+            and len(provider.triggers) == 1
+            and provider.triggers[0].mode is TriggerMode.EVENT
+            and provider.triggers[0].event_key == "burst_cast"
+            and is_direct_damage_buff_runtime_supported(provider)
+            and cls.is_executable_effect(provider)
+        ):
+            return False
+
+        state_end_key = f"event:state_end:{name}"
+        if any(
+            other.effect_id != effect.effect_id
+            and any((rule.event_key or "") == state_end_key for rule in other.triggers)
+            for other in squad.effects
+        ):
+            return False
+        if any(
+            other.effect_id != effect.effect_id
+            and any(rule.key == name for rule in other.condition_rules)
+            for other in squad.effects
+        ):
+            return False
+        if any(
+            other.effect_id != effect.effect_id
+            and (
+                other.parameters.get("target_effect") == name
+                or other.parameters.get("scaling_ref") == name
+            )
+            for other in squad.effects
+        ):
+            return False
+        return True
+
+    @classmethod
     def _self_stack_heal_shape_supported(cls, effect: "CompiledEffect") -> bool:
         return (
             effect.capability.disposition is CapabilityDisposition.PLANNED
@@ -1321,6 +1408,8 @@ class TriggerDispatcher:
             return True
         if self._enemy_remove_named_state_runtime_supported(effect):
             return True
+        if self._full_burst_end_self_direct_remove_dependency_supported(self.squad, effect):
+            return True
         family = self._gauge_family(effect)
         if (
             family is not None
@@ -1681,6 +1770,14 @@ class TriggerDispatcher:
                 if tuple(targets) != (ENEMY,):
                     return False
                 self.effects.remove_named_state(ENEMY, name, now=now)
+            elif (
+                stat == "remove_named_buff"
+                and self._full_burst_end_self_direct_remove_dependency_supported(self.squad, effect)
+            ):
+                name = str(effect.parameters.get("target_effect") or "")
+                if tuple(targets) != (effect.actor,):
+                    return False
+                self.effects.remove_named_state(effect.actor, name, now=now)
             elif stat in self._GAUGE_STATS:
                 family = self._gauge_family(effect)
                 if (

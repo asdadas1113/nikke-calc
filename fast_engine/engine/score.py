@@ -951,6 +951,10 @@ def _unsupported_remove_named_buff_changes_scored_state(
         return False
     if _is_patternless_unreachable(effect):
         return False
+    if TriggerDispatcher._full_burst_end_self_direct_remove_dependency_supported(
+        squad, effect
+    ):
+        return False
     if damage_sink.supports_state_operation(effect):
         return False
     if (
