@@ -105,11 +105,11 @@ class ChargeReloadCancelControlTests(unittest.TestCase):
             'cadence:홍련 : 흑영:화무십일홍 · 수라 2:ammo_charge_pct',
             volume_blockers,
         )
-        self.assertIn(
+        self.assertNotIn(
             'cadence:마스트 : 로망틱 메이드:파이레츠 스피릿 2:reload_speed_pct',
             volume_blockers,
         )
-        self.assertIn(
+        self.assertNotIn(
             'skill_state_delivery:마스트 : 로망틱 메이드:파이레츠 스피릿:split_dmg_pct',
             volume_blockers,
         )

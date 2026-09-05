@@ -41,10 +41,9 @@ class StatAppliedChargeSpeedTests(unittest.TestCase):
                 squad, stay, "event:stat_applied:dot_dmg_pct"
             )
         )
-        # The only public split provider is Maid Mast's reference-stack
-        # split_dmg_pct. Until Fast owns that captured scaling multiplier, the
-        # downstream stat_applied branch must also fail closed.
-        self.assertFalse(
+        # Maid Mast's finite reference-stack split_dmg_pct provider is now
+        # owned, so this exact downstream stat_applied branch is reachable.
+        self.assertTrue(
             TriggerDispatcher.stat_applied_dependency_score_safe(
                 squad, split, "event:stat_applied:split_dmg_pct"
             )
@@ -54,7 +53,7 @@ class StatAppliedChargeSpeedTests(unittest.TestCase):
 
         blockers = set(static_score_blockers(squad))
         self.assertIn("cadence:브래디:머물고 싶은 맛:charge_speed_pct", blockers)
-        self.assertIn("cadence:브래디:나누고 싶은 맛:charge_speed_pct", blockers)
+        self.assertNotIn("cadence:브래디:나누고 싶은 맛:charge_speed_pct", blockers)
 
         seen: set[tuple[str, ...]] = set()
         cadence = 0
@@ -80,8 +79,11 @@ class StatAppliedChargeSpeedTests(unittest.TestCase):
 
         self.assertEqual(len(seen), 23)
         self.assertEqual(certified, 2)
-        self.assertEqual(cadence, 62)
-        self.assertEqual(matches, set())
+        self.assertEqual(cadence, 59)
+        self.assertEqual(
+            matches,
+            {("브래디", "나누고 싶은 맛", "event:stat_applied:split_dmg_pct")},
+        )
 
     def test_fast_stat_applied_activation_sequence_matches_moris(self) -> None:
         moris_squad, squad, brady = self._public()
@@ -112,11 +114,14 @@ class StatAppliedChargeSpeedTests(unittest.TestCase):
             float(row.t) for row in moris.log.buff_events if row.name == "나누고 싶은 맛"
         ]
         self.assertFalse(fast_stay)
-        self.assertFalse(fast_split)
-        self.assertGreater(len(moris_split), 1)
+        self.assertEqual(fast_split, moris_split)
+        self.assertEqual(len(moris_split), 5)
+        blockers = static_score_blockers(squad)
+        self.assertNotIn(
+            "cadence:브래디:나누고 싶은 맛:charge_speed_pct", blockers
+        )
         self.assertIn(
-            "cadence:브래디:나누고 싶은 맛:charge_speed_pct",
-            static_score_blockers(squad),
+            "cadence:브래디:머물고 싶은 맛:charge_speed_pct", blockers
         )
 
     def test_opposite_stat_source_keeps_not_self_state_branch_fail_closed(self) -> None:

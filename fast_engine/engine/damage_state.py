@@ -84,7 +84,7 @@ class DamageTermResolver:
         for effect, active in self.effects.iter_stat(stat, now=now):
             if active.target != actor or not self._runtime_condition_ok(effect):
                 continue
-            total += float(effect.value or 0.0) * active.stacks
+            total += float(effect.value or 0.0) * self.effects.effect_value_scale(effect, active, now=now)
         return total
 
     def _has(self, actor: int, stat: str, now: float) -> bool:
@@ -109,7 +109,8 @@ class DamageTermResolver:
             caster_base = float(
                 self.squad.members[active.source_actor].weapon.get("charge_time") or 0.0
             )
-            total += caster_base * float(effect.value or 0.0) * active.stacks / target_base
+            scale = self.effects.effect_value_scale(effect, active, now=now)
+            total += caster_base * float(effect.value or 0.0) * scale / target_base
         return total
 
     def _charge_overflow_damage_pct(self, actor: int, now: float) -> float:
@@ -126,7 +127,8 @@ class DamageTermResolver:
             if active.target != actor or not self._runtime_condition_ok(effect):
                 continue
             caster_base = self.squad.members[active.source_actor].base_atk
-            total += caster_base * float(effect.value or 0.0) * active.stacks / 100.0
+            scale = self.effects.effect_value_scale(effect, active, now=now)
+            total += caster_base * float(effect.value or 0.0) * scale / 100.0
         return total
 
     def resolve(self, actor: int, *, now: float) -> DamageTerms:

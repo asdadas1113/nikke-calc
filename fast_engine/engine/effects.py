@@ -24,6 +24,7 @@ class ActiveEffect:
     stacks: float
     expires_at: float
     generation: int
+    scaling_stack: float | None = None
 
     def active(self, now: float) -> bool:
         return self.expires_at == inf or now < self.expires_at
@@ -70,7 +71,7 @@ class ActiveEffectStore:
         "squad", "state", "_effects", "_active", "_by_target_stat",
         "_by_target_name", "_generation", "_dynamic_bullet_targets",
         "_bullet_remaining", "_pending_target", "_lazy_target_resolver",
-        "_resolving_lazy_target",
+        "_resolving_lazy_target", "_finite_reference_stack_effect_ids",
     )
 
     def __init__(self, squad: "CompiledSquad", state: StateStore) -> None:
@@ -86,6 +87,63 @@ class ActiveEffectStore:
         self._pending_target: dict[int, PendingTargetEffect] = {}
         self._lazy_target_resolver: Callable[["CompiledEffect", float, float], tuple[int, ...]] | None = None
         self._resolving_lazy_target = False
+        self._finite_reference_stack_effect_ids: frozenset[int] = frozenset()
+
+    def enable_finite_reference_stack_capture(self, effect_ids: Iterable[int]) -> None:
+        """Enable only squad-proven finite named-stack reference consumers."""
+
+        self._finite_reference_stack_effect_ids = frozenset(int(eid) for eid in effect_ids)
+
+    def _reference_named_stack_optional(
+        self, source_actor: int, name: str, *, now: float
+    ) -> float | None:
+        if not self.has_named_state(int(source_actor), name, now=now):
+            return None
+        return self.named_stack(int(source_actor), name, now=now)
+
+    def _capture_reference_stack(self, effect: "CompiledEffect", now: float) -> float | None:
+        if effect.effect_id not in self._finite_reference_stack_effect_ids:
+            return None
+        ref = effect.parameters.get("scaling_ref")
+        if not isinstance(ref, str) or not ref:
+            return None
+        return self._reference_named_stack_optional(effect.actor, ref, now=now)
+
+    def effect_value_scale(
+        self, effect: "CompiledEffect", active: ActiveEffect, *, now: float
+    ) -> float:
+        """Return Moris' own-stack or captured reference-stack multiplier."""
+
+        if effect.effect_id not in self._finite_reference_stack_effect_ids:
+            return active.stacks
+        if active.scaling_stack is not None:
+            return active.scaling_stack
+        # Moris leaves scaling_stack=None when the reference is absent at the
+        # activation boundary, then falls back to a live ref_count lookup.
+        ref = effect.parameters.get("scaling_ref")
+        if not isinstance(ref, str) or not ref:
+            return 0.0
+        live = self._reference_named_stack_optional(active.source_actor, ref, now=now)
+        return 0.0 if live is None else live
+
+    def _touch_live_reference_consumers(
+        self, source_actor: int, name: str, *, now: float
+    ) -> None:
+        """Invalidate only finite refs whose activation captured no provider."""
+
+        if not name:
+            return
+        for active in tuple(self._active.values()):
+            if (
+                active.effect_id not in self._finite_reference_stack_effect_ids
+                or active.source_actor != int(source_actor)
+                or active.scaling_stack is not None
+                or not active.active(now)
+            ):
+                continue
+            effect = self._effects[active.effect_id]
+            if effect.parameters.get("scaling_ref") == name:
+                self.state.touch(active.target, StateDomain.EFFECT)
 
     def attach_lazy_target_resolver(
         self,
@@ -323,11 +381,14 @@ class ActiveEffectStore:
             stacks,
             expires,
             generation,
+            self._capture_reference_stack(effect, now),
         )
         self._active[key] = active
         if old is None:
             self._index_add(effect, key)
         self.state.touch(target, StateDomain.EFFECT)
+        if effect.name:
+            self._touch_live_reference_consumers(effect.actor, effect.name, now=now)
         if expires != inf:
             scheduler.schedule(
                 expires,
@@ -443,6 +504,8 @@ class ActiveEffectStore:
         self._bullet_remaining.pop(key, None)
         self._index_remove(effect, key)
         self.state.touch(token.target, StateDomain.EFFECT)
+        if effect.name:
+            self._touch_live_reference_consumers(active.source_actor, effect.name, now=event.time)
         return effect
 
     def _active_keys(
@@ -518,6 +581,7 @@ class ActiveEffectStore:
                 continue
             active.stacks = stacks
             self.state.touch(target, StateDomain.EFFECT)
+            self._touch_live_reference_consumers(active.source_actor, name, now=now)
             changed.append(active.effect_id)
         return tuple(changed)
 
@@ -536,6 +600,7 @@ class ActiveEffectStore:
             self._bullet_remaining.pop(key, None)
             effect = self._effects[active.effect_id]
             self._index_remove(effect, key)
+            self._touch_live_reference_consumers(active.source_actor, name, now=now)
             removed.append(active.effect_id)
         if removed:
             self.state.touch(target, StateDomain.EFFECT)
@@ -582,6 +647,8 @@ class ActiveEffectStore:
             effect = self._effects[active.effect_id]
             self._index_remove(effect, key)
             self.state.touch(target, StateDomain.EFFECT)
+            if effect.name:
+                self._touch_live_reference_consumers(active.source_actor, effect.name, now=now)
             removed.append(target)
         return tuple(removed)
 
@@ -645,7 +712,7 @@ class ActiveEffectStore:
         for key in self._active_keys(self._by_target_stat, target, stat, now):
             active = self._active[key]
             effect = self._effects[active.effect_id]
-            total += float(effect.value or 0.0) * active.stacks
+            total += float(effect.value or 0.0) * self.effect_value_scale(effect, active, now=now)
         return total
 
     def effective_atk(self, actor: int, *, now: float) -> float:
@@ -667,7 +734,8 @@ class ActiveEffectStore:
                 active = self._active[key]
                 effect = self._effects[active.effect_id]
                 caster_base = float(self.squad.members[active.source_actor].base_atk)
-                atk_flat += caster_base * float(effect.value or 0.0) * active.stacks / 100.0
+                scale = self.effect_value_scale(effect, active, now=now)
+                atk_flat += caster_base * float(effect.value or 0.0) * scale / 100.0
             return base * (1.0 + atk_pct / 100.0) + atk_flat
         finally:
             self._resolving_lazy_target = previous

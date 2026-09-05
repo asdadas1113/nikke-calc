@@ -812,6 +812,11 @@ def _named_buff_event_dependency_score_safe(squad: CompiledSquad, effect) -> boo
 def _direct_damage_buff_score_supported(squad: CompiledSquad, effect) -> bool:
     if not is_direct_damage_buff_runtime_supported(effect):
         return False
+    if (
+        _has_unowned_reference_stack_scaling(effect)
+        and not TriggerDispatcher.finite_reference_stack_dependency_score_safe(squad, effect)
+    ):
+        return False
     if _uses_shield_runtime_semantics(effect) and not _shield_runtime_dependency_score_safe(squad, effect):
         return False
     if not _named_buff_event_dependency_score_safe(squad, effect):
@@ -990,6 +995,7 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
         if (
             _has_unowned_reference_stack_scaling(effect)
             and stat in _CADENCE_OR_SHAPE_STATS
+            and not TriggerDispatcher.finite_reference_stack_dependency_score_safe(squad, effect)
         ):
             blockers.append(f"cadence:{label}")
             continue

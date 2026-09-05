@@ -3,6 +3,7 @@ from __future__ import annotations
 from .conditions import ConditionMode
 from .core_events import is_static_expected_core_count_rule
 from .targets import TargetMode
+from .reference_stack import finite_reference_stack_capture_shape
 from .target_scope import target_scope_is_static
 from .triggers import TriggerMode
 
@@ -264,13 +265,13 @@ def is_direct_damage_buff_runtime_supported(effect) -> bool:
 
     if effect.effect_type != "buff" or (effect.stat or "") not in DIRECT_DAMAGE_STATE_STATS:
         return False
-    # Moris captures stack_count reference scaling at the activation boundary.
-    # Fast does not own that captured multiplier yet, so this exact family must
-    # fail closed instead of applying the raw unscaled value.
+    # Finite named-stack reference scaling is locally representable; score/runtime
+    # certification still proves that the referenced same-caster self provider is
+    # actually owned. Permanent live refs, gauges, DoTs and other shapes stay shut.
     if (
         effect.parameters.get("scaling") == "stack_count"
         or "scaling_ref" in effect.parameters
-    ):
+    ) and not finite_reference_stack_capture_shape(effect):
         return False
     if not _one_shot_lifetime_supported(effect):
         return False

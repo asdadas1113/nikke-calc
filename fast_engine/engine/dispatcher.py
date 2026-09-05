@@ -12,6 +12,7 @@ from .damage_policy import (
 )
 from .effects import ActiveEffectStore
 from .shot_blocks import static_bullet_lifetime_cadence_safe
+from .reference_stack import finite_reference_stack_capture_shape
 from .state import ENEMY, StateStore
 from .target_scope import possible_ally_targets, target_scope_is_static
 from .targets import TargetMode, TargetResolver
@@ -128,6 +129,11 @@ class TriggerDispatcher:
         self.effects.attach_lazy_target_resolver(self._resolve_lazy_rank_targets)
         self.conditions = ConditionEvaluator(squad, state, self.effects, enemy, burst)
         self._effect_table = tuple(squad.effects)
+        self.effects.enable_finite_reference_stack_capture(
+            effect.effect_id
+            for effect in self._effect_table
+            if self.finite_reference_stack_dependency_score_safe(squad, effect)
+        )
         self._event_counts: dict[tuple[int, str], int] = defaultdict(int)
         self._conditional_counts: dict[tuple[int, str], tuple[int, int]] = {}
         self._activation_counts: dict[int, int] = defaultdict(int)
@@ -1109,6 +1115,40 @@ class TriggerDispatcher:
             and effect.triggers[0].mode is TriggerMode.EVENT
             and effect.triggers[0].event_key == "burst_cast"
         )
+
+    @classmethod
+    def finite_reference_stack_dependency_score_safe(
+        cls, squad: "CompiledSquad", effect: "CompiledEffect"
+    ) -> bool:
+        """Own finite captured refs only through one executable self provider."""
+
+        if not finite_reference_stack_capture_shape(effect):
+            return False
+        if not effect.target_spec.runtime_supported or not target_scope_is_static(effect.target_spec):
+            return False
+        ref = effect.parameters.get("scaling_ref")
+        providers = tuple(
+            provider
+            for provider in squad.members[effect.actor].effects
+            if provider.effect_id != effect.effect_id and provider.name == ref
+        )
+        if len(providers) != 1:
+            return False
+        provider = providers[0]
+        provider_max = provider.max_stack if provider.max_stack is not None else 1.0
+        if (
+            provider.actor != effect.actor
+            or provider.effect_type != "buff"
+            or provider.target_spec.mode is not TargetMode.SELF
+            or not provider.target_spec.runtime_supported
+            or provider.parameters.get("scaling") == "stack_count"
+            or "scaling_ref" in provider.parameters
+            or float(provider_max) <= 0.0
+            or (float(provider_max) != -1.0 and not float(provider_max).is_integer())
+            or not cls.is_executable_effect(provider)
+        ):
+            return False
+        return True
 
     @staticmethod
     def is_executable_effect(effect: "CompiledEffect") -> bool:
