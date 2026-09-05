@@ -1,0 +1,83 @@
+name: tmp-next-frontier-audit
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+    paths:
+      - .github/workflows/tmp-next-frontier-audit.yml
+
+permissions:
+  contents: read
+
+env:
+  PYTHONPATH: .
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Inspect low-blocker frontier
+        run: |
+          python - <<'PY'
+          from context import snapshot, spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+
+          rows=[]
+          seen=set()
+          for name, entry in snapshot.SQUADS.items():
+              if str(name).startswith('지그_'):
+                  continue
+              members=tuple(str(x) for x in entry['members'])
+              if len(members)!=5 or any(x.startswith('test_') for x in members) or members in seen:
+                  continue
+              seen.add(members)
+              compiled=compile_moris_squad(spec.build_squad(list(members)))
+              blockers=tuple(static_score_blockers(compiled))
+              if 0 < len(blockers) <= 8:
+                  rows.append((str(name),members,compiled,blockers))
+
+          for name,members,compiled,blockers in sorted(rows,key=lambda r:(len(r[3]),r[0])):
+              print('\nTEAM',len(blockers),name,members)
+              for blocker in blockers:
+                  print(' BLOCKER',blocker)
+                  parts=blocker.split(':')
+                  family=parts[0]
+                  if family=='control':
+                      continue
+                  matched=[]
+                  for e in compiled.effects:
+                      actor=compiled.members[e.actor].name
+                      label=f'{actor}:{e.name}:{e.stat or ""}'
+                      label2=f'{actor}:{e.name}'
+                      suffix=blocker.split(':',1)[1] if ':' in blocker else blocker
+                      if suffix not in {label,label2}:
+                          continue
+                      target=getattr(e,'target_spec',None)
+                      target_mode=getattr(getattr(target,'mode',None),'value',str(getattr(target,'mode',None)))
+                      triggers=[(
+                          getattr(getattr(r,'mode',None),'value',str(getattr(r,'mode',None))),
+                          getattr(r,'event_key',None),getattr(r,'threshold',None),getattr(r,'interval',None),
+                          getattr(r,'trigger_count_reducible',None),
+                      ) for r in e.triggers]
+                      conditions=[(
+                          getattr(getattr(r,'mode',None),'value',str(getattr(r,'mode',None))),
+                          getattr(r,'key',None),getattr(r,'value',None)
+                      ) for r in e.condition_rules]
+                      matched.append({
+                          'actor':actor,'name':e.name,'type':e.effect_type,'stat':e.stat,'value':e.value,
+                          'duration':e.duration,'max_stack':e.max_stack,'max_trigger':getattr(e,'max_trigger',None),
+                          'tick_interval':getattr(e,'tick_interval',None),'parameters':e.parameters,
+                          'target':target_mode,'target_runtime':getattr(target,'runtime_supported',None),
+                          'triggers':triggers,'conditions':conditions,
+                          'cap_disposition':getattr(getattr(e.capability,'disposition',None),'value',str(getattr(e.capability,'disposition',None))),
+                          'cap_blockers':tuple(e.capability.blockers),
+                      })
+                  for row in matched:
+                      print('  EFFECT',row)
+          PY
