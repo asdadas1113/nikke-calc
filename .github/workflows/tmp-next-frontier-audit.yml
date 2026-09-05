@@ -21,14 +21,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect low-blocker frontier
+      - name: Record baseline public blockers
         run: |
           python - <<'PY'
+          import json
+          from pathlib import Path
           from context import snapshot, spec
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.score import static_score_blockers
 
-          rows=[]
+          rows={}
           seen=set()
           for name, entry in snapshot.SQUADS.items():
               if str(name).startswith('지그_'):
@@ -37,47 +39,90 @@ jobs:
               if len(members)!=5 or any(x.startswith('test_') for x in members) or members in seen:
                   continue
               seen.add(members)
-              compiled=compile_moris_squad(spec.build_squad(list(members)))
-              blockers=tuple(static_score_blockers(compiled))
-              if 0 < len(blockers) <= 8:
-                  rows.append((str(name),members,compiled,blockers))
-
-          for name,members,compiled,blockers in sorted(rows,key=lambda r:(len(r[3]),r[0])):
-              print('\nTEAM',len(blockers),name,members)
-              for blocker in blockers:
-                  print(' BLOCKER',blocker)
-                  parts=blocker.split(':')
-                  family=parts[0]
-                  if family=='control':
-                      continue
-                  matched=[]
-                  for e in compiled.effects:
-                      actor=compiled.members[e.actor].name
-                      label=f'{actor}:{e.name}:{e.stat or ""}'
-                      label2=f'{actor}:{e.name}'
-                      suffix=blocker.split(':',1)[1] if ':' in blocker else blocker
-                      if suffix not in {label,label2}:
-                          continue
-                      target=getattr(e,'target_spec',None)
-                      target_mode=getattr(getattr(target,'mode',None),'value',str(getattr(target,'mode',None)))
-                      triggers=[(
-                          getattr(getattr(r,'mode',None),'value',str(getattr(r,'mode',None))),
-                          getattr(r,'event_key',None),getattr(r,'threshold',None),getattr(r,'interval',None),
-                          getattr(r,'trigger_count_reducible',None),
-                      ) for r in e.triggers]
-                      conditions=[(
-                          getattr(getattr(r,'mode',None),'value',str(getattr(r,'mode',None))),
-                          getattr(r,'key',None),getattr(r,'value',None)
-                      ) for r in e.condition_rules]
-                      matched.append({
-                          'actor':actor,'name':e.name,'type':e.effect_type,'stat':e.stat,'value':e.value,
-                          'duration':e.duration,'max_stack':e.max_stack,'max_trigger':getattr(e,'max_trigger',None),
-                          'tick_interval':getattr(e,'tick_interval',None),'parameters':e.parameters,
-                          'target':target_mode,'target_runtime':getattr(target,'runtime_supported',None),
-                          'triggers':triggers,'conditions':conditions,
-                          'cap_disposition':getattr(getattr(e.capability,'disposition',None),'value',str(getattr(e.capability,'disposition',None))),
-                          'cap_blockers':tuple(e.capability.blockers),
-                      })
-                  for row in matched:
-                      print('  EFFECT',row)
+              rows[str(name)] = list(static_score_blockers(compile_moris_squad(spec.build_squad(list(members)))))
+          Path('before.json').write_text(json.dumps(rows,ensure_ascii=False,indent=2),encoding='utf-8')
+          print('BASE_UNIQUE',len(rows))
+          print('BASE_CERTIFIED',sum(not v for v in rows.values()))
           PY
+      - name: Verify Moris part-hit reachability boundary
+        run: |
+          python - <<'PY'
+          from calculator.timeline import DEFAULT_ENEMY, simulate
+          from context import snapshot, spec
+
+          entry=snapshot.SQUADS['레이드_미하라에이다']
+          squad=spec.build_squad(list(entry['members']))
+          cfg={'duration':30.0,'rng_mode':'expected'}
+          default=simulate(squad,config=cfg,enemy=dict(DEFAULT_ENEMY),verbose=True)
+          parts_enemy=dict(DEFAULT_ENEMY)
+          parts_enemy['has_parts']=True
+          parts=simulate(squad,config=cfg,enemy=parts_enemy,verbose=True)
+
+          def activations(result,name):
+              return [float(row.t) for row in result.log.buff_events if row.name==name and row.kind=='activate']
+
+          default_core=activations(default,'타겟 섬멸 코어')
+          parts_core=activations(parts,'타겟 섬멸 코어')
+          print('DEFAULT_CORE_ACTIVATIONS',default_core)
+          print('PARTS_CORE_ACTIVATIONS',parts_core[:10], 'COUNT',len(parts_core))
+          if default_core:
+              raise SystemExit('patternless default unexpectedly activates squad_part_hit consumer')
+          if not parts_core:
+              raise SystemExit('has_parts=True failed to prove squad_part_hit is a real reachable event')
+          print('MORIS_BOUNDARY_OK')
+          PY
+      - name: Patch candidate in checkout only
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('fast_engine/engine/score.py')
+          text=p.read_text(encoding='utf-8')
+          needle='    "event:part_destroy",\n})'
+          replacement='    "event:part_destroy",\n    "squad_part_hit",\n})'
+          if needle not in text:
+              raise SystemExit('candidate insertion point not found')
+          p.write_text(text.replace(needle,replacement,1),encoding='utf-8')
+          PY
+      - name: Verify exact public blocker delta
+        run: |
+          python - <<'PY'
+          import json
+          from context import snapshot, spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+
+          before=json.load(open('before.json',encoding='utf-8'))
+          after={}
+          seen=set()
+          for name, entry in snapshot.SQUADS.items():
+              if str(name).startswith('지그_'):
+                  continue
+              members=tuple(str(x) for x in entry['members'])
+              if len(members)!=5 or any(x.startswith('test_') for x in members) or members in seen:
+                  continue
+              seen.add(members)
+              after[str(name)] = list(static_score_blockers(compile_moris_squad(spec.build_squad(list(members)))))
+
+          removed=[]
+          added=[]
+          for name in before:
+              removed.extend((name,b) for b in before[name] if b not in after[name])
+              added.extend((name,b) for b in after[name] if b not in before[name])
+          print('AFTER_UNIQUE',len(after))
+          print('AFTER_CERTIFIED',sum(not v for v in after.values()))
+          print('REMOVED',removed)
+          print('ADDED',added)
+          expected={
+              ('레이드_미하라에이다','normal_delivery:D : 킬러 와이프:타겟 섬멸 코어:core_dmg_pct'),
+              ('레이드_미하라에이다','skill_state_delivery:D : 킬러 와이프:타겟 섬멸 코어:core_dmg_pct'),
+          }
+          if set(removed)!=expected or added:
+              raise SystemExit(f'unexpected public delta removed={removed} added={added}')
+          if sum(not v for v in after.values()) != 2:
+              raise SystemExit('certified universe changed unexpectedly')
+          print('PUBLIC_DELTA_OK')
+          PY
+      - name: Focused and Fast damage regressions
+        run: |
+          python -m unittest -q fast_engine.tests.test_damage_patternless_encounter_events
+          python -m unittest discover -s fast_engine/tests -p 'test_damage*.py'
