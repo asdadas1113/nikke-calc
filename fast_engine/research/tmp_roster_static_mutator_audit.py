@@ -107,7 +107,6 @@ for label, cfg in snapshot.SQUADS.items():
 print('\nSTATIC_REMOVER_COUNT', len(rows))
 print('STATIC_REMOVER_NAMES', Counter((r[3].name, r[3].parameters.get('target_effect')) for r in rows))
 
-# Detailed public traces for the Anis : Star anchor.
 anis_rows = [r for r in rows if r[3].name == '스타 폴 4' or r[3].parameters.get('target_effect') == '나만의 별']
 for label, members, compiled, remover, providers, blockers in anis_rows:
     print('\n=== ANIS_STAR_PUBLIC_TRACE ===')
@@ -118,13 +117,9 @@ for label, members, compiled, remover, providers, blockers in anis_rows:
         seed=42,
         verbose=True,
     )
-    print('buff_events', [
-        (float(e.t), e.kind, e.owner, e.target, e.name, e.stat, e.value)
-        for e in result.log.buff_events if e.name in {'나만의 별', '모두의 별'}
-    ])
+    print('buff_events', [repr(e) for e in result.log.buff_events if e.name in {'나만의 별', '모두의 별'}])
     print('burst_log', [(float(e.t), e.event) for e in result.log.burst_log])
 
-# Controlled opposite-roster trace: replace one non-Anis member with a known B1 ally.
 if anis_rows:
     base_members = list(anis_rows[0][1])
     anis_idx = base_members.index('아니스 : 스타')
@@ -148,8 +143,5 @@ if anis_rows:
             seed=42,
             verbose=True,
         )
-        print('buff_events', [
-            (float(e.t), e.kind, e.owner, e.target, e.name, e.stat, e.value)
-            for e in result.log.buff_events if e.name in {'나만의 별', '모두의 별'}
-        ])
+        print('buff_events', [repr(e) for e in result.log.buff_events if e.name in {'나만의 별', '모두의 별'}])
         print('burst_log', [(float(e.t), e.event) for e in result.log.burst_log])
