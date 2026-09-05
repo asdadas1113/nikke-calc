@@ -3,36 +3,19 @@ on:
   push:
     branches: [fast-engine-phase2-20260901]
     paths:
-      - 'fast_engine/research/tmp_patch_maid_mast_stack.py'
-      - 'fast_engine/research/tmp_fix_maid_mast_stack_patch.py'
+      - 'fast_engine/research/tmp_maid_mast_promotion.py'
       - '.github/workflows/tmp-maid-mast-multistack-audit.yml'
-permissions:
-  contents: write
 jobs:
-  patch:
+  promotion:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: fast-engine-phase2-20260901
-          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Apply narrow stack patch
-        run: |
-          PYTHONPATH=. python fast_engine/research/tmp_patch_maid_mast_stack.py
-          PYTHONPATH=. python fast_engine/research/tmp_fix_maid_mast_stack_patch.py
-      - name: Focused regressions
-        run: |
-          PYTHONPATH=. python -m unittest fast_engine.tests.test_damage_maid_mast_stack_mutation
-          PYTHONPATH=. python -m unittest fast_engine.tests.test_damage_false_supported_guards
-          PYTHONPATH=. python -m unittest fast_engine.tests.test_dispatch_burst_runtime
-      - name: Commit semantic patch
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add fast_engine/engine/effects.py fast_engine/engine/dispatcher.py fast_engine/engine/score.py fast_engine/tests/test_damage_maid_mast_stack_mutation.py
-          git diff --cached --check
-          git commit -m 'Fast: own generic harmful stack decrement'
-          git push origin HEAD:fast-engine-phase2-20260901
+      - name: Audit public frontier
+        run: PYTHONPATH=. python fast_engine/research/tmp_maid_mast_promotion.py
+      - name: Complete Fast discovery
+        run: PYTHONPATH=. python -m unittest discover -s fast_engine/tests -p 'test_*.py'
