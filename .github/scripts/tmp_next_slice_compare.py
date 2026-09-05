@@ -33,26 +33,27 @@ def effect_dump(compiled, effect):
         "duration": effect.duration,
         "duration_bullets": getattr(effect, "duration_bullets", None),
         "max_stack": effect.max_stack,
-        "max_trigger": effect.max_trigger,
-        "tick_interval": effect.tick_interval,
+        "max_trigger": getattr(effect, "max_trigger", None),
+        "tick_interval": getattr(effect, "tick_interval", None),
         "target_mode": enum_value(target.mode),
         "target_runtime": target.runtime_supported,
         "target_raw": getattr(effect, "target", None),
         "triggers": [
             {
-                "mode": enum_value(rule.mode),
-                "event": rule.event_key,
-                "threshold": rule.threshold,
-                "modulo": rule.modulo,
+                "mode": enum_value(getattr(rule, "mode", None)),
+                "event": getattr(rule, "event_key", None),
+                "threshold": getattr(rule, "threshold", None),
+                "modulo": getattr(rule, "modulo", None),
                 "reducible": getattr(rule, "reducible", None),
+                "params": getattr(rule, "params", None),
             }
             for rule in effect.triggers
         ],
         "conditions": [
             {
-                "mode": enum_value(rule.mode),
-                "key": rule.key,
-                "value": rule.value,
+                "mode": enum_value(getattr(rule, "mode", None)),
+                "key": getattr(rule, "key", None),
+                "value": getattr(rule, "value", None),
             }
             for rule in effect.condition_rules
         ],
@@ -76,7 +77,6 @@ def print_team(name: str):
     for effect in compiled.effects:
         if effect.name in names:
             print("TARGET_EFFECT", effect_dump(compiled, effect))
-            # Probe useful score helpers without assuming their existence.
             for helper_name in (
                 "_direct_damage_buff_score_supported",
                 "_is_dynamic_charge_score_supported",
@@ -111,13 +111,13 @@ def source_snippets():
             if not hits:
                 continue
             for i in hits:
-                lo = max(0, i - 5)
-                hi = min(len(text), i + 9)
+                lo = max(0, i - 6)
+                hi = min(len(text), i + 12)
                 print(f"--- {path}:{i+1}")
                 for j in range(lo, hi):
                     print(f"{j+1:5d}: {text[j]}")
                 shown += 1
-                if shown >= 28:
+                if shown >= 36:
                     return
 
 
