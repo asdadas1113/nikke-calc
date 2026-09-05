@@ -1,0 +1,208 @@
+name: tmp-reference-stack-restore-v4
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+    paths:
+      - .github/workflows/tmp-reference-stack-restore-v4.yml
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Apply finite reference-stack candidate
+        run: |
+          cat > fast_engine/engine/reference_stack.py <<'PY'
+          from __future__ import annotations
+
+          def finite_reference_stack_capture_shape(effect) -> bool:
+              ref = effect.parameters.get("scaling_ref")
+              duration = effect.duration
+              max_stack = effect.max_stack if effect.max_stack is not None else 1.0
+              return (
+                  effect.effect_type == "buff"
+                  and effect.parameters.get("scaling") == "stack_count"
+                  and isinstance(ref, str) and bool(ref)
+                  and set(effect.parameters) == {"scaling", "scaling_ref"}
+                  and duration is not None and float(duration) > 0.0
+                  and float(max_stack) == 1.0
+                  and effect.max_trigger is None and effect.tick_interval is None
+              )
+          PY
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          source = Path('.github/workflows/tmp-reference-stack-probe.yml').read_text(encoding='utf-8')
+          marker = "          python - <<'PY'\n"
+          start = source.find(marker) + len(marker)
+          stop = source.find("\n          PY", start)
+          if start < len(marker) or stop < 0:
+              raise SystemExit('candidate patch block missing')
+          patch = textwrap.dedent(source[start:stop])
+          old = "old = '''            self._index_remove(effect, key)\\n            self.state.touch(token.target, StateDomain.EFFECT)\\n            return effect\\n'''"
+          new = "old = '''        self._index_remove(effect, key)\\n        self.state.touch(token.target, StateDomain.EFFECT)\\n        return effect\\n'''"
+          if old not in patch:
+              raise SystemExit('expiry old anchor missing')
+          patch = patch.replace(old, new, 1)
+          old = "new = '''            self._index_remove(effect, key)\\n            self.state.touch(token.target, StateDomain.EFFECT)\\n            if effect.name:\\n                self._touch_live_reference_consumers(active.source_actor, effect.name, now=event.time)\\n            return effect\\n'''"
+          new = "new = '''        self._index_remove(effect, key)\\n        self.state.touch(token.target, StateDomain.EFFECT)\\n        if effect.name:\\n            self._touch_live_reference_consumers(active.source_actor, effect.name, now=event.time)\\n        return effect\\n'''"
+          if old not in patch:
+              raise SystemExit('expiry new anchor missing')
+          patch = patch.replace(old, new, 1)
+          exec(compile(patch, '<reference-stack-candidate>', 'exec'), {})
+
+          test_marker = "          cat > fast_engine/tests/test_damage_reference_stack_capture.py <<'PY'\n"
+          start = source.find(test_marker) + len(test_marker)
+          stop = source.find("\n          PY", start)
+          if start < len(test_marker) or stop < 0:
+              raise SystemExit('reference-stack regression block missing')
+          body = textwrap.dedent(source[start:stop])
+          old = '''        self.assertNotIn(\n            "cadence:마스트 : 로망틱 메이드:파이레츠 스피릿 2:reload_speed_pct", blockers\n        )\n'''
+          new = '''        # Reference capture is owned, but this membership still has an\n        # independent all-allies reload-recipient cadence blocker.\n        self.assertIn(\n            "cadence:마스트 : 로망틱 메이드:파이레츠 스피릿 2:reload_speed_pct", blockers\n        )\n'''
+          if old not in body:
+              raise SystemExit('Maid cadence regression anchor missing')
+          body = body.replace(old, new, 1)
+          Path('fast_engine/tests/test_damage_reference_stack_capture.py').write_text(body, encoding='utf-8')
+          PY
+
+      - name: Restore downstream expectations proven by Moris trace
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          # Volume: Scarlet ammo refill remains the intended blocker; Maid's
+          # finite captured state/reload paths are now owned for this membership.
+          p = Path('fast_engine/tests/test_damage_charge_reload_cancel_control.py')
+          t = p.read_text(encoding='utf-8')
+          old = '''        self.assertIn(\n            'cadence:마스트 : 로망틱 메이드:파이레츠 스피릿 2:reload_speed_pct',\n            volume_blockers,\n        )\n        self.assertIn(\n            'skill_state_delivery:마스트 : 로망틱 메이드:파이레츠 스피릿:split_dmg_pct',\n            volume_blockers,\n        )\n'''
+          new = '''        self.assertNotIn(\n            'cadence:마스트 : 로망틱 메이드:파이레츠 스피릿 2:reload_speed_pct',\n            volume_blockers,\n        )\n        self.assertNotIn(\n            'skill_state_delivery:마스트 : 로망틱 메이드:파이레츠 스피릿:split_dmg_pct',\n            volume_blockers,\n        )\n'''
+          if t.count(old) != 1:
+              raise SystemExit('Volume stale reference assertions changed')
+          p.write_text(t.replace(old, new, 1), encoding='utf-8')
+
+          # Frontier cadence count falls by three reference-stack reload rows.
+          p = Path('fast_engine/tests/test_damage_full_charge_hit_charge_speed.py')
+          t = p.read_text(encoding='utf-8')
+          old = '        self.assertEqual(cadence, 62)\n'
+          new = '        self.assertEqual(cadence, 59)\n'
+          if t.count(old) != 1:
+              raise SystemExit('cadence-count stale assertion changed')
+          p.write_text(t.replace(old, new, 1), encoding='utf-8')
+
+          # Brady's split branch was deliberately closed only until Maid Mast's
+          # captured split_dmg_pct provider became owned.  Direct 40 s tracing
+          # now proves Fast and Moris activate it at the exact same five times.
+          p = Path('fast_engine/tests/test_damage_stat_applied_charge_speed.py')
+          t = p.read_text(encoding='utf-8')
+          old = '''        # The only public split provider is Maid Mast's reference-stack\n        # split_dmg_pct. Until Fast owns that captured scaling multiplier, the\n        # downstream stat_applied branch must also fail closed.\n        self.assertFalse(\n            TriggerDispatcher.stat_applied_dependency_score_safe(\n                squad, split, "event:stat_applied:split_dmg_pct"\n            )\n        )\n'''
+          new = '''        # Maid Mast's finite reference-stack split_dmg_pct provider is now\n        # owned, so this exact downstream stat_applied branch is reachable.\n        self.assertTrue(\n            TriggerDispatcher.stat_applied_dependency_score_safe(\n                squad, split, "event:stat_applied:split_dmg_pct"\n            )\n        )\n'''
+          if t.count(old) != 1:
+              raise SystemExit('Brady dependency stale assertion changed')
+          t = t.replace(old, new, 1)
+
+          old = '''        self.assertIn("cadence:브래디:머물고 싶은 맛:charge_speed_pct", blockers)\n        self.assertIn("cadence:브래디:나누고 싶은 맛:charge_speed_pct", blockers)\n'''
+          new = '''        self.assertIn("cadence:브래디:머물고 싶은 맛:charge_speed_pct", blockers)\n        self.assertNotIn("cadence:브래디:나누고 싶은 맛:charge_speed_pct", blockers)\n'''
+          if t.count(old) != 1:
+              raise SystemExit('Brady blocker stale assertions changed')
+          t = t.replace(old, new, 1)
+
+          old = '''        self.assertEqual(cadence, 62)\n        self.assertEqual(matches, set())\n'''
+          new = '''        self.assertEqual(cadence, 59)\n        self.assertEqual(\n            matches,\n            {("브래디", "나누고 싶은 맛", "event:stat_applied:split_dmg_pct")},\n        )\n'''
+          if t.count(old) != 1:
+              raise SystemExit('Brady frontier stale expectations changed')
+          t = t.replace(old, new, 1)
+
+          old = '''        self.assertFalse(fast_stay)\n        self.assertFalse(fast_split)\n        self.assertGreater(len(moris_split), 1)\n        self.assertIn(\n            "cadence:브래디:나누고 싶은 맛:charge_speed_pct",\n            static_score_blockers(squad),\n        )\n'''
+          new = '''        self.assertFalse(fast_stay)\n        self.assertEqual(fast_split, moris_split)\n        self.assertEqual(len(moris_split), 5)\n        blockers = static_score_blockers(squad)\n        self.assertNotIn(\n            "cadence:브래디:나누고 싶은 맛:charge_speed_pct", blockers\n        )\n        self.assertIn(\n            "cadence:브래디:머물고 싶은 맛:charge_speed_pct", blockers\n        )\n'''
+          if t.count(old) != 1:
+              raise SystemExit('Brady trace stale expectations changed')
+          t = t.replace(old, new, 1)
+          p.write_text(t, encoding='utf-8')
+          PY
+
+      - name: Focused reference-stack regressions
+        run: |
+          python -m unittest fast_engine.tests.test_damage_reference_stack_capture
+          python -m unittest fast_engine.tests.test_damage_stat_applied_charge_speed
+          python -m unittest fast_engine.tests.test_damage_charge_reload_cancel_control
+          python -m unittest fast_engine.tests.test_damage_full_charge_hit_charge_speed
+          python -m unittest fast_engine.tests.test_damage_false_supported_guards
+          python -m unittest fast_engine.tests.test_damage_real_squad_certification
+          python -m unittest fast_engine.tests.test_damage_moris_frame_timing
+
+      - name: Full Fast regression
+        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
+
+      - name: Verify restored public frontier
+        run: |
+          python - <<'PY'
+          from collections import Counter
+          from context import spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.research.public_ranking_probe import _source_corpus
+
+          unique = {}
+          for members, source in _source_corpus():
+              unique.setdefault(tuple(members), source)
+          families = Counter(); certified = []; matches = []
+          for members, source in unique.items():
+              compiled = compile_moris_squad(spec.build_squad(list(members)))
+              blockers = static_score_blockers(compiled)
+              if not blockers:
+                  certified.append(source)
+              for blocker in blockers:
+                  families[blocker.split(':', 1)[0]] += 1
+              for effect in compiled.effects:
+                  if not TriggerDispatcher._stat_applied_charge_speed_shape_supported(effect):
+                      continue
+                  key = effect.triggers[0].event_key or ''
+                  if TriggerDispatcher.stat_applied_dependency_score_safe(compiled, effect, key):
+                      matches.append((compiled.members[effect.actor].name, effect.name, key, source))
+
+          print('FRONTIER', len(unique), 'CERTIFIED', certified, 'FAMILIES', dict(families))
+          print('STAT_APPLIED_MATCHES', matches)
+          assert len(unique) == 23
+          assert set(certified) == {'컨트롤_미란다미하라', '레이드_레드후드퀀시'}, certified
+          assert families == Counter({
+              'normal_delivery': 49,
+              'normal_state': 34,
+              'skill_damage': 27,
+              'skill_state_delivery': 51,
+              'weapon_change': 12,
+              'cadence': 59,
+              'control': 4,
+              'periodic_grid': 1,
+          }), families
+          assert matches == [
+              ('브래디', '나누고 싶은 맛', 'event:stat_applied:split_dmg_pct', '레이드_앨리스브래디')
+          ], matches
+          PY
+
+      - name: Commit semantic restoration and remove temporary workflows
+        run: |
+          rm -f .github/workflows/tmp-reference-stack-probe.yml
+          rm -f .github/workflows/tmp-reference-stack-restore-v2.yml
+          rm -f .github/workflows/tmp-reference-stack-restore-v3.yml
+          rm -f .github/workflows/tmp-reference-stack-dependency-probe.yml
+          rm -f .github/workflows/tmp-reference-stack-restore-v4.yml
+          git diff --check
+          git config user.name "asdadas1113"
+          git config user.email "crony06@gmail.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Fast: own finite reference-stack capture"
+          git push origin HEAD:fast-engine-phase2-20260901
