@@ -24,7 +24,7 @@ jobs:
           python-version: '3.13'
       - name: Verify parent checkpoint
         run: |
-          test "$(git rev-parse HEAD^)" = "25ccc1e66fc87f36db015502e2518f3fb80faa96"
+          test "$(git diff --name-only 25ccc1e66fc87f36db015502e2518f3fb80faa96..HEAD)" = ".github/workflows/tmp-promote-charge-reload-cancel.yml"
       - name: Apply narrow production slice
         run: |
           python - <<'PY'
@@ -141,7 +141,7 @@ jobs:
                   runtime = BurstRuntime(
                       compiled,
                       BurstPolicy(duration=8.0, first_burst_time=30.0),
-                      EnemyStaticProfile(defense=0.0, duration=8.0),
+                      EnemyStaticProfile(defense=0.0, core_px=0.0, duration=8.0),
                   )
                   runtime.weapons.actors = tuple(sorted(set(runtime.weapons.actors) | {actor}))
                   runtime.start(duration=8.0)
