@@ -21,97 +21,98 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Classify current frontier blocker shapes
+      - name: Patch candidate in checkout only
         run: |
           python - <<'PY'
-          from collections import Counter
           from pathlib import Path
-          from context import snapshot, spec
-          from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.score import static_score_blockers
-
-          rows = []
-          seen = set()
-          for source_name, case in snapshot.SQUADS.items():
-              if str(source_name).startswith('지그_'):
-                  continue
-              members = tuple(str(x) for x in case['members'])
-              if len(members) != 5 or any(x.startswith('test_') for x in members):
-                  continue
-              if members in seen:
-                  continue
-              seen.add(members)
-              compiled = compile_moris_squad(spec.build_squad(list(members)))
-              blockers = tuple(static_score_blockers(compiled))
-              rows.append((str(source_name), members, compiled, blockers))
-
-          out = []
-          emit = out.append
-          emit(f'UNIQUE_COUNT {len(rows)}')
-          emit(f'CERTIFIED_COUNT {sum(1 for _,_,_,b in rows if not b)}')
-          fam = Counter(b.split(':', 1)[0] for *_, blockers in rows for b in blockers)
-          emit('FAMILIES ' + repr(sorted(fam.items(), key=lambda x: (-x[1], x[0]))))
-          emit('BLOCKED_EFFECTS')
-
-          families = {'normal_delivery','skill_state_delivery','skill_damage','normal_state','cadence','periodic_grid','weapon_change'}
-          seen_shapes = set()
-          for source_name, members, compiled, blockers in rows:
-              for blocker in blockers:
-                  family = blocker.split(':', 1)[0]
-                  if family == 'control':
-                      actor_name = blocker.split(':',1)[1]
-                      for idx, member in enumerate(compiled.members):
-                          if str(getattr(member,'name','')) == actor_name:
-                              shape = ('CONTROL', actor_name, repr(member.weapon.get('control')), str(member.weapon.get('fire_mode')), str(member.weapon.get('weapon_type') or member.weapon_type))
-                              if shape not in seen_shapes:
-                                  seen_shapes.add(shape)
-                                  emit('\t'.join(shape))
-                      continue
-                  if family not in families:
-                      continue
-                  for effect in compiled.effects:
-                      actor = compiled.members[effect.actor]
-                      actor_name = str(getattr(actor, 'name', effect.actor))
-                      stat = str(effect.stat or '')
-                      name = str(effect.name or '')
-                      labels = {
-                          f'{actor_name}:{name}:{stat}',
-                          f'{actor_name}:{name}',
-                      }
-                      suffix = blocker.split(':',1)[1] if ':' in blocker else blocker
-                      if suffix not in labels:
-                          continue
-                      triggers = tuple((
-                          getattr(getattr(r,'mode',None),'value',str(getattr(r,'mode',None))),
-                          getattr(r,'event_key',None),
-                          getattr(r,'threshold',None),
-                          getattr(r,'modulo',None),
-                          getattr(r,'trigger_count_reducible',None),
-                      ) for r in effect.triggers)
-                      conditions = tuple((
-                          getattr(getattr(r,'mode',None),'value',str(getattr(r,'mode',None))),
-                          getattr(r,'key',None),
-                          getattr(r,'value',None),
-                      ) for r in effect.condition_rules)
-                      target = getattr(effect,'target_spec',None)
-                      shape = (
-                          family, actor_name, name, stat,
-                          str(effect.effect_type),
-                          str(getattr(getattr(target,'mode',None),'value',getattr(target,'mode',None))),
-                          repr(effect.value), repr(effect.duration), repr(effect.max_stack),
-                          repr(triggers), repr(conditions), repr(effect.parameters),
-                      )
-                      if shape not in seen_shapes:
-                          seen_shapes.add(shape)
-                          emit('\t'.join(shape))
-
-          Path('frontier-shapes.txt').write_text('\n'.join(out)+'\n', encoding='utf-8')
-          print('\n'.join(out))
+          p = Path('fast_engine/engine/damage_policy.py')
+          text = p.read_text(encoding='utf-8')
+          needle = '    "event:ally_burst_cast",\n})\n\n\ndef _target_supported'
+          replacement = '    "event:ally_burst_cast",\n    "full_charge_hit",\n})\n\n\ndef _target_supported'
+          if needle not in text:
+              raise SystemExit('candidate insertion point not found')
+          p.write_text(text.replace(needle, replacement, 1), encoding='utf-8')
           PY
+      - name: Probe real D next-bullet lifetime parity
+        run: |
+          python - <<'PY' | tee full-charge-lifetime-probe.txt
+          from unittest.mock import patch
+          from calculator.timeline import simulate
+          from context import snapshot, spec
+          from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.burst_runtime import BurstRuntime
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_supported
+          from fast_engine.engine.effects import ActiveEffectStore
+          from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
+
+          entry = next(v for k, v in snapshot.SQUADS.items() if not k.startswith('지그_') and 'D : 킬러 와이프' in v['members'])
+          moris_squad = spec.build_squad(list(entry['members']))
+          compiled = compile_moris_squad(moris_squad)
+          actor = next(i for i,m in enumerate(compiled.members) if m.name == 'D : 킬러 와이프')
+          effect = next(e for e in compiled.members[actor].effects if e.name == '캄 스나이핑')
+          print('TEAM', tuple(entry['members']))
+          print('ACTOR', actor, compiled.members[actor].weapon)
+          print('EFFECT', effect.effect_type, effect.stat, effect.parameters, [(r.mode.value,r.event_key,r.threshold,r.trigger_count_reducible) for r in effect.triggers])
+          print('RUNTIME_SUPPORTED', is_direct_damage_buff_runtime_supported(effect))
+          before = [b for b in static_score_blockers(compiled) if 'D : 킬러 와이프:캄 스나이핑' in b]
+          print('D_BLOCKERS_AFTER_PATCH', before)
+
+          duration = 12.0
+          policy = compile_burst_policy(moris_squad, compiled, {'duration': duration, 'rng_mode':'expected'})
+          activations=[]
+          removals=[]
+          original_activate = ActiveEffectStore.activate_group
+          original_consume = ActiveEffectStore.consume_dynamic_bullet
+
+          def traced_activate(store, candidate, targets, now, scheduler):
+              result = original_activate(store, candidate, targets, now, scheduler)
+              if candidate.effect_id == effect.effect_id and result:
+                  activations.append(float(now))
+              return result
+
+          def traced_consume(store, owner, now, count=1):
+              removed = original_consume(store, owner, now=now, count=count)
+              if effect.effect_id in removed:
+                  removals.append(float(now))
+              return removed
+
+          runtime = BurstRuntime(compiled, policy)
+          observer = StaticNormalAttackObserver(runtime, duration=duration)
+          print('DYNAMIC_CHARGE_ACTORS', observer.dynamic_charge_actors)
+          with patch.object(ActiveEffectStore,'activate_group',new=traced_activate), patch.object(ActiveEffectStore,'consume_dynamic_bullet',new=traced_consume):
+              runtime.run(duration=duration, score_observer=observer)
+          print('FAST_ACTIVATE', activations)
+          print('FAST_REMOVE', removals)
+
+          moris = simulate(moris_squad, config={'duration':duration,'rng_mode':'expected'}, verbose=True)
+          ma = [float(row.t) for row in moris.log.buff_events if row.name == '캄 스나이핑' and row.kind == 'activate']
+          mr = [float(row.t) for row in moris.log.buff_events if row.name == '캄 스나이핑' and row.kind in {'remove','expire','deactivate'}]
+          print('MORIS_ACTIVATE', ma)
+          print('MORIS_REMOVE', mr)
+          if len(activations) != len(ma):
+              raise SystemExit(f'activation count mismatch {len(activations)} != {len(ma)}')
+          for a,b in zip(activations,ma):
+              if abs(a-b) > 1e-9:
+                  raise SystemExit(f'activation mismatch {a} != {b}')
+          if not removals:
+              raise SystemExit('Fast candidate never consumed one-bullet lifetime')
+          if any(r <= a + 1e-9 for a,r in zip(activations,removals)):
+              raise SystemExit('candidate consumed on triggering shot instead of a later shot')
+          if before:
+              raise SystemExit('candidate blocker remained after narrow policy patch')
+          print('PROBE_OK')
+          PY
+      - name: Focused regressions
+        run: |
+          python -m pytest -q \
+            fast_engine/tests/test_damage_helm_bullet_lifetime.py \
+            fast_engine/tests/test_damage_full_charge_hit_charge_speed.py \
+            fast_engine/tests/test_dynamic_weapon_signals.py \
+            fast_engine/tests/test_damage_policy.py
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: frontier-shapes
-          path: frontier-shapes.txt
+          name: full-charge-lifetime-probe
+          path: full-charge-lifetime-probe.txt
           retention-days: 1
-      - name: Confirm diagnostic only
-        run: git diff --exit-code
