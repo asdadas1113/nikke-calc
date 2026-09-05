@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import asdict, is_dataclass
-
 from calculator.timeline import simulate
 from context import snapshot, spec
 from fast_engine.engine.compiler import compile_moris_squad
@@ -22,7 +20,7 @@ def show_effect(e):
         'max_stack': e.max_stack,
         'max_trigger': e.max_trigger,
         'tick_interval': e.tick_interval,
-        'trigger': repr(e.trigger),
+        'triggers': repr(getattr(e, 'triggers', None)),
         'raw_trigger': getattr(e, 'raw_trigger', None),
         'target': repr(e.target),
         'target_spec': repr(getattr(e, 'target_spec', None)),
@@ -68,7 +66,6 @@ for label, members in source:
     for e in result.log.burst_log:
         print(vars(e) if hasattr(e, '__dict__') else e)
 
-# Controls: keep Maid Mast and swap likely B1/B2/B3 peers to see whether condition is roster- or runtime-driven.
 controls = [
     ['아니스 : 스타', '앵커 : 이노센트 메이드', TARGET, '앨리스', '브래디'],
     ['리틀 머메이드', '앵커 : 이노센트 메이드', TARGET, '앨리스', '브래디'],
