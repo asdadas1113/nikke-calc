@@ -35,7 +35,7 @@ jobs:
           PY
       - name: Probe real D next-bullet lifetime parity
         run: |
-          python - <<'PY' | tee full-charge-lifetime-probe.txt
+          python - <<'PY' > full-charge-lifetime-probe.txt
           from unittest.mock import patch
           from calculator.timeline import simulate
           from context import snapshot, spec
@@ -44,7 +44,7 @@ jobs:
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_supported
           from fast_engine.engine.effects import ActiveEffectStore
-          from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
+          from fast_engine.engine.score import static_score_blockers
 
           entry = next(v for k, v in snapshot.SQUADS.items() if not k.startswith('지그_') and 'D : 킬러 와이프' in v['members'])
           moris_squad = spec.build_squad(list(entry['members']))
@@ -55,13 +55,16 @@ jobs:
           print('ACTOR', actor, compiled.members[actor].weapon)
           print('EFFECT', effect.effect_type, effect.stat, effect.parameters, [(r.mode.value,r.event_key,r.threshold,r.trigger_count_reducible) for r in effect.triggers])
           print('RUNTIME_SUPPORTED', is_direct_damage_buff_runtime_supported(effect))
-          before = [b for b in static_score_blockers(compiled) if 'D : 킬러 와이프:캄 스나이핑' in b]
-          print('D_BLOCKERS_AFTER_PATCH', before)
+          remaining = [b for b in static_score_blockers(compiled) if 'D : 킬러 와이프:캄 스나이핑' in b]
+          print('D_BLOCKERS_AFTER_PATCH', remaining)
+          if remaining:
+              raise SystemExit('candidate blocker remained after narrow policy patch')
 
           duration = 12.0
           policy = compile_burst_policy(moris_squad, compiled, {'duration': duration, 'rng_mode':'expected'})
           activations=[]
           removals=[]
+          shots=[]
           original_activate = ActiveEffectStore.activate_group
           original_consume = ActiveEffectStore.consume_dynamic_bullet
 
@@ -78,38 +81,39 @@ jobs:
               return removed
 
           runtime = BurstRuntime(compiled, policy)
-          observer = StaticNormalAttackObserver(runtime, duration=duration)
-          print('DYNAMIC_CHARGE_ACTORS', observer.dynamic_charge_actors)
+          runtime.weapons.attach_score_shot_sink((actor,), lambda a,t: shots.append(float(t)) if a == actor else None)
           with patch.object(ActiveEffectStore,'activate_group',new=traced_activate), patch.object(ActiveEffectStore,'consume_dynamic_bullet',new=traced_consume):
-              runtime.run(duration=duration, score_observer=observer)
+              runtime.run(duration=duration)
+          print('FAST_SHOTS', shots)
           print('FAST_ACTIVATE', activations)
           print('FAST_REMOVE', removals)
 
           moris = simulate(moris_squad, config={'duration':duration,'rng_mode':'expected'}, verbose=True)
           ma = [float(row.t) for row in moris.log.buff_events if row.name == '캄 스나이핑' and row.kind == 'activate']
-          mr = [float(row.t) for row in moris.log.buff_events if row.name == '캄 스나이핑' and row.kind in {'remove','expire','deactivate'}]
           print('MORIS_ACTIVATE', ma)
-          print('MORIS_REMOVE', mr)
           if len(activations) != len(ma):
               raise SystemExit(f'activation count mismatch {len(activations)} != {len(ma)}')
           for a,b in zip(activations,ma):
               if abs(a-b) > 1e-9:
                   raise SystemExit(f'activation mismatch {a} != {b}')
-          if not removals:
-              raise SystemExit('Fast candidate never consumed one-bullet lifetime')
-          if any(r <= a + 1e-9 for a,r in zip(activations,removals)):
-              raise SystemExit('candidate consumed on triggering shot instead of a later shot')
-          if before:
-              raise SystemExit('candidate blocker remained after narrow policy patch')
+          if len(removals) < len(activations) - 1:
+              raise SystemExit(f'too few Fast removals: {removals}')
+          for a,r in zip(activations,removals):
+              later = next((shot for shot in shots if shot > a + 1e-9), None)
+              if later is None:
+                  break
+              if abs(r-later) > 1e-9:
+                  raise SystemExit(f'lifetime removed at {r}, expected next shot {later} after activation {a}')
           print('PROBE_OK')
           PY
+          cat full-charge-lifetime-probe.txt
       - name: Focused regressions
         run: |
-          python -m pytest -q \
-            fast_engine/tests/test_damage_helm_bullet_lifetime.py \
-            fast_engine/tests/test_damage_full_charge_hit_charge_speed.py \
-            fast_engine/tests/test_dynamic_weapon_signals.py \
-            fast_engine/tests/test_damage_policy.py
+          python -m unittest -q \
+            fast_engine.tests.test_damage_helm_bullet_lifetime \
+            fast_engine.tests.test_damage_full_charge_hit_charge_speed \
+            fast_engine.tests.test_dynamic_weapon_signals \
+            fast_engine.tests.test_damage_policy
       - uses: actions/upload-artifact@v4
         if: always()
         with:
