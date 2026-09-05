@@ -664,6 +664,7 @@ def _is_score_safe_fixed_periodic(effect) -> bool:
     if (
         TriggerDispatcher._periodic_permanent_self_direct_stack_shape_supported(effect)
         or TriggerDispatcher._periodic_finite_self_crit_shape_supported(effect)
+        or TriggerDispatcher._periodic_finite_enemy_received_damage_shape_supported(effect)
     ):
         return True
     return (

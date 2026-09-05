@@ -46,8 +46,12 @@ class PeriodicFiniteSelfCritTests(unittest.TestCase):
             'normal_delivery:스노우 화이트:세븐스 드워프 : I 2:pierce_enabled',
             blockers,
         )
-        self.assertIn(
+        self.assertNotIn(
             'normal_delivery:헬름 : 아쿠아마린:이지스 캐논 견제 사격 2:received_dmg_pct',
+            blockers,
+        )
+        self.assertIn(
+            'periodic_grid:에이다:섬광 수류탄 투척 발동 시간 조건:effect_interval',
             blockers,
         )
 
@@ -96,20 +100,20 @@ class PeriodicFiniteSelfCritTests(unittest.TestCase):
 
     def test_other_periodic_shapes_remain_fail_closed(self):
         _moris, compiled, _effect = self._compiled()
-        helm = next(
+        ada = next(
             i for i, m in enumerate(compiled.members)
-            if m.name == '헬름 : 아쿠아마린'
+            if m.name == '에이다'
         )
-        enemy_stack = next(
-            e for e in compiled.members[helm].effects
-            if e.name == '이지스 캐논 견제 사격 2'
+        grid_mutator = next(
+            e for e in compiled.members[ada].effects
+            if e.name == '섬광 수류탄 투척 발동 시간 조건'
         )
         self.assertFalse(
             TriggerDispatcher._periodic_finite_self_crit_shape_supported(
-                enemy_stack
+                grid_mutator
             )
         )
-        self.assertFalse(TriggerDispatcher.is_executable_effect(enemy_stack))
+        self.assertFalse(TriggerDispatcher.is_executable_effect(grid_mutator))
 
 
 if __name__ == '__main__':

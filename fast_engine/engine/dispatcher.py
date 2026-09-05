@@ -332,6 +332,45 @@ class TriggerDispatcher:
         )
 
     @staticmethod
+    def _periodic_finite_enemy_received_damage_shape_supported(
+        effect: "CompiledEffect",
+    ) -> bool:
+        """Certify a fixed-grid finite enemy received-damage stack."""
+        return (
+            effect.capability.disposition is CapabilityDisposition.PLANNED
+            and set(effect.capability.blockers) == {
+                "category:hit_formula",
+                "stat:received_dmg_pct",
+                "timing:periodic",
+                "condition:enemy",
+                "target:enemy_singleton",
+            }
+            and effect.effect_type == "buff"
+            and effect.polarity == "harmful"
+            and bool(effect.name)
+            and (effect.stat or "") == "received_dmg_pct"
+            and effect.target_spec.mode is TargetMode.ENEMY
+            and effect.target_spec.runtime_supported
+            and effect.value is not None
+            and float(effect.value) >= 0.0
+            and effect.duration is not None
+            and float(effect.duration) > 0.0
+            and effect.max_stack is not None
+            and float(effect.max_stack) >= 1.0
+            and float(effect.max_stack).is_integer()
+            and effect.max_trigger is None
+            and effect.tick_interval is None
+            and not effect.parameters
+            and len(effect.condition_rules) == 1
+            and effect.condition_rules[0].mode is ConditionMode.TARGET_CODE
+            and bool(effect.condition_rules[0].key)
+            and len(effect.triggers) == 1
+            and effect.triggers[0].mode is TriggerMode.PERIODIC
+            and effect.triggers[0].interval is not None
+            and float(effect.triggers[0].interval) > 0.0
+        )
+
+    @staticmethod
     def _periodic_timing_is_only_blocker(effect: "CompiledEffect") -> bool:
         blockers = effect.capability.blockers
         return (
@@ -1078,6 +1117,7 @@ class TriggerDispatcher:
         if (
             TriggerDispatcher._periodic_permanent_self_direct_stack_shape_supported(effect)
             or TriggerDispatcher._periodic_finite_self_crit_shape_supported(effect)
+            or TriggerDispatcher._periodic_finite_enemy_received_damage_shape_supported(effect)
             or TriggerDispatcher._self_stack_reach_marker_shape_supported(effect)
             or TriggerDispatcher._timed_self_named_state_marker_shape_supported(effect)
             or TriggerDispatcher._named_event_control_shape_supported(effect)
