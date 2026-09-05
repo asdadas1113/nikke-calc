@@ -31,6 +31,32 @@ class PatternlessEncounterEventScoreTests(TestCase):
         self.assertTrue(TriggerDispatcher.is_executable_effect(effect))
         self.assertTrue(any(rule.event_key == "event:part_destroy" for rule in effect.triggers))
 
+    def test_squad_part_hit_is_unreachable_but_body_hit_stays_fail_closed(self):
+        compiled = _compile_case("레이드_미하라에이다")
+        blockers = static_score_blockers(compiled)
+        self.assertNotIn(
+            "normal_delivery:D : 킬러 와이프:타겟 섬멸 코어:core_dmg_pct",
+            blockers,
+        )
+        self.assertNotIn(
+            "skill_state_delivery:D : 킬러 와이프:타겟 섬멸 코어:core_dmg_pct",
+            blockers,
+        )
+        self.assertIn(
+            "normal_delivery:D : 킬러 와이프:타겟 섬멸 ATK:atk_caster_based_pct",
+            blockers,
+        )
+        self.assertIn(
+            "skill_state_delivery:D : 킬러 와이프:타겟 섬멸 ATK:atk_caster_based_pct",
+            blockers,
+        )
+
+        part = next(effect for effect in compiled.effects if effect.name == "타겟 섬멸 코어")
+        body = next(effect for effect in compiled.effects if effect.name == "타겟 섬멸 ATK")
+        self.assertFalse(TriggerDispatcher.is_executable_effect(part))
+        self.assertTrue(any(rule.event_key == "squad_part_hit" for rule in part.triggers))
+        self.assertTrue(any(rule.event_key == "squad_body_hit" for rule in body.triggers))
+
     def test_other_named_events_remain_fail_closed(self):
         compiled = _compile_case("스쿼드1")
         blockers = static_score_blockers(compiled)

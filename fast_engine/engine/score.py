@@ -101,6 +101,7 @@ _PATTERNLESS_UNREACHABLE_EVENT_KEYS = frozenset({
     "received_hit",
     "enemy_death",
     "event:part_destroy",
+    "squad_part_hit",
 })
 
 
