@@ -156,3 +156,7 @@ coverage blocker를 단순 제거하는 단계로 바로 복귀하지 않는다.
 - `.github/workflows`: `ci.yml`, `pages.yml`만 유지
 
 다음 재개점은 **sparse same-timestamp actor transaction semantics 설계/검증**이다.
+
+## 8. 최종 canonical gate
+
+이 체크포인트를 포함하는 최신 clean HEAD에서 canonical `ci.yml`을 push-trigger로 재실행해 최종 gate를 확인한다.
