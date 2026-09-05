@@ -19,4 +19,4 @@ jobs:
         with:
           python-version: '3.13'
       - name: Audit roster-static producer/remover pairs
-        run: python fast_engine/research/tmp_roster_static_mutator_audit.py
+        run: PYTHONPATH=. python fast_engine/research/tmp_roster_static_mutator_audit.py
