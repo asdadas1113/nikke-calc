@@ -1,0 +1,31 @@
+name: tmp-run-false-supported-safety-recorder
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+    paths:
+      - .github/workflows/tmp-run-false-supported-safety-recorder.yml
+
+permissions:
+  contents: write
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python .tmp_record_false_supported_safety_checkpoint.py
+      - run: |
+          git diff --check
+          git config user.name "asdadas1113"
+          git config user.email "crony06@gmail.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "docs: record false-supported safety repair checkpoint"
+          git push origin HEAD:fast-engine-phase2-20260901
