@@ -1,0 +1,55 @@
+name: tmp-full-burst-passive-probe
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+    paths: ['.github/workflows/tmp-full-burst-passive-probe.yml']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Probe public full-burst permanent condition surfaces
+        run: |
+          python - <<'PY'
+          from collections import defaultdict
+          from context import spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.research.public_ranking_probe import _source_corpus
+          from fast_engine.engine.conditions import ConditionMode
+
+          unique = {}
+          for members, source in _source_corpus():
+              unique.setdefault(tuple(members), source)
+
+          modes = {ConditionMode.DURING_FULL_BURST, ConditionMode.NOT_DURING_FULL_BURST}
+          rows = []
+          for members, source in unique.items():
+              squad = compile_moris_squad(spec.build_squad(list(members)))
+              blockers = static_score_blockers(squad)
+              for e in squad.effects:
+                  if e.effect_type != 'buff' or e.duration not in (None, -1, -1.0):
+                      continue
+                  if not any(r.mode in modes for r in e.condition_rules):
+                      continue
+                  actor = squad.members[e.actor].name
+                  rows.append((
+                      source, actor, e.name, e.stat, e.value, e.max_stack,
+                      e.target_spec.raw, e.polarity,
+                      tuple(r.raw for r in e.condition_rules),
+                      tuple((r.mode.value, r.event_key, r.threshold, r.interval) for r in e.triggers),
+                      e.capability.disposition.value,
+                      tuple(e.capability.blockers),
+                      TriggerDispatcher.is_executable_effect(e),
+                      tuple(b for b in blockers if f':{actor}:{e.name}:' in b),
+                  ))
+          print('CANDIDATE_COUNT', len(rows))
+          for row in rows:
+              print('CANDIDATE', repr(row))
+          PY
