@@ -4,6 +4,7 @@ on:
     branches: [fast-engine-phase2-20260901]
     paths:
       - 'fast_engine/research/tmp_maid_mast_multistack_audit.py'
+      - 'fast_engine/research/tmp_maid_mast_b1_trace.py'
       - '.github/workflows/tmp-maid-mast-multistack-audit.yml'
 jobs:
   audit:
@@ -15,5 +16,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Audit Maid Mast
-        run: PYTHONPATH=. python fast_engine/research/tmp_maid_mast_multistack_audit.py
+      - name: Trace Maid Mast B1 edges
+        run: PYTHONPATH=. python fast_engine/research/tmp_maid_mast_b1_trace.py
