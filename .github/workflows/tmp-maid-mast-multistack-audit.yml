@@ -4,7 +4,7 @@ on:
     branches: [fast-engine-phase2-20260901]
     paths:
       - 'fast_engine/research/tmp_patch_maid_mast_stack.py'
-      - 'fast_engine/research/tmp_debug_maid_mast_unreachable.py'
+      - 'fast_engine/research/tmp_fix_maid_mast_stack_patch.py'
       - '.github/workflows/tmp-maid-mast-multistack-audit.yml'
 permissions:
   contents: write
@@ -20,9 +20,9 @@ jobs:
         with:
           python-version: '3.13'
       - name: Apply narrow stack patch
-        run: PYTHONPATH=. python fast_engine/research/tmp_patch_maid_mast_stack.py
-      - name: Debug unreachable proof
-        run: PYTHONPATH=. python fast_engine/research/tmp_debug_maid_mast_unreachable.py
+        run: |
+          PYTHONPATH=. python fast_engine/research/tmp_patch_maid_mast_stack.py
+          PYTHONPATH=. python fast_engine/research/tmp_fix_maid_mast_stack_patch.py
       - name: Focused regressions
         run: |
           PYTHONPATH=. python -m unittest fast_engine.tests.test_damage_maid_mast_stack_mutation
