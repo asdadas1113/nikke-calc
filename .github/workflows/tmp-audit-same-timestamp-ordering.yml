@@ -1,0 +1,92 @@
+name: tmp-audit-same-timestamp-ordering
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+    paths:
+      - .github/workflows/tmp-audit-same-timestamp-ordering.yml
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Inspect certified team shot-trigger chronology surfaces
+        run: |
+          python - <<'PY'
+          from collections import defaultdict
+          from context import snapshot, spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_supported
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.engine.shot_blocks import compile_static_shot_blocks
+          from fast_engine.engine.target_scope import possible_ally_targets
+          from fast_engine.engine.weapon import is_supported_charge_hold_control
+
+          members = tuple(snapshot.SQUADS['레이드_레드후드퀀시']['members'])
+          squad = compile_moris_squad(spec.build_squad(list(members)))
+          print('MEMBERS', members)
+          print('BLOCKERS', static_score_blockers(squad))
+          print('WEAPONS')
+          for i,m in enumerate(squad.members):
+              print(i,m.name,m.weapon.get('fire_mode'),m.weapon.get('control'), 'hold', is_supported_charge_hold_control(m))
+
+          rows = compile_static_shot_blocks(squad, duration=5.0)
+          for i,blocks in enumerate(rows):
+              print('SHOTBLOCKS',i,squad.members[i].name,blocks[:12])
+
+          print('EXECUTABLE SCORE BUFF TRIGGERS')
+          for e in squad.effects:
+              if e.effect_type != 'buff':
+                  continue
+              if not TriggerDispatcher.is_executable_effect(e):
+                  continue
+              if not is_direct_damage_buff_runtime_supported(e):
+                  continue
+              keys = tuple((r.raw,r.event_key,r.mode.value,getattr(r,'threshold',None)) for r in e.triggers)
+              if any((key or '') in {'on_attack','hit_count','pellet_hit','full_charge_hit','last_bullet','last_bullet_fire','core_hit'} or (key or '').startswith('weapon_hit:') for _raw,key,_mode,_thr in keys):
+                  print('BUFF',e.effect_id,squad.members[e.actor].name,e.name,e.stat,e.target_spec.raw,keys,tuple(r.raw for r in e.condition_rules),'TARGETS',possible_ally_targets(squad,e))
+
+          print('ALL EXECUTABLE WEAPON-TRIGGERED EFFECTS')
+          for e in squad.effects:
+              if not TriggerDispatcher.is_executable_effect(e):
+                  continue
+              keys=tuple((r.raw,r.event_key,r.mode.value,getattr(r,'threshold',None)) for r in e.triggers)
+              if any((key or '') in {'on_attack','hit_count','pellet_hit','full_charge_hit','last_bullet','last_bullet_fire','core_hit'} or (key or '').startswith('weapon_hit:') for _raw,key,_mode,_thr in keys):
+                  print('EFFECT',e.effect_id,squad.members[e.actor].name,e.name,e.effect_type,e.stat,e.target_spec.raw,keys,tuple(r.raw for r in e.condition_rules),dict(e.parameters))
+          PY
+
+      - name: Enumerate public same-event weapon trigger score buffs
+        run: |
+          python - <<'PY'
+          from context import spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_supported
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.research.public_ranking_probe import _source_corpus
+
+          weapon_keys={'on_attack','hit_count','pellet_hit','full_charge_hit','last_bullet','last_bullet_fire','core_hit'}
+          unique={}
+          for members,source in _source_corpus(): unique.setdefault(tuple(members),source)
+          for members,source in unique.items():
+              squad=compile_moris_squad(spec.build_squad(list(members)))
+              blockers=static_score_blockers(squad)
+              rows=[]
+              for e in squad.effects:
+                  if e.effect_type!='buff' or not TriggerDispatcher.is_executable_effect(e): continue
+                  if not is_direct_damage_buff_runtime_supported(e): continue
+                  keys=tuple(r.event_key or '' for r in e.triggers)
+                  if any(k in weapon_keys or k.startswith('weapon_hit:') for k in keys):
+                      rows.append((squad.members[e.actor].name,e.name,e.stat,e.target_spec.raw,keys))
+              if rows:
+                  print('TEAM',source,'CERTIFIED',not blockers,'BLOCKERS',len(blockers),'ROWS',rows)
+          PY
