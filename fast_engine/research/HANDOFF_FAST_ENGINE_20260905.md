@@ -11,7 +11,8 @@
 가장 먼저 읽을 문서:
 
 1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md`
-2. `fast_engine/research/PERIODIC_ENEMY_RECEIVED_DAMAGE_CHECKPOINT_20260905.md`
+2. `fast_engine/research/PATTERNLESS_SQUAD_PART_HIT_CHECKPOINT_20260905.md`
+3. `fast_engine/research/PERIODIC_ENEMY_RECEIVED_DAMAGE_CHECKPOINT_20260905.md`
 3. `fast_engine/research/STAT_APPLIED_CHARGE_SPEED_CHECKPOINT_20260905.md`
 3. `fast_engine/research/FULL_CHARGE_HIT_CHARGE_SPEED_CHECKPOINT_20260905.md`
 4. `fast_engine/research/PERIODIC_FINITE_SELF_CRIT_CHECKPOINT_20260905.md`
@@ -25,10 +26,15 @@
 
 현재 최신 production semantic commit:
 
-- `4a6cbe388cd0ef32ec07e5b825078fe457619181` — fixed-grid periodic enemy `received_dmg_pct` certification
+- `745d9f1afcf10d092bb58bf9e0235724a5c41946` — patternless `squad_part_hit` blocker hygiene
 
 직전 production semantic commit:
 
+- `37a7da91974222ab49bb0ef6b869d06a34100a4d` — post-shot `full_charge_hit` next-bullet lifetime delivery
+
+직전 주요 semantic commit:
+
+- `4a6cbe388cd0ef32ec07e5b825078fe457619181` — fixed-grid periodic enemy `received_dmg_pct` certification
 - `8880049678c9270de8d7b98c456b93fa00a67502` — recipient-scoped `stat_applied` finite self `charge_speed_pct` certification
 
 직전 주요 production commits:
@@ -40,6 +46,59 @@
 - `6a4c8346062eb3284ae34558d93675184b4ab154` — Crown self-stack heal-received bridge
 - `46af96866b9462ec22455b9c9f5121cfa3b35bdd` — last-bullet damage delivery
 - `0f522925b2cac86ab74329a9ce4d02347f739abe` — Moris outer-tick timing alignment
+
+---
+
+## 0A. 최신 완료 — patternless `squad_part_hit` blocker hygiene
+
+D : 킬러 와이프 `타겟 섬멸 코어`를 anchor로, 표준 patternless enemy에서 도달 불가능한 `squad_part_hit` consumer를 comparison-critical blocker에서만 제외했다.
+
+production:
+
+- `745d9f1afcf10d092bb58bf9e0235724a5c41946`
+
+중요한 경계:
+
+- runtime `squad_part_hit` ownership을 추가한 것이 아니다.
+- 해당 effect는 dispatcher executable로 승격하지 않았다.
+- global `squad_body_hit`은 계속 fail closed다.
+
+Moris A/B (`33942161302 / 101241562693`):
+
+- 기본 enemy `has_parts=False`: `타겟 섬멸 코어` activation `0`
+- 같은 enemy에 `has_parts=True`: activation `349`
+- public delta는 D part-hit normal/skill blocker 정확히 2개만 제거
+- added blocker 없음
+- Fast damage `158/158`
+
+promotion (`33942326300 / 101242018963`):
+
+- focused `4/4`
+- Fast damage `159/159`
+- public `23 unique / 2 certified / 21 gaps`
+- `레이드_미하라에이다` `8 -> 6` blockers
+
+상세:
+
+- `fast_engine/research/PATTERNLESS_SQUAD_PART_HIT_CHECKPOINT_20260905.md`
+
+---
+
+## 0B. 직전 완료 — post-shot full-charge next-bullet lifetime
+
+D : 킬러 와이프 `캄 스나이핑`의 `full_charge_hit:3 -> duration_bullets:1`을 generic post-shot next-bullet lifetime으로 좁게 열었다.
+
+production logic:
+
+- `37a7da91974222ab49bb0ef6b869d06a34100a4d`
+
+permanent regression:
+
+- `968b2a83cef745d612759dbc31af5db5c34f8c72`
+
+Moris/Fast probe에서 activation은 `3.80s`, `8.00s`로 일치했고 Fast의 lifetime 제거는 각각 다음 탄 `5.20s`, `9.3833s`에서 일어났다. triggering shot 자체에는 적용되지 않는다.
+
+post-patch frontier에서 D `캄 스나이핑` blocker 1개만 제거됐고 `normal_delivery 43 -> 42`, 다른 family는 변하지 않았다.
 
 ---
 
@@ -67,7 +126,7 @@ latest standardized public ranking은 Helm periodic enemy candidate gate에서 �
 - pairwise accuracy: `1.0`
 - top-N recall: `1.0`
 
-Helm periodic enemy gate run `33932690769`에서 ranking probe를 재실행했고 수치가 유지됐다. 최신 blocker family는 cadence `63`, normal delivery `43`, skill-state delivery `44`다.
+Helm periodic enemy gate run `33932690769`에서 ranking probe를 재실행했고 certified universe는 이후에도 2개로 유지됐다. 최신 fresh frontier는 cadence `63`, normal delivery `41`, skill-state delivery `43`, skill damage `27`, weapon change `12`, normal state `7`, control `6`, periodic grid `1`이다.
 
 optimizer production integration은 아직 하지 않는다.
 
@@ -359,23 +418,22 @@ Ada 두 public team에서 Ada 자체 blocker는 모두 제거됐지만 다른 bl
 
 ## 7. 다음 단일 checkpoint
 
-Helm periodic enemy slice 뒤 unique-23 frontier를 fresh audit해 다음 작은 generic ownership을 하나만 고른다.
+최신 production semantic은 patternless `squad_part_hit` blocker hygiene까지 완료됐다.
 
-이번 비교에서 다음은 보류 근거가 더 명확해졌다.
+다음에는 현재 HEAD에서 unique-23 frontier를 다시 fresh audit하고 **비보류 small generic ownership 하나만** 고른다.
 
-- Ada `effect_interval` — Moris가 남은 periodic deadline을 재스케일하는 dynamic grid mutation
-- Neon : Vision Eye `초화력` — `화력 게이지 == 100` chronology 선행 필요
-
-기존 보류 축도 그대로 유지한다.
+현재 낮은 blocker 팀은 이미 보류 근거가 있는 축 비중이 높으므로 blocker 수만 보고 열지 않는다. 특히 다음은 그대로 우회한다.
 
 - Little Mermaid `squad_ammo_consume`
-- Crown external `heal_received`
-- Mihara/D global `squad_body_hit`
+- Crown arbitrary/external `heal_received`
+- executable global `squad_body_hit`
+- Ada `effect_interval` dynamic periodic deadline rescheduling
+- Neon : Vision Eye gauge chronology
 - broad/cross-class weapon change
 - unsafe reload/max-ammo
 - HP-derived state / generic bonus-damage broad enable
 
-다음 slice도 real Moris semantic probe, existing runtime reuse, negative fail-closed case를 먼저 증명한다. blocker 수가 적다는 이유만으로 deferred 축을 연다거나 certified count를 인위적으로 늘리지 않는다.
+다음 slice도 real Moris semantic probe -> existing Fast runtime reuse proof -> negative fail-closed case -> focused/full Fast -> 필요 시 standardized ranking 순으로 진행한다.
 
 ---
 
@@ -396,54 +454,36 @@ Helm periodic enemy slice 뒤 unique-23 frontier를 fresh audit해 다음 작은
 
 ## 9. CI / cleanup 완료
 
-이번 Helm periodic enemy production semantic commit은 `4a6cbe388cd0ef32ec07e5b825078fe457619181`다.
+최신 production semantic commit:
 
-promotion run `33932866252` / job `101214901667`:
+- `745d9f1afcf10d092bb58bf9e0235724a5c41946` — patternless `squad_part_hit` blocker hygiene
 
-- exact candidate apply success
-- focused production regression success
-- full Fast `262/262`
-- production diff whitelist success
-- production commit/push success
+semantic cleanup HEAD:
 
-checkpoint/handoff/LESSONS 정리와 조사용 temp workflow/scripts 제거 후 clean cleanup HEAD는:
+- `41d9d6630c303ae13435fa00e4c391683e15648f`
 
-- `38ce5d1d342afc82490769f76c3663cf3476fd9e`
+clean canonical CI:
 
-이 시점 `.github/workflows`에는 `ci.yml`, `pages.yml`만 남았다.
-
-clean tree canonical CI를 docs-only trigger HEAD `d837729a42d857a73e6d840fa6582be7c13c0662`에서 실행했다.
-
-canonical CI:
-
-- run `33933054253`
-- job `101215498281`
+- run `33942375704`
+- job `101242188029`
 - result `success`
-- Fast damage `155/155`
+- Fast damage `159/159`
 - calculator `137/137` (1 skip)
 - optimizer `374/374`
 - bridge `31/31` (1 skip)
 - site `385/385`
 - golden snapshot `29/29`
-- Fast static 180s score median `101.28ms` (`events=368`)
 
-따라서 Helm periodic enemy checkpoint는 완전히 닫혔다. canonical trigger 문서는 이 final handoff commit에서 제거한다.
+checkpoint 문서 commit:
+
+- `68c96ce88c7a23f29612cfc911875e30515c8305`
+
+이 HEAD의 canonical CI도 `33942586974 / 101242734277`에서 전체 `success`다.
+
+`.github/workflows`는 handoff 갱신용 임시 workflow까지 제거한 뒤 `ci.yml`, `pages.yml`만 남겨야 한다.
 
 ### 다음 재개 지점
 
-coverage expansion을 계속한다. unique-23 frontier를 다시 fresh audit하고 **다음 작은 generic ownership 하나만** 고른다.
-
-이미 보류 근거가 확인된 다음 축은 우회하지 않는다.
-
-- Ada `effect_interval` — dynamic periodic deadline rescheduling
-- Neon : Vision Eye `초화력` — gauge chronology 선행 필요
-- Little Mermaid `squad_ammo_consume`
-- Crown external `heal_received`
-- Mihara/D executable global `squad_body_hit`
-- broad/cross-class weapon change
-- unsafe reload/max-ammo
-- HP-derived state / generic bonus-damage broad enable
-
-다음 slice도 real Moris semantic probe -> existing Fast runtime reuse proof -> negative fail-closed case -> focused/full Fast -> 필요 시 standardized ranking 순으로 진행한다.
+coverage expansion을 계속한다. current HEAD에서 unique-23 frontier를 fresh audit하고 **비보류 small generic ownership 하나만** 새로 선정한다.
 
 `master`는 수정하거나 병합하지 않는다.
