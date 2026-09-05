@@ -1,0 +1,111 @@
+name: tmp-frontier-fresh-audit
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+    paths:
+      - .github/workflows/tmp-frontier-fresh-audit.yml
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Fresh unique-23 frontier audit
+        run: |
+          PYTHONPATH=. python - <<'PY'
+          from collections import Counter
+          from context import snapshot, spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+
+          rows = []
+          seen = set()
+          for source_name, case in snapshot.SQUADS.items():
+              if str(source_name).startswith('지그_'):
+                  continue
+              members = tuple(str(x) for x in case['members'])
+              if len(members) != 5 or any(x.startswith('test_') for x in members):
+                  continue
+              if members in seen:
+                  continue
+              seen.add(members)
+              compiled = compile_moris_squad(spec.build_squad(list(members)))
+              blockers = tuple(static_score_blockers(compiled))
+              rows.append((len(blockers), str(source_name), members, compiled, blockers))
+
+          print('UNIQUE_COUNT', len(rows))
+          print('CERTIFIED_COUNT', sum(1 for row in rows if row[0] == 0))
+          fam = Counter(b.split(':', 1)[0] for row in rows for b in row[4])
+          print('FAMILIES', sorted(fam.items(), key=lambda x: (-x[1], x[0])))
+          exact = Counter(b for row in rows for b in row[4])
+          print('REPEATED_EXACT')
+          for blocker, count in exact.most_common(50):
+              if count > 1:
+                  print(count, blocker)
+
+          for count, source_name, members, compiled, blockers in sorted(rows, key=lambda x: (x[0], x[1])):
+              print('\nTEAM', count, source_name, members)
+              for blocker in blockers:
+                  print(' B', blocker)
+              if count > 12:
+                  continue
+              print(' EFFECT_SHAPES')
+              for effect in compiled.effects:
+                  cap = effect.capability
+                  cap_blocks = tuple(getattr(cap, 'blockers', ()) or ())
+                  disp_obj = getattr(cap, 'disposition', None)
+                  disp = getattr(disp_obj, 'value', str(disp_obj))
+                  if not cap_blocks and str(disp).lower().endswith('ready'):
+                      continue
+                  actor = effect.actor
+                  member = compiled.members[actor]
+                  name = getattr(member, 'name', str(actor))
+                  triggers = []
+                  for rule in effect.triggers:
+                      triggers.append({
+                          'mode': getattr(getattr(rule, 'mode', None), 'value', str(getattr(rule, 'mode', None))),
+                          'event': getattr(rule, 'event_key', None),
+                          'threshold': getattr(rule, 'threshold', None),
+                          'modulo': getattr(rule, 'modulo', None),
+                          'params': getattr(rule, 'params', None),
+                      })
+                  conditions = []
+                  for rule in effect.condition_rules:
+                      conditions.append({
+                          'mode': getattr(getattr(rule, 'mode', None), 'value', str(getattr(rule, 'mode', None))),
+                          'key': getattr(rule, 'key', None),
+                          'value': getattr(rule, 'value', None),
+                      })
+                  target = getattr(effect, 'target_spec', None)
+                  target_mode = getattr(getattr(target, 'mode', None), 'value', str(getattr(target, 'mode', None)))
+                  print('  E', {
+                      'actor': name,
+                      'effect_id': effect.effect_id,
+                      'name': effect.name,
+                      'type': effect.effect_type,
+                      'stat': effect.stat,
+                      'value': effect.value,
+                      'duration': effect.duration,
+                      'duration_bullets': getattr(effect, 'duration_bullets', None),
+                      'max_stack': effect.max_stack,
+                      'max_trigger': getattr(effect, 'max_trigger', None),
+                      'tick_interval': getattr(effect, 'tick_interval', None),
+                      'target': target_mode,
+                      'target_runtime': getattr(target, 'runtime_supported', None),
+                      'triggers': triggers,
+                      'conditions': conditions,
+                      'parameters': effect.parameters,
+                      'cap_disposition': disp,
+                      'cap_blockers': cap_blocks,
+                  })
+          PY
+      - name: Confirm diagnostic only
+        run: git diff --exit-code
