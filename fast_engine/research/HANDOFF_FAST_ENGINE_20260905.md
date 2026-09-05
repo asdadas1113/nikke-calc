@@ -11,7 +11,8 @@
 가장 먼저 읽을 문서:
 
 1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md`
-2. `fast_engine/research/STAT_APPLIED_CHARGE_SPEED_CHECKPOINT_20260905.md`
+2. `fast_engine/research/PERIODIC_ENEMY_RECEIVED_DAMAGE_CHECKPOINT_20260905.md`
+3. `fast_engine/research/STAT_APPLIED_CHARGE_SPEED_CHECKPOINT_20260905.md`
 3. `fast_engine/research/FULL_CHARGE_HIT_CHARGE_SPEED_CHECKPOINT_20260905.md`
 4. `fast_engine/research/PERIODIC_FINITE_SELF_CRIT_CHECKPOINT_20260905.md`
 5. `fast_engine/research/TOVE_AMMO_PCT_NAMED_EVENT_CHECKPOINT_20260905.md`
@@ -24,11 +25,11 @@
 
 현재 최신 production semantic commit:
 
-- `8880049678c9270de8d7b98c456b93fa00a67502` — recipient-scoped `stat_applied` finite self `charge_speed_pct` certification
+- `4a6cbe388cd0ef32ec07e5b825078fe457619181` — fixed-grid periodic enemy `received_dmg_pct` certification
 
 직전 production semantic commit:
 
-- `721cd9a8720766c14a814eb8973ca5cd685d7c73` — full-charge-hit permanent self `charge_speed_pct` certification
+- `8880049678c9270de8d7b98c456b93fa00a67502` — recipient-scoped `stat_applied` finite self `charge_speed_pct` certification
 
 직전 주요 production commits:
 
@@ -58,7 +59,7 @@ Fast-certified real public memberships:
 - certified: `2`
 - coverage gaps: `21`
 
-latest standardized public ranking은 Brady stat-applied candidate gate에서 실제 재실행했고 certified universe는 여전히 2개다.
+latest standardized public ranking은 Helm periodic enemy candidate gate에서 실제 재실행했고 certified universe는 여전히 2개다.
 
 - clean relative error median: `+0.0626832%`
 - min: `+0.0349533%`
@@ -66,13 +67,46 @@ latest standardized public ranking은 Brady stat-applied candidate gate에서 �
 - pairwise accuracy: `1.0`
 - top-N recall: `1.0`
 
-Brady stat-applied gate run `33929600782`에서 ranking probe를 재실행했고 수치가 유지됐다. 최신 cadence blocker family는 `63`이다.
+Helm periodic enemy gate run `33932690769`에서 ranking probe를 재실행했고 수치가 유지됐다. 최신 blocker family는 cadence `63`, normal delivery `43`, skill-state delivery `44`다.
 
 optimizer production integration은 아직 하지 않는다.
 
 ---
 
-## 1A. 최신 완료 — recipient stat-applied charge speed
+## 1A. 최신 완료 — periodic enemy received damage
+
+Helm : Aquamarine `이지스 캐논 견제 사격 2`를 anchor로 fixed-grid finite enemy `received_dmg_pct` stack을 좁게 generic certification했다.
+
+production:
+
+- `4a6cbe388cd0ef32ec07e5b825078fe457619181`
+
+새 periodic scheduler는 만들지 않았다. 기존 Moris-observed fixed periodic scheduler, enemy ActiveEffectStore, DamageTermResolver를 재사용한다. 전격 enemy에서 4초 periodic activation 6회와 stack/value가 Moris와 exact match했고, 작열 enemy에서는 양쪽 모두 0회였다.
+
+A/B run `33932690769` / job `101214374980`:
+
+- focused `21/21`
+- full Fast `262/262`
+- standardized ranking probe success
+- normal delivery `44 -> 43`
+- skill-state delivery `45 -> 44`
+
+promotion run `33932866252` / job `101214901667`:
+
+- focused success
+- full Fast `262/262`
+- diff whitelist success
+- production commit/push success
+
+Ada `effect_interval`은 dynamic periodic deadline rescheduling 문제라 계속 fail closed다. Neon `초화력`은 gauge chronology가 필요해 보류한다.
+
+상세:
+
+- `fast_engine/research/PERIODIC_ENEMY_RECEIVED_DAMAGE_CHECKPOINT_20260905.md`
+
+---
+
+## 1B. 직전 완료 — recipient stat-applied charge speed
 
 Brady `나누고 싶은 맛`을 anchor로 recipient-scoped `event:stat_applied:split_dmg_pct` 뒤 finite self `charge_speed_pct`를 좁게 generic certification했다.
 
@@ -105,7 +139,7 @@ production promotion run `33929914438` / job `101206236343`:
 
 ---
 
-## 1B. 직전 완료 — full-charge-hit self charge speed
+## 1C. 그 이전 완료 — full-charge-hit self charge speed
 
 신데렐라 `무결한 유리 2`를 anchor로 raw `full_charge_hit` 뒤 영구 self `charge_speed_pct`를 좁게 generic certification했다.
 
@@ -133,7 +167,7 @@ public cadence blocker family는 `66 -> 64`, accounting은 `23 unique / 2 certif
 
 ---
 
-## 1C. 그 이전 완료 — finite periodic self crit
+## 1D. 그 이전 완료 — finite periodic self crit
 
 스노우 화이트 `세븐스 드워프 : V&VI 2`를 anchor로 fixed-grid finite self `crit_rate` periodic state를 좁게 generic certification했다.
 
@@ -325,21 +359,23 @@ Ada 두 public team에서 Ada 자체 blocker는 모두 제거됐지만 다른 bl
 
 ## 7. 다음 단일 checkpoint
 
-다음 작업은 **Brady slice 이후 cadence `63` 기준으로 unique-23 frontier를 다시 shape 단위로 분류하고, 다음 작은 generic ownership을 하나만 고르는 것**이다.
+Helm periodic enemy slice 뒤 unique-23 frontier를 fresh audit해 다음 작은 generic ownership을 하나만 고른다.
 
-기존 no-patch/hold 축은 그대로 제외한다.
+이번 비교에서 다음은 보류 근거가 더 명확해졌다.
 
-- Mihara / executable `squad_body_hit`
-- Little Mermaid / `squad_ammo_consume`
-- Crown external heal
+- Ada `effect_interval` — Moris가 남은 periodic deadline을 재스케일하는 dynamic grid mutation
+- Neon : Vision Eye `초화력` — `화력 게이지 == 100` chronology 선행 필요
+
+기존 보류 축도 그대로 유지한다.
+
+- Little Mermaid `squad_ammo_consume`
+- Crown external `heal_received`
+- Mihara/D global `squad_body_hit`
 - broad/cross-class weapon change
-- opposite-source가 가능한 Brady mutual-exclusion/remove 확장
+- unsafe reload/max-ammo
+- HP-derived state / generic bonus-damage broad enable
 
-직전 frontier에서 all-allies reload/max-ammo는 unsafe recipient와 결합돼 있었고 Snow White `charge_time_fixed`는 weapon-change와 결합돼 있었다. 따라서 다음 후보를 이 둘 중 하나로 미리 고정하지 말고 cadence-63 frontier를 fresh audit한다.
-
-다음 production slice도 real Moris semantic probe, existing runtime reuse, public source scope, negative fail-closed case를 먼저 증명한다. certified count와 무관하게 comparison-critical semantics를 건드리면 standardized ranking probe를 재실행해도 된다.
-
-목표는 blocker 숫자를 줄이는 것이 아니라 comparison-critical 의미론을 증명할 수 있는 작은 generic ownership을 늘리는 것이다.
+다음 slice도 real Moris semantic probe, existing runtime reuse, negative fail-closed case를 먼저 증명한다. blocker 수가 적다는 이유만으로 deferred 축을 연다거나 certified count를 인위적으로 늘리지 않는다.
 
 ---
 
@@ -358,30 +394,14 @@ Ada 두 public team에서 Ada 자체 blocker는 모두 제거됐지만 다른 bl
 
 ---
 
-## 9. CI / cleanup 완료
+## 9. CI / cleanup 진행
 
-이번 Brady checkpoint의 production semantic commit은 `8880049678c9270de8d7b98c456b93fa00a67502`다.
+이번 Helm periodic enemy production semantic commit은 `4a6cbe388cd0ef32ec07e5b825078fe457619181`다.
 
-cleanup finalizer commit:
+promotion run `33932866252` / job `101214901667`에서 full Fast `262/262` 및 production diff whitelist까지 통과했다.
 
-- `e467103c992786d8259229840005e1d672284bb6`
+이번 finalizer에서 checkpoint/handoff/LESSONS를 갱신하고 조사용 temp workflow/scripts를 제거한다. cleanup 뒤 `.github/workflows`에는 `ci.yml`, `pages.yml`만 남겨야 한다.
 
-cleanup 뒤 `.github/workflows`에는 `ci.yml`, `pages.yml`만 남았다. recursive CI가 생성되지 않아 docs-only metadata commit `f55579ffd586eee15fa21b79c754b27d3e2959d5`로 canonical CI를 직접 실행했다.
-
-canonical CI:
-
-- run `33931819590`
-- job `101211793772`
-- result `success`
-- Fast damage `151/151`
-- calculator `137/137` (1 skip)
-- optimizer `374/374`
-- bridge `31/31` (1 skip)
-- site `385/385`
-- golden `29/29`
-
-따라서 Brady stat-applied checkpoint는 production / regression / canonical CI까지 닫혔다.
-
-다음 단일 checkpoint는 section 7대로 cadence `63` unique-23 frontier fresh audit에서 고른다.
+clean HEAD canonical CI 결과를 확보한 뒤 이 절을 최종 완료 상태로 갱신한다.
 
 `master`는 그대로 둔다.

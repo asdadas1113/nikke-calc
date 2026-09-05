@@ -135,3 +135,11 @@ Therefore the production Fast Engine remains greenfield. These written lessons a
 - runtime source proof와 score source proof를 같은 conservative helper로 공유하면 한쪽만 broad-enable되는 drift를 줄일 수 있다.
 - negative state condition을 고정값으로 취급하려면 반대 state의 source가 해당 recipient에 도달할 수 없음을 증명해야 한다. 반대 source가 하나라도 가능하면 fail closed가 맞다.
 - dynamic cadence path도 named-event consumer라면 structural executability 뒤 source certification을 반드시 통과해야 한다.
+
+
+## 2026-09-05 — fixed periodic enemy state는 broad timing support가 필요하지 않다
+
+- periodic effect 하나가 기존 nominal-grid scheduler와 ActiveEffectStore로 완전히 표현된다면 `damage_policy` 전체에 periodic timing을 열 필요가 없다.
+- structural helper에서 stat, polarity, target singleton, finite lifetime, stack shape, static enemy condition, exact capability blockers를 묶고 `_is_score_safe_fixed_periodic()`에만 추가하면 훨씬 좁게 ownership할 수 있다.
+- periodic activation 시각만 맞추지 말고 stack/value trace와 condition-negative case까지 Moris와 직접 비교한다.
+- 반대로 `effect_interval`처럼 이미 예약된 periodic deadline 자체를 바꾸는 stat은 같은 범주가 아니다. fixed-grid certification과 dynamic grid mutation을 분리해 fail closed해야 한다.
