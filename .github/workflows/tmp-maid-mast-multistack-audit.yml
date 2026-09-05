@@ -1,0 +1,19 @@
+name: tmp maid mast multistack audit
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+    paths:
+      - 'fast_engine/research/tmp_maid_mast_multistack_audit.py'
+      - '.github/workflows/tmp-maid-mast-multistack-audit.yml'
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fast-engine-phase2-20260901
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Audit Maid Mast
+        run: PYTHONPATH=. python fast_engine/research/tmp_maid_mast_multistack_audit.py
