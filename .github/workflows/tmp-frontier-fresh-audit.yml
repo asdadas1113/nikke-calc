@@ -21,102 +21,40 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Patch candidate in checkout only
+      - name: Verify current unique-23 frontier
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          p = Path('fast_engine/engine/damage_policy.py')
-          text = p.read_text(encoding='utf-8')
-          needle = '    "event:ally_burst_cast",\n})\n\n\ndef _target_supported'
-          replacement = '    "event:ally_burst_cast",\n    "full_charge_hit",\n})\n\n\ndef _target_supported'
-          if needle not in text:
-              raise SystemExit('candidate insertion point not found')
-          p.write_text(text.replace(needle, replacement, 1), encoding='utf-8')
-          PY
-      - name: Probe real D next-bullet lifetime parity
-        run: |
-          python - <<'PY' > full-charge-lifetime-probe.txt
-          from unittest.mock import patch
-          from calculator.timeline import simulate
+          python - <<'PY' > frontier-after.txt
+          from collections import Counter
           from context import snapshot, spec
-          from fast_engine.engine.burst import compile_burst_policy
-          from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.damage_policy import is_direct_damage_buff_runtime_supported
-          from fast_engine.engine.effects import ActiveEffectStore
           from fast_engine.engine.score import static_score_blockers
 
-          entry = next(v for k, v in snapshot.SQUADS.items() if not k.startswith('지그_') and 'D : 킬러 와이프' in v['members'])
-          moris_squad = spec.build_squad(list(entry['members']))
-          compiled = compile_moris_squad(moris_squad)
-          actor = next(i for i,m in enumerate(compiled.members) if m.name == 'D : 킬러 와이프')
-          effect = next(e for e in compiled.members[actor].effects if e.name == '캄 스나이핑')
-          print('TEAM', tuple(entry['members']))
-          print('ACTOR', actor, compiled.members[actor].weapon)
-          print('EFFECT', effect.effect_type, effect.stat, effect.parameters, [(r.mode.value,r.event_key,r.threshold,r.trigger_count_reducible) for r in effect.triggers])
-          print('RUNTIME_SUPPORTED', is_direct_damage_buff_runtime_supported(effect))
-          remaining = [b for b in static_score_blockers(compiled) if 'D : 킬러 와이프:캄 스나이핑' in b]
-          print('D_BLOCKERS_AFTER_PATCH', remaining)
-          if remaining:
-              raise SystemExit('candidate blocker remained after narrow policy patch')
+          rows=[]
+          seen=set()
+          for name, entry in snapshot.SQUADS.items():
+              if name.startswith('지그_'):
+                  continue
+              members=tuple(entry['members'])
+              if len(members) != 5 or any(str(x).startswith('test_') for x in members) or members in seen:
+                  continue
+              seen.add(members)
+              compiled=compile_moris_squad(spec.build_squad(list(members)))
+              blockers=tuple(static_score_blockers(compiled))
+              rows.append((name,members,blockers))
 
-          duration = 12.0
-          policy = compile_burst_policy(moris_squad, compiled, {'duration': duration, 'rng_mode':'expected'})
-          activations=[]
-          removals=[]
-          shots=[]
-          original_activate = ActiveEffectStore.activate_group
-          original_consume = ActiveEffectStore.consume_dynamic_bullet
-
-          def traced_activate(store, candidate, targets, now, scheduler):
-              result = original_activate(store, candidate, targets, now, scheduler)
-              if candidate.effect_id == effect.effect_id and result:
-                  activations.append(float(now))
-              return result
-
-          def traced_consume(store, owner, now, count=1):
-              removed = original_consume(store, owner, now=now, count=count)
-              if effect.effect_id in removed:
-                  removals.append(float(now))
-              return removed
-
-          runtime = BurstRuntime(compiled, policy)
-          runtime.weapons.attach_score_shot_sink((actor,), lambda a,t: shots.append(float(t)) if a == actor else None)
-          with patch.object(ActiveEffectStore,'activate_group',new=traced_activate), patch.object(ActiveEffectStore,'consume_dynamic_bullet',new=traced_consume):
-              runtime.run(duration=duration)
-          print('FAST_SHOTS', shots)
-          print('FAST_ACTIVATE', activations)
-          print('FAST_REMOVE', removals)
-
-          moris = simulate(moris_squad, config={'duration':duration,'rng_mode':'expected'}, verbose=True)
-          ma = [float(row.t) for row in moris.log.buff_events if row.name == '캄 스나이핑' and row.kind == 'activate']
-          print('MORIS_ACTIVATE', ma)
-          if len(activations) != len(ma):
-              raise SystemExit(f'activation count mismatch {len(activations)} != {len(ma)}')
-          for a,b in zip(activations,ma):
-              if abs(a-b) > 1e-9:
-                  raise SystemExit(f'activation mismatch {a} != {b}')
-          if len(removals) < len(activations) - 1:
-              raise SystemExit(f'too few Fast removals: {removals}')
-          for a,r in zip(activations,removals):
-              later = next((shot for shot in shots if shot > a + 1e-9), None)
-              if later is None:
-                  break
-              if abs(r-later) > 1e-9:
-                  raise SystemExit(f'lifetime removed at {r}, expected next shot {later} after activation {a}')
-          print('PROBE_OK')
+          fam=Counter(b.split(':',1)[0] for _,_,bs in rows for b in bs)
+          print('UNIQUE_COUNT', len(rows))
+          print('CERTIFIED_COUNT', sum(not bs for _,_,bs in rows))
+          print('FAMILIES', sorted(fam.items(), key=lambda x:(-x[1],x[0])))
+          target='normal_delivery:D : 킬러 와이프:캄 스나이핑:pierce_enabled'
+          print('D_BLOCKER_PRESENT', any(target in bs for _,_,bs in rows))
+          print('TEAMS')
+          for name,members,bs in sorted(rows,key=lambda row:(len(row[2]),row[0])):
+              print(len(bs), name, members)
           PY
-          cat full-charge-lifetime-probe.txt
-      - name: Focused regressions
-        run: |
-          python -m unittest -q \
-            fast_engine.tests.test_damage_helm_bullet_lifetime \
-            fast_engine.tests.test_damage_full_charge_hit_charge_speed \
-            fast_engine.tests.test_dynamic_weapon_signals \
-            fast_engine.tests.test_damage_policy
+          cat frontier-after.txt
       - uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: full-charge-lifetime-probe
-          path: full-charge-lifetime-probe.txt
+          name: frontier-after
+          path: frontier-after.txt
           retention-days: 1
