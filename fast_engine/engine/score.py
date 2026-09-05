@@ -690,6 +690,13 @@ def _is_score_safe_fixed_periodic(effect) -> bool:
     )
 
 
+def _has_unowned_reference_stack_scaling(effect) -> bool:
+    return (
+        effect.parameters.get("scaling") == "stack_count"
+        or "scaling_ref" in effect.parameters
+    )
+
+
 def _is_patternless_unreachable(effect) -> bool:
     return (
         bool(effect.triggers)
@@ -842,6 +849,13 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
         label = f"{owner}:{effect.name or stat}:{stat}"
 
         if _is_patternless_unreachable(effect):
+            continue
+
+        if (
+            _has_unowned_reference_stack_scaling(effect)
+            and stat in _CADENCE_OR_SHAPE_STATS
+        ):
+            blockers.append(f"cadence:{label}")
             continue
 
         if effect.effect_type == "weapon_change":

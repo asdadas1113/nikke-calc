@@ -228,6 +228,14 @@ def is_direct_damage_buff_runtime_supported(effect) -> bool:
 
     if effect.effect_type != "buff" or (effect.stat or "") not in DIRECT_DAMAGE_STATE_STATS:
         return False
+    # Moris captures stack_count reference scaling at the activation boundary.
+    # Fast does not own that captured multiplier yet, so this exact family must
+    # fail closed instead of applying the raw unscaled value.
+    if (
+        effect.parameters.get("scaling") == "stack_count"
+        or "scaling_ref" in effect.parameters
+    ):
+        return False
     if not _one_shot_lifetime_supported(effect):
         return False
     if not _target_supported(effect.target_spec):

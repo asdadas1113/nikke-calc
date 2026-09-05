@@ -100,9 +100,18 @@ class ChargeReloadCancelControlTests(unittest.TestCase):
         volume = compile_moris_squad(
             spec.build_squad(list(snapshot.SQUADS['레이드_볼륨']['members']))
         )
-        self.assertEqual(
-            static_score_blockers(volume),
-            ('cadence:홍련 : 흑영:화무십일홍 · 수라 2:ammo_charge_pct',),
+        volume_blockers = static_score_blockers(volume)
+        self.assertIn(
+            'cadence:홍련 : 흑영:화무십일홍 · 수라 2:ammo_charge_pct',
+            volume_blockers,
+        )
+        self.assertIn(
+            'cadence:마스트 : 로망틱 메이드:파이레츠 스피릿 2:reload_speed_pct',
+            volume_blockers,
+        )
+        self.assertIn(
+            'skill_state_delivery:마스트 : 로망틱 메이드:파이레츠 스피릿:split_dmg_pct',
+            volume_blockers,
         )
 
         squad4 = compile_moris_squad(
