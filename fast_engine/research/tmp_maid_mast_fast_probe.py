@@ -4,7 +4,9 @@ from context import snapshot, spec
 from fast_engine.engine.burst import compile_burst_policy
 from fast_engine.engine.burst_runtime import BurstRuntime
 from fast_engine.engine.compiler import compile_moris_squad
+from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
 from fast_engine.engine.effects import ActiveEffectStore
+from fast_engine.engine.model import EnemyStaticProfile
 
 TARGET='마스트 : 로망틱 메이드'
 
@@ -13,6 +15,7 @@ orig_adjust=ActiveEffectStore.adjust_named_stack
 orig_remove=ActiveEffectStore.remove_named_state
 
 def act(self,effect,targets,now,scheduler,*args,**kwargs):
+    targets=tuple(targets)
     if effect.name=='취기':
         before=[(t,self.named_stack(t,'취기',now=now)) for t in targets]
         out=orig_activate(self,effect,targets,now,scheduler,*args,**kwargs)
@@ -49,13 +52,16 @@ for label in ['스쿼드4','레이드_루주','레이드_볼륨','레이드_브�
     compiled=compile_moris_squad(moris)
     cfg=dict(case.get('config',{})); cfg['duration']=42.0
     policy=compile_burst_policy(moris,compiled,cfg)
-    runtime=BurstRuntime(compiled,policy)
+    enemy=EnemyStaticProfile(duration=42.0, core_px=0.0, core_uptime=0.0)
+    sink=SimpleDamageScoreSink(compiled, enemy)
+    runtime=BurstRuntime(compiled,policy,enemy,damage_sink=sink)
     mast=compiled.names.index(TARGET)
     print('\n###',label,list(case['members']),'mast',mast)
     for e in compiled.effects:
-        if e.actor==mast or 'stack' in (e.stat or ''):
-            if e.name=='취기' or e.name.startswith('파이레츠') or e.name=='숙취' or 'stack' in (e.stat or ''):
-                print('EFFECT',compiled.members[e.actor].name,e.name,e.stat,'target',e.target_spec.mode,'value',e.value,'max',e.max_stack,'triggers',[(r.mode.value,r.event_key,r.raw) for r in e.triggers],'conds',[(r.mode.value,r.key,r.value) for r in e.condition_rules],'params',dict(e.parameters),'can',runtime.dispatcher.can_activate_effect(e),'runtime_exec',runtime.dispatcher.is_runtime_executable_effect(e),'sink_state',runtime.damage_sink.supports_state_operation(e) if runtime.damage_sink else None)
+        stat=e.stat or ''
+        if e.actor==mast or 'stack' in stat:
+            if e.name=='취기' or e.name.startswith('파이레츠') or e.name=='숙취' or 'stack' in stat:
+                print('EFFECT',compiled.members[e.actor].name,e.name,e.stat,'target',e.target_spec.mode,'value',e.value,'max',e.max_stack,'polarity',e.polarity,'triggers',[(r.mode.value,r.event_key,r.raw) for r in e.triggers],'conds',[(r.mode.value,r.key,r.value) for r in e.condition_rules],'params',dict(e.parameters),'can',runtime.dispatcher.can_activate_effect(e),'runtime_exec',runtime.dispatcher.is_runtime_executable_effect(e),'sink_state',sink.supports_state_operation(e))
     result=runtime.run(duration=42.0)
     print('FAST_BURSTS',result.full_burst_starts,result.full_burst_ends)
     print('FAST_CASTS',[(round(float(t),9),compiled.names[a],stage) for t,a,stage in result.casts])
