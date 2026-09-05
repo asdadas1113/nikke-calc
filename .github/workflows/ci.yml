@@ -80,6 +80,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: python -m unittest fast_engine.tests.test_performance_contract
 
+      # Shard 목록에 새 모듈을 추가하지 않아도 canonical CI가 빠뜨리지 않도록
+      # Fast 테스트 디렉터리 전체를 마지막 안전망으로 반드시 discovery한다.
+      - name: Fast — complete discovery gate
+        if: ${{ !cancelled() }}
+        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
+
       # 아래는 Fast가 모두 초록일 때만 기존 정본 회귀를 돈다.
       - name: 엔진 단위 테스트
         run: |
