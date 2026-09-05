@@ -585,6 +585,54 @@ class ActiveEffectStore:
             changed.append(active.effect_id)
         return tuple(changed)
 
+    def decrement_harmful_stackable(
+        self,
+        targets: Iterable[int],
+        amount: float,
+        *,
+        now: float,
+    ) -> tuple[int, ...]:
+        """Mirror Moris' generic debuff_stack_remove over active ally states.
+
+        The generic path only touches harmful buffs whose declared max_stack is
+        greater than one, and unlike a named removal it cannot reduce a live
+        stack below one. Runtime certification in TriggerDispatcher keeps this
+        primitive inside a squad-proven single-provider slice.
+        """
+
+        selected = frozenset(int(target) for target in targets)
+        delta = max(0.0, float(amount))
+        if not selected or delta <= 0.0:
+            return ()
+        changed: list[int] = []
+        touched: set[int] = set()
+        for active in tuple(self._active.values()):
+            if active.target not in selected or not active.active(now):
+                continue
+            effect = self._effects[active.effect_id]
+            max_stack = effect.max_stack
+            if (
+                not str(effect.polarity or "").startswith("harmful")
+                or max_stack is None
+                or float(max_stack) <= 1.0
+                or active.stacks <= 1.0 + _EPS
+            ):
+                continue
+            stacks = max(1.0, active.stacks - delta)
+            if abs(stacks - active.stacks) <= _EPS:
+                continue
+            active.stacks = stacks
+            touched.add(active.target)
+            if effect.name:
+                self._touch_live_reference_consumers(
+                    active.source_actor, effect.name, now=now
+                )
+            changed.append(active.effect_id)
+        for target in touched:
+            self.state.touch(target, StateDomain.EFFECT)
+        return tuple(changed)
+
+
     def remove_named_state(
         self,
         target: int,

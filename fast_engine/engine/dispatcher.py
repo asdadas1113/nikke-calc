@@ -1245,6 +1245,89 @@ class TriggerDispatcher:
         return True
 
     @staticmethod
+    def _generic_allies_harmful_stack_decrement_provider(
+        squad: "CompiledSquad", effect: "CompiledEffect"
+    ) -> "CompiledEffect | None":
+        """Return the sole state provider for the first generic decrement slice.
+
+        Moris' target-less ``debuff_stack_remove`` walks every active harmful
+        multi-stack buff in the selected ally cohort. Fast owns that generic
+        operation only when compile-time scope proves there is exactly one such
+        possible provider, and that provider is the permanent self accuracy
+        stack used by Maid Mast. This prevents a generic cleanse from silently
+        mutating unrelated state families.
+        """
+
+        if (
+            effect.effect_type != "instant"
+            or (effect.stat or "") != "debuff_stack_remove"
+            or effect.target_spec.mode is not TargetMode.ALL_ALLIES
+            or not effect.target_spec.runtime_supported
+            or effect.value is None
+            or abs(float(effect.value) - 1.0) > 1e-9
+            or effect.parameters
+            or effect.condition_rules
+            or len(effect.triggers) != 1
+        ):
+            return None
+        rule = effect.triggers[0]
+        if (
+            rule.mode is not TriggerMode.AT_LEAST
+            or rule.event_key != "full_burst_start"
+            or int(rule.threshold or 0) != 3
+        ):
+            return None
+
+        selected = set(possible_ally_targets(squad, effect))
+        if selected != set(range(len(squad.members))):
+            return None
+        providers = []
+        for provider in squad.effects:
+            max_stack = provider.max_stack
+            if (
+                provider.effect_type != "buff"
+                or not str(provider.polarity or "").startswith("harmful")
+                or max_stack is None
+                or float(max_stack) <= 1.0
+            ):
+                continue
+            provider_targets = set(possible_ally_targets(squad, provider))
+            if selected & provider_targets:
+                providers.append(provider)
+        if len(providers) != 1:
+            return None
+        provider = providers[0]
+        if (
+            not provider.name
+            or provider.effect_type != "buff"
+            or (provider.stat or "") != "accuracy_pct"
+            or provider.value is None
+            or float(provider.value) >= 0.0
+            or provider.target_spec.mode is not TargetMode.SELF
+            or tuple(possible_ally_targets(squad, provider)) != (provider.actor,)
+            or provider.duration not in (None, -1.0)
+            or float(provider.max_stack or 0.0) != 3.0
+            or provider.max_trigger is not None
+            or provider.tick_interval is not None
+            or provider.parameters
+            or provider.condition_rules
+            or len(provider.triggers) != 1
+            or provider.triggers[0].mode is not TriggerMode.EVENT
+            or provider.triggers[0].event_key != "burst_enter:1"
+            or not is_direct_damage_buff_runtime_supported(provider)
+        ):
+            return None
+        if sum(1 for candidate in squad.effects if candidate.name == provider.name) != 1:
+            return None
+        return provider
+
+    @classmethod
+    def _generic_allies_harmful_stack_decrement_supported(
+        cls, squad: "CompiledSquad", effect: "CompiledEffect"
+    ) -> bool:
+        return cls._generic_allies_harmful_stack_decrement_provider(squad, effect) is not None
+
+    @staticmethod
     def is_executable_effect(effect: "CompiledEffect") -> bool:
         stat = effect.stat or ""
         if TriggerDispatcher._charge_speed_bullet_lifetime_shape_supported(effect):
@@ -1418,6 +1501,8 @@ class TriggerDispatcher:
         ):
             return True
         if self._timed_shield_shape_supported(effect):
+            return True
+        if self._generic_allies_harmful_stack_decrement_supported(self.squad, effect):
             return True
         if self._self_stack_remove_runtime_supported(effect):
             return True
@@ -1749,6 +1834,28 @@ class TriggerDispatcher:
                     now=now,
                     scheduler=self.scheduler,
                 )
+            elif (
+                stat == "debuff_stack_remove"
+                and self._generic_allies_harmful_stack_decrement_supported(
+                    self.squad, effect
+                )
+            ):
+                if any(target == ENEMY for target in targets):
+                    return False
+                changed = self.effects.decrement_harmful_stackable(
+                    tuple(int(target) for target in targets),
+                    value,
+                    now=now,
+                )
+                changed_names = {
+                    self._effect_table[effect_id].name
+                    for effect_id in changed
+                    if self._effect_table[effect_id].name
+                }
+                if changed_names & self._self_stack_dependency_names:
+                    self._sync_self_stack_conditional_passives(now=now)
+                if changed_names & self._self_state_dependency_names:
+                    self._sync_self_state_conditional_passives(now=now)
             elif stat == "remove_named_buff" and self._self_stack_remove_runtime_supported(effect):
                 name = str(effect.parameters.get("target_effect") or "")
                 if tuple(targets) != (effect.actor,):

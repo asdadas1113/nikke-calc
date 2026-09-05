@@ -972,6 +972,106 @@ def _roster_static_burst1_condition_unreachable(
     )
 
 
+def _full_burst_end_stack_condition_unreachable_after_owned_decrement(
+    squad: CompiledSquad, effect
+) -> bool:
+    """Prove a max-stack full-burst-end condition false after owned decrement.
+
+    The owned provider gains exactly one stack at each B1 entry (max three). The
+    sole generic mutator begins on full-burst start #3 and removes one stack. With
+    no burst re-entry or competing named-state mutator, full-burst end therefore
+    sees 1, 2, then 2 forever; a ``self_stack_at_least:...:3`` consumer cannot fire.
+    """
+
+    if (
+        len(effect.triggers) != 1
+        or effect.triggers[0].mode is not TriggerMode.EVENT
+        or effect.triggers[0].event_key != "full_burst_end"
+        or len(effect.condition_rules) != 1
+    ):
+        return False
+    condition = effect.condition_rules[0]
+    if condition.mode is not ConditionMode.SELF_STACK_AT_LEAST or not condition.key:
+        return False
+    providers = tuple(
+        provider
+        for provider in squad.effects
+        if provider.name == condition.key
+        and provider.actor == effect.actor
+    )
+    if len(providers) != 1:
+        return False
+    provider = providers[0]
+    if float(provider.max_stack or 0.0) != 3.0 or float(condition.value or 0.0) != 3.0:
+        return False
+    mutators = tuple(
+        candidate
+        for candidate in squad.effects
+        if TriggerDispatcher._generic_allies_harmful_stack_decrement_provider(
+            squad, candidate
+        ) is provider
+    )
+    if len(mutators) != 1:
+        return False
+    if any(
+        (other.stat or "").startswith("burst_stage_override:reenter")
+        and not _roster_static_burst1_condition_unreachable(squad, other)
+        for other in squad.effects
+    ):
+        return False
+    for other in squad.effects:
+        if other.effect_id in {provider.effect_id, effect.effect_id, mutators[0].effect_id}:
+            continue
+        if other.name == provider.name:
+            return False
+        target_name = other.parameters.get("target_effect")
+        if target_name == provider.name and (other.stat or "") in {
+            "remove_named_buff", "buff_stack_add", "buff_stack_remove",
+            "debuff_stack_add", "debuff_stack_remove",
+        }:
+            return False
+        if (other.stat or "") in {"buff_stack_remove", "debuff_stack_remove"} and not target_name:
+            if other.effect_id != mutators[0].effect_id:
+                return False
+    return True
+
+
+def _unsupported_generic_harmful_stack_remove_changes_scored_state(
+    squad: CompiledSquad, effect
+) -> bool:
+    """Fail closed when an unowned generic decrement can mutate scored state."""
+
+    if (
+        effect.effect_type != "instant"
+        or (effect.stat or "") != "debuff_stack_remove"
+        or effect.parameters.get("target_effect")
+        or _is_patternless_unreachable(effect)
+    ):
+        return False
+    if TriggerDispatcher._generic_allies_harmful_stack_decrement_supported(
+        squad, effect
+    ):
+        return False
+    mutator_targets = set(_possible_ally_targets(squad, effect))
+    if not mutator_targets:
+        return False
+    for provider in squad.effects:
+        max_stack = provider.max_stack
+        if (
+            provider.effect_type != "buff"
+            or not str(provider.polarity or "").startswith("harmful")
+            or max_stack is None
+            or float(max_stack) <= 1.0
+            or (provider.stat or "") not in DIRECT_DAMAGE_STATE_STATS
+        ):
+            continue
+        if not _direct_damage_buff_score_supported(squad, provider):
+            continue
+        if mutator_targets & set(_possible_ally_targets(squad, provider)):
+            return True
+    return False
+
+
 def _unsupported_remove_named_buff_changes_scored_state(
     squad: CompiledSquad,
     effect,
@@ -990,6 +1090,10 @@ def _unsupported_remove_named_buff_changes_scored_state(
     if _is_patternless_unreachable(effect):
         return False
     if _roster_static_burst1_condition_unreachable(squad, effect):
+        return False
+    if _full_burst_end_stack_condition_unreachable_after_owned_decrement(
+        squad, effect
+    ):
         return False
     if TriggerDispatcher._full_burst_end_self_direct_remove_dependency_supported(
         squad, effect
@@ -1144,6 +1248,15 @@ def static_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
             owner = squad.members[effect.actor].name
             blockers.append(
                 f"normal_state:{owner}:{effect.name or 'remove_named_buff'}:remove_named_buff"
+            )
+
+    for effect in squad.effects:
+        if _unsupported_generic_harmful_stack_remove_changes_scored_state(
+            squad, effect
+        ):
+            owner = squad.members[effect.actor].name
+            blockers.append(
+                f"normal_state:{owner}:{effect.name or 'debuff_stack_remove'}:debuff_stack_remove"
             )
 
     for effect in squad.effects:
