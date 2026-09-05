@@ -1,0 +1,129 @@
+name: tmp-finalize-reference-stack-guard
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+    paths:
+      - .github/workflows/tmp-finalize-reference-stack-guard.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Patch reference-stack guard and update safety regressions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('fast_engine/engine/damage_policy.py')
+          t = p.read_text(encoding='utf-8')
+          old = '''    if effect.effect_type != "buff" or (effect.stat or "") not in DIRECT_DAMAGE_STATE_STATS:\n        return False\n    if not _one_shot_lifetime_supported(effect):\n'''
+          new = '''    if effect.effect_type != "buff" or (effect.stat or "") not in DIRECT_DAMAGE_STATE_STATS:\n        return False\n    # Moris captures stack_count reference scaling at the activation boundary.\n    # Fast does not own that captured multiplier yet, so this exact family must\n    # fail closed instead of applying the raw unscaled value.\n    if (\n        effect.parameters.get("scaling") == "stack_count"\n        or "scaling_ref" in effect.parameters\n    ):\n        return False\n    if not _one_shot_lifetime_supported(effect):\n'''
+          if t.count(old) != 1:
+              raise SystemExit('damage_policy anchor changed')
+          p.write_text(t.replace(old, new, 1), encoding='utf-8')
+
+          p = Path('fast_engine/engine/score.py')
+          t = p.read_text(encoding='utf-8')
+          anchor = '''def _is_patternless_unreachable(effect) -> bool:\n    return (\n'''
+          helper = '''def _has_unowned_reference_stack_scaling(effect) -> bool:\n    return (\n        effect.parameters.get("scaling") == "stack_count"\n        or "scaling_ref" in effect.parameters\n    )\n\n\n'''
+          if t.count(anchor) != 1:
+              raise SystemExit('score helper anchor changed')
+          t = t.replace(anchor, helper + anchor, 1)
+          old = '''        if _is_patternless_unreachable(effect):\n            continue\n\n        if effect.effect_type == "weapon_change":\n'''
+          new = '''        if _is_patternless_unreachable(effect):\n            continue\n\n        if (\n            _has_unowned_reference_stack_scaling(effect)\n            and stat in _CADENCE_OR_SHAPE_STATS\n        ):\n            blockers.append(f"cadence:{label}")\n            continue\n\n        if effect.effect_type == "weapon_change":\n'''
+          if t.count(old) != 1:
+              raise SystemExit('score blocker anchor changed')
+          p.write_text(t.replace(old, new, 1), encoding='utf-8')
+
+          Path('fast_engine/tests/test_damage_false_supported_guards.py').write_text('''from __future__ import annotations\n\nimport unittest\nfrom unittest.mock import patch\n\nfrom calculator.buff_manager import BuffManager\nfrom context.spec import build_squad\nfrom fast_engine.engine.compiler import compile_moris_squad\nfrom fast_engine.engine.score import static_score_blockers\n\n_NAMES = ["라피", "폴리", "프로덕트 12", "미란다", "아니스"]\n\ndef _effect(name: str, stat: str, *, target: str, duration: float, timing: str):\n    return {\n        "source": "skill1", "type": "buff", "name": name, "stat": stat,\n        "fixed_value": 100.0, "polarity": "beneficial", "target": target,\n        "duration": duration, "trigger": {"timing": [timing], "condition": []},\n        "scaling": "stack_count", "scaling_ref": "AUDIT reference",\n    }\n\ndef _compiled(raw_effects):\n    mapping = {_NAMES[0]: raw_effects}\n    def fake_char_effects(self, name):\n        return mapping.get(name, [])\n    with patch.object(BuffManager, "char_effects", new=fake_char_effects):\n        return compile_moris_squad(build_squad(_NAMES))\n\nclass FalseSupportedScalingGuardTests(unittest.TestCase):\n    def test_reference_scaled_direct_buff_fails_closed(self):\n        squad = _compiled([_effect("AUDIT scaled atk", "atk_pct", target="all_allies", duration=10.0, timing="burst_cast")])\n        blockers = static_score_blockers(squad)\n        self.assertIn("normal_delivery:라피:AUDIT scaled atk:atk_pct", blockers)\n        self.assertIn("skill_state_delivery:라피:AUDIT scaled atk:atk_pct", blockers)\n\n    def test_reference_scaled_permanent_cadence_buff_is_not_static_folded(self):\n        squad = _compiled([_effect("AUDIT scaled reload", "reload_speed_pct", target="self", duration=-1.0, timing="battle_start")])\n        self.assertIn("cadence:라피:AUDIT scaled reload:reload_speed_pct", static_score_blockers(squad))\n\nif __name__ == "__main__":\n    unittest.main()\n''', encoding='utf-8')
+
+          p = Path('fast_engine/tests/test_damage_charge_reload_cancel_control.py')
+          t = p.read_text(encoding='utf-8')
+          old = '''        self.assertEqual(\n            static_score_blockers(volume),\n            ('cadence:홍련 : 흑영:화무십일홍 · 수라 2:ammo_charge_pct',),\n        )\n'''
+          new = '''        volume_blockers = static_score_blockers(volume)\n        self.assertIn(\n            'cadence:홍련 : 흑영:화무십일홍 · 수라 2:ammo_charge_pct',\n            volume_blockers,\n        )\n        self.assertIn(\n            'cadence:마스트 : 로망틱 메이드:파이레츠 스피릿 2:reload_speed_pct',\n            volume_blockers,\n        )\n        self.assertIn(\n            'skill_state_delivery:마스트 : 로망틱 메이드:파이레츠 스피릿:split_dmg_pct',\n            volume_blockers,\n        )\n'''
+          if t.count(old) != 1:
+              raise SystemExit('charge reload frontier assertion anchor changed')
+          p.write_text(t.replace(old, new, 1), encoding='utf-8')
+
+          p = Path('fast_engine/tests/test_damage_full_charge_hit_charge_speed.py')
+          t = p.read_text(encoding='utf-8')
+          if t.count('        self.assertEqual(cadence, 59)\n') != 1:
+              raise SystemExit('full charge cadence anchor changed')
+          p.write_text(t.replace('        self.assertEqual(cadence, 59)\n', '        self.assertEqual(cadence, 62)\n', 1), encoding='utf-8')
+
+          p = Path('fast_engine/tests/test_damage_stat_applied_charge_speed.py')
+          t = p.read_text(encoding='utf-8')
+          old = '''        self.assertTrue(\n            TriggerDispatcher.stat_applied_dependency_score_safe(\n                squad, split, "event:stat_applied:split_dmg_pct"\n            )\n        )\n'''
+          new = '''        # The only public split provider is Maid Mast's reference-stack\n        # split_dmg_pct. Until Fast owns that captured scaling multiplier, the\n        # downstream stat_applied branch must also fail closed.\n        self.assertFalse(\n            TriggerDispatcher.stat_applied_dependency_score_safe(\n                squad, split, "event:stat_applied:split_dmg_pct"\n            )\n        )\n'''
+          if t.count(old) != 1:
+              raise SystemExit('Brady dependency assertion anchor changed')
+          t = t.replace(old, new, 1)
+          t = t.replace('        self.assertNotIn("cadence:브래디:나누고 싶은 맛:charge_speed_pct", blockers)\n', '        self.assertIn("cadence:브래디:나누고 싶은 맛:charge_speed_pct", blockers)\n', 1)
+          t = t.replace('        self.assertEqual(cadence, 59)\n', '        self.assertEqual(cadence, 62)\n', 1)
+          old_matches = '''        self.assertEqual(\n            matches,\n            {("브래디", "나누고 싶은 맛", "event:stat_applied:split_dmg_pct")},\n        )\n'''
+          if t.count(old_matches) != 1:
+              raise SystemExit('Brady matches anchor changed')
+          t = t.replace(old_matches, '        self.assertEqual(matches, set())\n', 1)
+          old_activation = '''        self.assertFalse(fast_stay)\n        self.assertGreater(len(fast_split), 1)\n        self.assertEqual(fast_split, moris_split)\n        self.assertAlmostEqual(fast_split[0], 3.2, places=12)\n'''
+          new_activation = '''        self.assertFalse(fast_stay)\n        self.assertFalse(fast_split)\n        self.assertGreater(len(moris_split), 1)\n        self.assertIn(\n            "cadence:브래디:나누고 싶은 맛:charge_speed_pct",\n            static_score_blockers(squad),\n        )\n'''
+          if t.count(old_activation) != 1:
+              raise SystemExit('Brady activation anchor changed')
+          p.write_text(t.replace(old_activation, new_activation, 1), encoding='utf-8')
+          PY
+      - name: Focused safety regression
+        run: |
+          python -m unittest fast_engine.tests.test_damage_false_supported_guards
+          python -m unittest fast_engine.tests.test_damage_stat_applied_charge_speed
+          python -m unittest fast_engine.tests.test_damage_charge_reload_cancel_control
+          python -m unittest fast_engine.tests.test_damage_full_charge_hit_charge_speed
+      - name: Full Fast regression
+        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
+      - name: Recompute public frontier
+        run: |
+          python - <<'PY'
+          from collections import Counter
+          from context import spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.research.public_ranking_probe import _source_corpus
+          unique={}
+          for members,source in _source_corpus(): unique.setdefault(tuple(members),source)
+          family=Counter(); rows=[]
+          for members,source in unique.items():
+              blockers=static_score_blockers(compile_moris_squad(spec.build_squad(list(members))))
+              rows.append((source,blockers))
+              for b in blockers: family[b.split(':',1)[0]] += 1
+          certified=sum(not b for _,b in rows)
+          print('FRONTIER',len(unique),'CERTIFIED',certified,'FAMILIES',dict(family))
+          for source,b in rows:
+              if source in {'레이드_볼륨','레이드_앨리스브래디','스쿼드4','스쿼드3','레이드_소다','레이드_루주','레이드_브리드디젤'}:
+                  print('ROW',source,len(b),b)
+          assert len(unique)==23
+          assert certified==2
+          assert family['cadence']==62
+          volume=next(b for source,b in rows if source=='레이드_볼륨')
+          assert len(volume)>1 and any('마스트 : 로망틱 메이드' in x for x in volume)
+          PY
+      - name: Commit guard and clean temporary workflows
+        run: |
+          rm -f .github/workflows/tmp-close-scaling-hole.yml
+          rm -f .github/workflows/tmp-close-reference-stack-hole.yml
+          rm -f .github/workflows/tmp-finalize-reference-stack-guard.yml
+          git diff --check
+          git config user.name "asdadas1113"
+          git config user.email "crony06@gmail.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Fast: fail closed on reference stack scaling"
+          git push origin HEAD:fast-engine-phase2-20260901
