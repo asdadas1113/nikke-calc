@@ -11,49 +11,38 @@ permissions:
   contents: write
 
 jobs:
-  promote-helm-periodic:
+  finalize-helm-periodic:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Apply exact gated candidate
+      - name: Write checkpoint docs and handoff
+        run: PYTHONPATH=. python .github/scripts/tmp_helm_finalize.py
+      - name: Validate docs and permanent regression
         run: |
-          PYTHONPATH=. python .github/scripts/tmp_next_slice_compare.py
-          PYTHONPATH=. python .github/scripts/tmp_helm_refine_candidate.py
-          PYTHONPATH=. python .github/scripts/tmp_helm_periodic_write_tests.py
-      - name: Focused production regressions
-        run: |
+          python -m context.doclint
           python -m unittest -v \
             fast_engine.tests.test_damage_periodic_enemy_received \
-            fast_engine.tests.test_damage_periodic_self_crit \
-            fast_engine.tests.test_damage_state \
-            fast_engine.tests.test_damage_spawn_lifecycle \
-            fast_engine.tests.test_periodic_runtime
-      - name: Full Fast production regressions
-        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
-      - name: Verify production diff
+            fast_engine.tests.test_damage_periodic_self_crit
+      - name: Remove temporary investigation files
         run: |
-          git add \
-            fast_engine/engine/dispatcher.py \
-            fast_engine/engine/score.py \
-            fast_engine/tests/test_damage_periodic_self_crit.py \
-            fast_engine/tests/test_damage_periodic_enemy_received.py
-          git diff --cached --check
-          printf '%s\n' \
-            fast_engine/engine/dispatcher.py \
-            fast_engine/engine/score.py \
-            fast_engine/tests/test_damage_periodic_enemy_received.py \
-            fast_engine/tests/test_damage_periodic_self_crit.py \
-            | sort > /tmp/expected.txt
-          git diff --cached --name-only | sort > /tmp/actual.txt
-          diff -u /tmp/expected.txt /tmp/actual.txt
-          test -z "$(git diff --name-only)"
-          test -z "$(git ls-files --others --exclude-standard)"
-      - name: Commit production semantic slice
+          rm -f .github/scripts/tmp_next_slice_compare.py
+          rm -f .github/scripts/tmp_helm_refine_candidate.py
+          rm -f .github/scripts/tmp_helm_periodic_write_tests.py
+          rm -f .github/scripts/tmp_helm_finalize.py
+          rm -f .github/workflows/tmp-next-slice-compare.yml
+          test "$(find .github/workflows -maxdepth 1 -type f -printf '%f\n' | sort | tr '\n' ' ')" = "ci.yml pages.yml "
+      - name: Verify finalizer diff
+        run: |
+          git diff --check
+          git status --short
+      - name: Commit docs and cleanup
         run: |
           git config user.name 'asdadas1113'
           git config user.email 'crony06@gmail.com'
-          git commit -m 'fast: certify periodic enemy received damage'
+          git add -A
+          git diff --cached --check
+          git commit -m 'docs: finalize periodic enemy checkpoint'
           git push origin HEAD:fast-engine-phase2-20260901
