@@ -1,0 +1,50 @@
+name: tmp-find-safe-score-fixture
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+    paths: [.github/workflows/tmp-find-safe-score-fixture.yml]
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Probe simple five-member fixtures
+        run: |
+          python - <<'PY'
+          from itertools import combinations
+          from context.spec import build_squad
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_normal_score_blockers, static_score_blockers
+
+          pool=['라피','아니스','델타','프로덕트 08','프로덕트 12','솔져 EG','솔져 FA','솔져 OW','iDoll 플라워','iDoll 오션','iDoll 썬','미하라']
+          available=[]
+          for name in pool:
+              try:
+                  build_squad([name])
+                  available.append(name)
+              except Exception as exc:
+                  print('UNAVAILABLE',name,type(exc).__name__,exc)
+          print('AVAILABLE',available)
+          found=0
+          for names in combinations(available,5):
+              try:
+                  squad=build_squad(list(names))
+                  compiled=compile_moris_squad(squad)
+                  normal=static_normal_score_blockers(compiled)
+                  total=static_score_blockers(compiled)
+              except Exception as exc:
+                  print('ERROR',names,type(exc).__name__,exc)
+                  continue
+              if not normal and not total:
+                  print('SAFE',names)
+                  found+=1
+                  if found>=10: break
+              elif found==0 and len(total)<=2:
+                  print('NEAR',names,'NORMAL',normal,'TOTAL',total)
+          print('FOUND',found)
+          PY
