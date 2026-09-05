@@ -358,18 +358,30 @@ Ada 두 public team에서 Ada 자체 blocker는 모두 제거됐지만 다른 bl
 
 ---
 
-## 9. CI / cleanup 계약
+## 9. CI / cleanup 완료
 
 이번 Brady checkpoint의 production semantic commit은 `8880049678c9270de8d7b98c456b93fa00a67502`다.
 
-finalizer는 `STAT_APPLIED_CHARGE_SPEED_CHECKPOINT_20260905.md`, handoff, `LESSONS.md`를 갱신하고 다음 조사용 파일을 같은 cleanup commit에서 제거한다.
+cleanup finalizer commit:
 
-- `.github/workflows/tmp-frontier-next-20260905.yml`
-- `.github/scripts/tmp_brady_stat_applied_ab.py`
-- `.github/scripts/tmp_brady_write_tests.py`
+- `e467103c992786d8259229840005e1d672284bb6`
 
-cleanup 뒤 `.github/workflows`에는 `ci.yml`, `pages.yml`만 남겨야 한다.
+cleanup 뒤 `.github/workflows`에는 `ci.yml`, `pages.yml`만 남았다. recursive CI가 생성되지 않아 docs-only metadata commit `f55579ffd586eee15fa21b79c754b27d3e2959d5`로 canonical CI를 직접 실행했다.
 
-bot cleanup commit은 recursive push CI를 만들지 않으므로, user-authored checkpoint metadata commit으로 canonical CI를 다시 실행한다. 최종 run/result는 `STAT_APPLIED_CHARGE_SPEED_CHECKPOINT_20260905.md`의 canonical CI 절에 기록한다.
+canonical CI:
+
+- run `33931819590`
+- job `101211793772`
+- result `success`
+- Fast damage `151/151`
+- calculator `137/137` (1 skip)
+- optimizer `374/374`
+- bridge `31/31` (1 skip)
+- site `385/385`
+- golden `29/29`
+
+따라서 Brady stat-applied checkpoint는 production / regression / canonical CI까지 닫혔다.
+
+다음 단일 checkpoint는 section 7대로 cadence `63` unique-23 frontier fresh audit에서 고른다.
 
 `master`는 그대로 둔다.

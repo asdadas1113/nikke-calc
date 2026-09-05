@@ -180,4 +180,22 @@ promotion 전 실패들은 production semantic failure가 아니었다. 첫 시�
 
 production semantic promotion 자체는 runner에서 full Fast `258/258`까지 통과했다.
 
-cleanup 뒤 `.github/workflows`를 `ci.yml`, `pages.yml`만 남긴 clean HEAD에서 canonical CI를 다시 실행한다. 이 절의 최종 run/job/count는 clean canonical 결과가 확보된 뒤 기록한다.
+cleanup commit:
+
+- `e467103c992786d8259229840005e1d672284bb6` — docs/cleanup finalizer
+- cleanup 뒤 `.github/workflows`는 `ci.yml`, `pages.yml`만 남았다.
+
+cleanup commit은 GitHub Actions token push라 recursive canonical CI가 생성되지 않았다. 따라서 docs-only metadata commit `f55579ffd586eee15fa21b79c754b27d3e2959d5`로 동일 production tree의 canonical CI를 직접 실행했다.
+
+- run: `33931819590`
+- job: `101211793772`
+- workflow conclusion: `success`
+- doclint: success
+- Fast — damage: `151/151`
+- calculator: `137/137` (1 skip)
+- optimizer: `374/374`
+- bridge: `31/31` (1 skip)
+- site: `385/385`
+- golden snapshot: `29/29`
+
+Brady 신규 `test_damage_stat_applied_charge_speed.py`는 canonical `test_damage*.py` discovery에 포함된 상태로 검증됐다.
