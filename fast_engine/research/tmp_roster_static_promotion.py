@@ -8,6 +8,8 @@ from fast_engine.engine.score import static_score_blockers
 
 source = []
 for label, cfg in snapshot.SQUADS.items():
+    if str(label).startswith('지그_'):
+        continue
     members = tuple(str(m) for m in cfg['members'])
     if len(members) != 5 or any(m.startswith('test_') for m in members):
         continue
