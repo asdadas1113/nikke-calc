@@ -53,5 +53,23 @@ class FalseSupportedScalingGuardTests(unittest.TestCase):
         self.assertIn("normal_delivery:라피:AUDIT conditional:atk_pct", blockers)
         self.assertIn("skill_state_delivery:라피:AUDIT conditional:atk_pct", blockers)
 
+    def test_unowned_remove_of_scored_buff_fails_closed(self):
+        provider = {
+            "source": "skill1", "type": "buff", "name": "AUDIT state",
+            "stat": "atk_pct", "fixed_value": 100.0,
+            "polarity": "beneficial", "target": "self", "duration": -1.0,
+            "trigger": {"timing": ["battle_start"], "condition": []},
+        }
+        remover = {
+            "source": "skill1", "type": "instant", "name": "AUDIT remove",
+            "stat": "remove_named_buff", "target": "self",
+            "target_effect": "AUDIT state",
+            "trigger": {"timing": ["full_burst_start"], "condition": []},
+        }
+        blockers = static_score_blockers(_compiled([provider, remover]))
+        self.assertIn(
+            "normal_state:라피:AUDIT remove:remove_named_buff", blockers
+        )
+
 if __name__ == "__main__":
     unittest.main()

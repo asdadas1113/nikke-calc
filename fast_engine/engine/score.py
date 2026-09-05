@@ -827,6 +827,65 @@ def _direct_damage_buff_score_supported(squad: CompiledSquad, effect) -> bool:
     )
 
 
+def _unsupported_remove_named_buff_changes_scored_state(
+    squad: CompiledSquad,
+    effect,
+    damage_sink,
+) -> bool:
+    """Return true only when an unowned remover can alter a state Fast scores.
+
+    This is deliberately dependency-aware rather than a blanket state-mutator
+    ban. Marker-only removals stay out of the blocker set; removals of a direct
+    damage state that Fast otherwise accepts must fail closed until their
+    mutation semantics are owned.
+    """
+
+    if (effect.stat or "") != "remove_named_buff" or effect.effect_type != "instant":
+        return False
+    if _is_patternless_unreachable(effect):
+        return False
+    if damage_sink.supports_state_operation(effect):
+        return False
+    if (
+        TriggerDispatcher._self_stack_remove_shape_supported(effect)
+        and TriggerDispatcher._stack_reach_source_shape_supported(squad, effect)
+    ):
+        return False
+
+    name = effect.parameters.get("target_effect")
+    if not isinstance(name, str) or not name:
+        return False
+    providers = tuple(
+        provider
+        for provider in squad.effects
+        if provider.effect_id != effect.effect_id and provider.name == name
+    )
+    if not providers:
+        return False
+
+    mutator_enemy = effect.target_spec.mode.value == "enemy"
+    mutator_targets = set(_possible_ally_targets(squad, effect))
+    for provider in providers:
+        if provider.effect_type != "buff":
+            continue
+        if (provider.stat or "") not in DIRECT_DAMAGE_STATE_STATS:
+            continue
+        if not (
+            _direct_damage_buff_score_supported(squad, provider)
+            or _is_score_safe_fixed_periodic(provider)
+        ):
+            continue
+        provider_enemy = provider.target_spec.mode.value == "enemy"
+        if mutator_enemy or provider_enemy:
+            if mutator_enemy and provider_enemy:
+                return True
+            continue
+        provider_targets = set(_possible_ally_targets(squad, provider))
+        if mutator_targets & provider_targets:
+            return True
+    return False
+
+
 def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
     blockers: list[str] = []
     for actor, member in enumerate(squad.members):
@@ -926,6 +985,15 @@ def static_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
     damage_sink = SimpleDamageScoreSink(
         squad, EnemyStaticProfile(defense=0.0, duration=1.0)
     )
+    for effect in squad.effects:
+        if _unsupported_remove_named_buff_changes_scored_state(
+            squad, effect, damage_sink
+        ):
+            owner = squad.members[effect.actor].name
+            blockers.append(
+                f"normal_state:{owner}:{effect.name or 'remove_named_buff'}:remove_named_buff"
+            )
+
     for effect in squad.effects:
         if (
             effect.effect_type == "damage"
