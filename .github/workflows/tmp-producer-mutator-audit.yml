@@ -13,96 +13,44 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Audit public remove_named_buff dependencies
+      - name: Trace Arcana producer/remover ordering
         run: |
           python - <<'PY'
-          from __future__ import annotations
-          import json
           from context import snapshot, spec
+          from calculator.timeline import simulate
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.score import static_score_blockers
-          from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.engine.damage_policy import DIRECT_DAMAGE_STATE_STATS, is_direct_damage_buff_runtime_supported
+          from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.burst_runtime import BurstRuntime
 
-          def trigger_rows(effect):
-              return [
-                  {
-                      'event_key': r.event_key,
-                      'mode': getattr(r.mode, 'value', str(r.mode)),
-                      'threshold': r.threshold,
-                      'raw': getattr(r, 'raw', None),
-                  }
-                  for r in effect.triggers
-              ]
+          members = list(snapshot.SQUADS['스쿼드3']['members'])
+          squad = spec.build_squad(members)
+          compiled = compile_moris_squad(squad)
+          actor = members.index('아르카나 : 포츈 메이트')
+          names = {'추억 남기기', '추억 남기기 3', '쌓여가는 사진첩 2', '쌓여가는 사진첩 3'}
+          print('MEMBERS', members)
+          for e in compiled.members[actor].effects:
+              if e.name in names:
+                  print('EFFECT', e.effect_id, e.actor_effect_index, e.name, e.effect_type, e.stat, e.duration, e.max_stack,
+                        [(r.raw, r.event_key, r.mode.value) for r in e.triggers],
+                        [r.raw for r in e.condition_rules], e.parameters)
 
-          def condition_rows(effect):
-              return [
-                  {
-                      'mode': getattr(r.mode, 'value', str(r.mode)),
-                      'state': getattr(r, 'state_name', None),
-                      'raw': getattr(r, 'raw', None),
-                  }
-                  for r in effect.condition_rules
-              ]
+          cfg = {'duration': 45.0, 'first_burst_time': 3.0, 'rng_mode': 'expected'}
+          moris = simulate(squad, config=cfg, seed=42, verbose=True)
+          print('MORIS_BURSTS')
+          for row in moris.log.burst_log:
+              print(row)
+          print('MORIS_BUFF_EVENTS')
+          for row in moris.log.buff_events:
+              if row.name in {'추억 남기기', '추억 남기기 3'}:
+                  print(row)
+          print('MORIS_INSTANT_EVENTS')
+          for row in moris.log.instant_events:
+              if row.name in {'쌓여가는 사진첩 2', '쌓여가는 사진첩 3'}:
+                  print(row)
 
-          seen = set()
-          total = 0
-          for source_name, case in snapshot.SQUADS.items():
-              if str(source_name).startswith('지그_'):
-                  continue
-              members = tuple(str(m) for m in case['members'])
-              if len(members) != 5 or any(m.startswith('test_') for m in members):
-                  continue
-              if members in seen:
-                  continue
-              seen.add(members)
-              compiled = compile_moris_squad(spec.build_squad(list(members)))
-              blockers = static_score_blockers(compiled)
-              for remover in compiled.effects:
-                  if (remover.stat or '') != 'remove_named_buff':
-                      continue
-                  total += 1
-                  target_effect = remover.parameters.get('target_effect')
-                  providers = [p for p in compiled.effects if p.name == target_effect and p.effect_id != remover.effect_id]
-                  owner = compiled.members[remover.actor].name
-                  row = {
-                      'source': str(source_name),
-                      'members': members,
-                      'remover': {
-                          'owner': owner,
-                          'name': remover.name,
-                          'effect_type': remover.effect_type,
-                          'target_effect': target_effect,
-                          'target': remover.target,
-                          'target_mode': remover.target_spec.mode.value,
-                          'duration': remover.duration,
-                          'max_stack': remover.max_stack,
-                          'triggers': trigger_rows(remover),
-                          'conditions': condition_rows(remover),
-                          'parameters': dict(remover.parameters),
-                          'executable': TriggerDispatcher.is_executable_effect(remover),
-                      },
-                      'matching_blockers': [b for b in blockers if f':{owner}:{remover.name or "remove_named_buff"}:remove_named_buff' in b],
-                      'providers': [],
-                  }
-                  for p in providers:
-                      row['providers'].append({
-                          'owner': compiled.members[p.actor].name,
-                          'name': p.name,
-                          'stat': p.stat,
-                          'effect_type': p.effect_type,
-                          'value': p.value,
-                          'target': p.target,
-                          'target_mode': p.target_spec.mode.value,
-                          'duration': p.duration,
-                          'max_stack': p.max_stack,
-                          'triggers': trigger_rows(p),
-                          'conditions': condition_rows(p),
-                          'parameters': dict(p.parameters),
-                          'executable': TriggerDispatcher.is_executable_effect(p),
-                          'direct_damage_stat': (p.stat or '') in DIRECT_DAMAGE_STATE_STATS,
-                          'direct_damage_runtime_supported': is_direct_damage_buff_runtime_supported(p),
-                      })
-                  print('MUTATOR_AUDIT ' + json.dumps(row, ensure_ascii=False, sort_keys=True, default=str))
-          print(f'MUTATOR_AUDIT_TOTAL unique_memberships={len(seen)} removers={total}')
+          policy = compile_burst_policy(squad, compiled, {'duration': 45.0, 'first_burst_time': 3.0})
+          fast = BurstRuntime(compiled, policy).run(duration=45.0)
+          print('FAST_CASTS', fast.casts)
+          print('FAST_STARTS', fast.full_burst_starts)
+          print('FAST_ENDS', fast.full_burst_ends)
           PY
