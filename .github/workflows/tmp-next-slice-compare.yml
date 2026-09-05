@@ -18,7 +18,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Apply runner-only Helm candidate and semantic trace
+      - name: Apply runner-only Helm candidate and semantic trace v2
         run: PYTHONPATH=. python .github/scripts/tmp_next_slice_compare.py
       - name: Diff sanity
         run: git diff --check
