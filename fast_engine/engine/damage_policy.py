@@ -107,14 +107,19 @@ _SAFE_EVENT_KEYS = frozenset({
 })
 
 # Bullet-lifetime support is deliberately limited to controller events that happen
-# before the recipient weapon shot. Weapon-bound activation needs separate
-# same-shot consumption semantics and remains fail-closed.
+# before the recipient weapon shot, plus raw post-shot full_charge_hit. Moris
+# activates full_charge_hit after damage and excludes a just-created lifetime from
+# same-shot consumption; Fast dynamic charge likewise scores first, dispatches the
+# hit signal, and consumes only lifetimes that existed before that boundary. Thus a
+# lifetime created here starts with the following shot. Other weapon-bound
+# activation remains fail-closed.
 _SAFE_BULLET_LIFETIME_EVENT_KEYS = frozenset({
     "battle_start",
     "burst_cast",
     "full_burst_start",
     "full_burst_end",
     "event:ally_burst_cast",
+    "full_charge_hit",
 })
 
 
@@ -160,7 +165,7 @@ def _one_shot_lifetime_supported(effect) -> bool:
 
     The historical helper name is kept for callers/tests. The certified lane now
     accepts any positive integer N while retaining the same target, stack and
-    pre-shot trigger restrictions used by the original one-shot implementation.
+    trigger restrictions used by the original one-shot implementation.
     """
 
     raw = effect.parameters.get("duration_bullets")
