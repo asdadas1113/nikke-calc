@@ -1,0 +1,123 @@
+name: tmp-close-same-timestamp-ordering
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+    paths:
+      - .github/workflows/tmp-close-same-timestamp-ordering.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Add cross-actor post-shot fail-closed guard
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p=Path('fast_engine/engine/score.py')
+          t=p.read_text(encoding='utf-8')
+          anchor='''def _unsupported_remove_named_buff_changes_scored_state(\n'''
+          helper='''_POST_SHOT_CROSS_ACTOR_EVENT_KEYS = frozenset({\n    "on_attack",\n    "hit_count",\n    "pellet_hit",\n    "full_charge_hit",\n    "last_bullet",\n    "core_hit",\n    "squad_body_hit",\n})\n\n\ndef _post_shot_cross_actor_score_unsafe(squad: CompiledSquad, effect) -> bool:\n    """Fail closed when a post-shot state can affect later Moris actors.\n\n    Moris processes weapon actors in roster order inside one frame, so a post-shot\n    buff from actor N may affect same-frame shots from actors N+1..end. Fast's\n    static observer currently consumes every actor's shot at t before phase-30\n    trigger dispatch, flattening that transaction. Self-only and earlier-only\n    targets are safe from this specific ordering hole.\n    """\n\n    if effect.effect_type != "buff" or _is_patternless_unreachable(effect):\n        return False\n    if not TriggerDispatcher.is_executable_effect(effect):\n        return False\n    if not _direct_damage_buff_score_supported(squad, effect):\n        return False\n    if not any(\n        (rule.event_key or "") in _POST_SHOT_CROSS_ACTOR_EVENT_KEYS\n        or (rule.event_key or "").startswith("weapon_hit:")\n        for rule in effect.triggers\n    ):\n        return False\n\n    if effect.target_spec.mode.value == "enemy":\n        return effect.actor < len(squad.members) - 1\n    return any(\n        target > effect.actor\n        for target in _possible_ally_targets(squad, effect)\n    )\n\n\n'''
+          if t.count(anchor)!=1:
+              raise SystemExit('same-timestamp helper anchor changed')
+          t=t.replace(anchor,helper+anchor,1)
+
+          old='''        if _is_patternless_unreachable(effect):\n            continue\n\n        if (\n            _has_unowned_reference_stack_scaling(effect)\n'''
+          new='''        if _is_patternless_unreachable(effect):\n            continue\n\n        if _post_shot_cross_actor_score_unsafe(squad, effect):\n            blockers.append(\n                f"normal_state:{owner}:{effect.name or stat}:same_timestamp_actor_order"\n            )\n\n        if (\n            _has_unowned_reference_stack_scaling(effect)\n'''
+          if t.count(old)!=1:
+              raise SystemExit('static normal insertion anchor changed')
+          p.write_text(t.replace(old,new,1),encoding='utf-8')
+
+          p=Path('fast_engine/tests/test_damage_false_supported_guards.py')
+          t=p.read_text(encoding='utf-8')
+          anchor='''    def test_rank_target_with_same_event_atk_mutation_fails_closed(self):\n'''
+          test='''    def test_cross_actor_post_shot_buff_fails_closed(self):\n        effect = {\n            "source": "skill1", "type": "buff", "name": "AUDIT post shot",\n            "stat": "atk_pct", "fixed_value": 100.0,\n            "polarity": "beneficial", "target": "all_allies",\n            "duration": 10.0,\n            "trigger": {"timing": ["hit_count:1"], "condition": []},\n        }\n        blockers = static_score_blockers(_compiled([effect]))\n        self.assertIn(\n            "normal_state:라피:AUDIT post shot:same_timestamp_actor_order",\n            blockers,\n        )\n\n    def test_self_post_shot_buff_does_not_get_cross_actor_blocker(self):\n        effect = {\n            "source": "skill1", "type": "buff", "name": "AUDIT self post shot",\n            "stat": "atk_pct", "fixed_value": 100.0,\n            "polarity": "beneficial", "target": "self",\n            "duration": 10.0,\n            "trigger": {"timing": ["hit_count:1"], "condition": []},\n        }\n        blockers = static_score_blockers(_compiled([effect]))\n        self.assertNotIn(\n            "normal_state:라피:AUDIT self post shot:same_timestamp_actor_order",\n            blockers,\n        )\n\n'''
+          if t.count(anchor)!=1:
+              raise SystemExit('false-supported rank anchor changed')
+          p.write_text(t.replace(anchor,test+anchor,1),encoding='utf-8')
+          PY
+
+      - name: Update frontier expectations
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          for name in (
+              'test_damage_full_charge_bullet_lifetime.py',
+              'test_damage_full_charge_hit_charge_speed.py',
+              'test_damage_stat_applied_charge_speed.py',
+          ):
+              p=Path('fast_engine/tests')/name
+              t=p.read_text(encoding='utf-8')
+              old='self.assertEqual(certified, 1)'
+              if t.count(old)!=1:
+                  raise SystemExit(f'{name}: certified=1 anchor changed ({t.count(old)})')
+              p.write_text(t.replace(old,'self.assertEqual(certified, 0)',1),encoding='utf-8')
+
+          p=Path('fast_engine/tests/test_damage_moris_frame_timing.py')
+          t=p.read_text(encoding='utf-8')
+          start=t.index('    def test_def55_near_tie_withdraws_unowned_miranda_side(self):\n')
+          end=t.index('\n\n\nif __name__ == "__main__":',start)
+          new='''    def test_def55_near_tie_both_sides_now_fail_closed(self):\n        mm = (\n            "미란다", "브리드 : 사일런트 트랙", "헬름", "루주", "미하라 : 본딩 체인",\n        )\n        rhq = (\n            "라피 : 레드 후드", "레드 후드", "프리카", "민트", "퀀시 : 이스케이프 퀸",\n        )\n        duration = 180.0\n        cfg = {"duration": duration, "first_burst_time": 3.0, "rng_mode": "expected"}\n        profile = EnemyStaticProfile(\n            defense=55000.0,\n            element="작열",\n            core_uptime=1.0,\n            core_px=10.0,\n            duration=duration,\n        )\n\n        mm_squad = spec.build_squad(list(mm))\n        mm_compiled = compile_moris_squad(mm_squad)\n        mm_blockers = static_score_blockers(mm_compiled)\n        self.assertIn("normal_state:미란다:파워 업!:rank_target_timing", mm_blockers)\n        mm_policy = compile_burst_policy(mm_squad, mm_compiled, dict(cfg))\n        with self.assertRaises(NotImplementedError):\n            score_static_squad(mm_compiled, mm_policy, profile, duration=duration)\n\n        rhq_squad = spec.build_squad(list(rhq))\n        rhq_compiled = compile_moris_squad(rhq_squad)\n        rhq_blockers = static_score_blockers(rhq_compiled)\n        self.assertIn(\n            "normal_state:프리카:무대, 시작할게. 3:same_timestamp_actor_order",\n            rhq_blockers,\n        )\n        rhq_policy = compile_burst_policy(rhq_squad, rhq_compiled, dict(cfg))\n        with self.assertRaises(NotImplementedError):\n            score_static_squad(rhq_compiled, rhq_policy, profile, duration=duration)\n'''
+          p.write_text(t[:start]+new+t[end:],encoding='utf-8')
+          PY
+
+      - name: Inventory remaining certification assumptions
+        run: |
+          grep -R -nE 'certified, 1|레이드_레드후드퀀시|CERTIFIED' fast_engine/tests || true
+
+      - name: Focused adversarial regression
+        run: |
+          python -m unittest fast_engine.tests.test_damage_false_supported_guards
+          python -m unittest fast_engine.tests.test_damage_moris_frame_timing
+
+      - name: Full Fast regression
+        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
+
+      - name: Verify public frontier
+        run: |
+          python - <<'PY'
+          from collections import Counter
+          from context import spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.research.public_ranking_probe import _source_corpus
+          unique={}
+          for members,source in _source_corpus(): unique.setdefault(tuple(members),source)
+          rows=[]; family=Counter()
+          for members,source in unique.items():
+              blockers=static_score_blockers(compile_moris_squad(spec.build_squad(list(members))))
+              rows.append((source,blockers))
+              for b in blockers: family[b.split(':',1)[0]]+=1
+          certified=[source for source,b in rows if not b]
+          red=next(b for source,b in rows if source=='레이드_레드후드퀀시')
+          print('FRONTIER',len(unique),'CERTIFIED',certified,'FAMILIES',dict(family))
+          print('RED',red)
+          assert certified==[], certified
+          assert 'normal_state:프리카:무대, 시작할게. 3:same_timestamp_actor_order' in red, red
+          assert not any('퀀시 : 이스케이프 퀸:루트 탐색 1단계 2:same_timestamp_actor_order' in b for b in red), red
+          PY
+
+      - name: Commit ordering guard and clean temporary workflows
+        run: |
+          rm -f .github/workflows/tmp-audit-same-timestamp-ordering.yml
+          rm -f .github/workflows/tmp-close-same-timestamp-ordering.yml
+          git diff --check
+          git config user.name "asdadas1113"
+          git config user.email "crony06@gmail.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Fast: fail closed on cross-actor post-shot ordering"
+          git push origin HEAD:fast-engine-phase2-20260901
