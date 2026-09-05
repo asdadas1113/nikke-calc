@@ -1,4 +1,4 @@
-name: tmp-reference-stack-probe
+name: tmp-reference-stack-restore
 
 on:
   push:
@@ -7,74 +7,384 @@ on:
     paths:
       - .github/workflows/tmp-reference-stack-probe.yml
 
+permissions:
+  contents: write
+
 jobs:
-  probe:
+  restore:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Probe public reference-stack surface
+
+      - name: Implement finite reference-stack capture
+        run: |
+          cat > fast_engine/engine/reference_stack.py <<'PY'
+          from __future__ import annotations
+
+
+          def finite_reference_stack_capture_shape(effect) -> bool:
+              """Return whether one buff has Moris' finite captured-ref shape.
+
+              Provider ownership is intentionally a squad-level decision in the
+              dispatcher/score layer.  This helper only recognizes the local
+              effect shape so gauge refs, permanent live refs, DoTs and stacked
+              consumers do not become executable by accident.
+              """
+
+              ref = effect.parameters.get("scaling_ref")
+              duration = effect.duration
+              max_stack = effect.max_stack if effect.max_stack is not None else 1.0
+              return (
+                  effect.effect_type == "buff"
+                  and effect.parameters.get("scaling") == "stack_count"
+                  and isinstance(ref, str)
+                  and bool(ref)
+                  and set(effect.parameters) == {"scaling", "scaling_ref"}
+                  and duration is not None
+                  and float(duration) > 0.0
+                  and float(max_stack) == 1.0
+                  and effect.max_trigger is None
+                  and effect.tick_interval is None
+              )
+          PY
+
+          python - <<'PY'
+          from pathlib import Path
+
+          # effects.py: keep own stack and captured reference multiplier separate.
+          p = Path('fast_engine/engine/effects.py')
+          t = p.read_text(encoding='utf-8')
+
+          old = '''    expires_at: float\n    generation: int\n\n    def active(self, now: float) -> bool:\n'''
+          new = '''    expires_at: float\n    generation: int\n    scaling_stack: float | None = None\n\n    def active(self, now: float) -> bool:\n'''
+          if t.count(old) != 1:
+              raise SystemExit('ActiveEffect anchor changed')
+          t = t.replace(old, new, 1)
+
+          old = '''        "_bullet_remaining", "_pending_target", "_lazy_target_resolver",\n        "_resolving_lazy_target",\n    )\n'''
+          new = '''        "_bullet_remaining", "_pending_target", "_lazy_target_resolver",\n        "_resolving_lazy_target", "_finite_reference_stack_effect_ids",\n    )\n'''
+          if t.count(old) != 1:
+              raise SystemExit('effects slots anchor changed')
+          t = t.replace(old, new, 1)
+
+          old = '''        self._lazy_target_resolver: Callable[["CompiledEffect", float, float], tuple[int, ...]] | None = None\n        self._resolving_lazy_target = False\n\n    def attach_lazy_target_resolver(\n'''
+          new = '''        self._lazy_target_resolver: Callable[["CompiledEffect", float, float], tuple[int, ...]] | None = None\n        self._resolving_lazy_target = False\n        self._finite_reference_stack_effect_ids: frozenset[int] = frozenset()\n\n    def enable_finite_reference_stack_capture(self, effect_ids: Iterable[int]) -> None:\n        \"\"\"Enable only squad-proven finite named-stack reference consumers.\"\"\"\n\n        self._finite_reference_stack_effect_ids = frozenset(int(eid) for eid in effect_ids)\n\n    def _reference_named_stack_optional(\n        self, source_actor: int, name: str, *, now: float\n    ) -> float | None:\n        if not self.has_named_state(int(source_actor), name, now=now):\n            return None\n        return self.named_stack(int(source_actor), name, now=now)\n\n    def _capture_reference_stack(self, effect: \"CompiledEffect\", now: float) -> float | None:\n        if effect.effect_id not in self._finite_reference_stack_effect_ids:\n            return None\n        ref = effect.parameters.get(\"scaling_ref\")\n        if not isinstance(ref, str) or not ref:\n            return None\n        return self._reference_named_stack_optional(effect.actor, ref, now=now)\n\n    def effect_value_scale(\n        self, effect: \"CompiledEffect\", active: ActiveEffect, *, now: float\n    ) -> float:\n        \"\"\"Return Moris' own-stack or captured reference-stack multiplier.\"\"\"\n\n        if effect.effect_id not in self._finite_reference_stack_effect_ids:\n            return active.stacks\n        if active.scaling_stack is not None:\n            return active.scaling_stack\n        # Moris leaves scaling_stack=None when the reference is absent at the\n        # activation boundary, then falls back to a live ref_count lookup.\n        ref = effect.parameters.get(\"scaling_ref\")\n        if not isinstance(ref, str) or not ref:\n            return 0.0\n        live = self._reference_named_stack_optional(active.source_actor, ref, now=now)\n        return 0.0 if live is None else live\n\n    def _touch_live_reference_consumers(\n        self, source_actor: int, name: str, *, now: float\n    ) -> None:\n        \"\"\"Invalidate only finite refs whose activation captured no provider.\"\"\"\n\n        if not name:\n            return\n        for active in tuple(self._active.values()):\n            if (\n                active.effect_id not in self._finite_reference_stack_effect_ids\n                or active.source_actor != int(source_actor)\n                or active.scaling_stack is not None\n                or not active.active(now)\n            ):\n                continue\n            effect = self._effects[active.effect_id]\n            if effect.parameters.get(\"scaling_ref\") == name:\n                self.state.touch(active.target, StateDomain.EFFECT)\n\n    def attach_lazy_target_resolver(\n'''
+          if t.count(old) != 1:
+              raise SystemExit('effects init anchor changed')
+          t = t.replace(old, new, 1)
+
+          old = '''        active = ActiveEffect(\n            effect.effect_id,\n            target,\n            effect.actor,\n            cohort,\n            stacks,\n            expires,\n            generation,\n        )\n'''
+          new = '''        active = ActiveEffect(\n            effect.effect_id,\n            target,\n            effect.actor,\n            cohort,\n            stacks,\n            expires,\n            generation,\n            self._capture_reference_stack(effect, now),\n        )\n'''
+          if t.count(old) != 1:
+              raise SystemExit('ActiveEffect construction anchor changed')
+          t = t.replace(old, new, 1)
+
+          old = '''        self.state.touch(target, StateDomain.EFFECT)\n        if expires != inf:\n'''
+          new = '''        self.state.touch(target, StateDomain.EFFECT)\n        if effect.name:\n            self._touch_live_reference_consumers(effect.actor, effect.name, now=now)\n        if expires != inf:\n'''
+          if t.count(old) != 1:
+              raise SystemExit('activation touch anchor changed')
+          t = t.replace(old, new, 1)
+
+          old = '''            active.stacks = stacks\n            self.state.touch(target, StateDomain.EFFECT)\n            changed.append(active.effect_id)\n'''
+          new = '''            active.stacks = stacks\n            self.state.touch(target, StateDomain.EFFECT)\n            self._touch_live_reference_consumers(active.source_actor, name, now=now)\n            changed.append(active.effect_id)\n'''
+          if t.count(old) != 1:
+              raise SystemExit('adjust stack anchor changed')
+          t = t.replace(old, new, 1)
+
+          old = '''            effect = self._effects[active.effect_id]\n            self._index_remove(effect, key)\n            removed.append(active.effect_id)\n'''
+          new = '''            effect = self._effects[active.effect_id]\n            self._index_remove(effect, key)\n            self._touch_live_reference_consumers(active.source_actor, name, now=now)\n            removed.append(active.effect_id)\n'''
+          if t.count(old) != 1:
+              raise SystemExit('remove named anchor changed')
+          t = t.replace(old, new, 1)
+
+          old = '''            self._index_remove(effect, key)\n            self.state.touch(token.target, StateDomain.EFFECT)\n            return effect\n'''
+          new = '''            self._index_remove(effect, key)\n            self.state.touch(token.target, StateDomain.EFFECT)\n            if effect.name:\n                self._touch_live_reference_consumers(active.source_actor, effect.name, now=event.time)\n            return effect\n'''
+          if t.count(old) != 1:
+              raise SystemExit('expiry anchor changed')
+          t = t.replace(old, new, 1)
+
+          old = '''            self._index_remove(effect, key)\n            self.state.touch(target, StateDomain.EFFECT)\n            removed.append(target)\n'''
+          new = '''            self._index_remove(effect, key)\n            self.state.touch(target, StateDomain.EFFECT)\n            if effect.name:\n                self._touch_live_reference_consumers(active.source_actor, effect.name, now=now)\n            removed.append(target)\n'''
+          if t.count(old) != 1:
+              raise SystemExit('deactivate group anchor changed')
+          t = t.replace(old, new, 1)
+
+          old = '''            effect = self._effects[active.effect_id]\n            total += float(effect.value or 0.0) * active.stacks\n        return total\n'''
+          new = '''            effect = self._effects[active.effect_id]\n            total += float(effect.value or 0.0) * self.effect_value_scale(effect, active, now=now)\n        return total\n'''
+          if t.count(old) != 1:
+              raise SystemExit('sum_stat anchor changed')
+          t = t.replace(old, new, 1)
+
+          old = '''                caster_base = float(self.squad.members[active.source_actor].base_atk)\n                atk_flat += caster_base * float(effect.value or 0.0) * active.stacks / 100.0\n'''
+          new = '''                caster_base = float(self.squad.members[active.source_actor].base_atk)\n                scale = self.effect_value_scale(effect, active, now=now)\n                atk_flat += caster_base * float(effect.value or 0.0) * scale / 100.0\n'''
+          if t.count(old) != 1:
+              raise SystemExit('effective atk anchor changed')
+          t = t.replace(old, new, 1)
+          p.write_text(t, encoding='utf-8')
+
+          # damage_state.py: all damage-facing readers use the same multiplier.
+          p = Path('fast_engine/engine/damage_state.py')
+          t = p.read_text(encoding='utf-8')
+          old = '            total += float(effect.value or 0.0) * active.stacks\n'
+          new = '            total += float(effect.value or 0.0) * self.effects.effect_value_scale(effect, active, now=now)\n'
+          if t.count(old) != 1:
+              raise SystemExit('damage state sum anchor changed')
+          t = t.replace(old, new, 1)
+          old = '''            total += caster_base * float(effect.value or 0.0) * active.stacks / target_base\n'''
+          new = '''            scale = self.effects.effect_value_scale(effect, active, now=now)\n            total += caster_base * float(effect.value or 0.0) * scale / target_base\n'''
+          if t.count(old) != 1:
+              raise SystemExit('caster charge anchor changed')
+          t = t.replace(old, new, 1)
+          old = '''            caster_base = self.squad.members[active.source_actor].base_atk\n            total += caster_base * float(effect.value or 0.0) * active.stacks / 100.0\n'''
+          new = '''            caster_base = self.squad.members[active.source_actor].base_atk\n            scale = self.effects.effect_value_scale(effect, active, now=now)\n            total += caster_base * float(effect.value or 0.0) * scale / 100.0\n'''
+          if t.count(old) != 1:
+              raise SystemExit('caster atk anchor changed')
+          t = t.replace(old, new, 1)
+          p.write_text(t, encoding='utf-8')
+
+          # damage_policy.py: allow the local finite shape; squad/provider proof remains elsewhere.
+          p = Path('fast_engine/engine/damage_policy.py')
+          t = p.read_text(encoding='utf-8')
+          old = 'from .targets import TargetMode\n'
+          new = 'from .targets import TargetMode\nfrom .reference_stack import finite_reference_stack_capture_shape\n'
+          if t.count(old) != 1:
+              raise SystemExit('damage policy import anchor changed')
+          t = t.replace(old, new, 1)
+          old = '''    # Moris captures stack_count reference scaling at the activation boundary.\n    # Fast does not own that captured multiplier yet, so this exact family must\n    # fail closed instead of applying the raw unscaled value.\n    if (\n        effect.parameters.get("scaling") == "stack_count"\n        or "scaling_ref" in effect.parameters\n    ):\n        return False\n'''
+          new = '''    # Finite named-stack reference scaling is locally representable; score/runtime\n    # certification still proves that the referenced same-caster self provider is\n    # actually owned. Permanent live refs, gauges, DoTs and other shapes stay shut.\n    if (\n        effect.parameters.get("scaling") == "stack_count"\n        or "scaling_ref" in effect.parameters\n    ) and not finite_reference_stack_capture_shape(effect):\n        return False\n'''
+          if t.count(old) != 1:
+              raise SystemExit('damage policy scaling guard changed')
+          t = t.replace(old, new, 1)
+          p.write_text(t, encoding='utf-8')
+
+          # dispatcher.py: certify same-caster self named provider and enable only those ids.
+          p = Path('fast_engine/engine/dispatcher.py')
+          t = p.read_text(encoding='utf-8')
+          old = 'from .shot_blocks import static_bullet_lifetime_cadence_safe\n'
+          new = 'from .shot_blocks import static_bullet_lifetime_cadence_safe\nfrom .reference_stack import finite_reference_stack_capture_shape\n'
+          if t.count(old) != 1:
+              raise SystemExit('dispatcher import anchor changed')
+          t = t.replace(old, new, 1)
+          old = '''        self._effect_table = tuple(squad.effects)\n        self._event_counts: dict[tuple[int, str], int] = defaultdict(int)\n'''
+          new = '''        self._effect_table = tuple(squad.effects)\n        self.effects.enable_finite_reference_stack_capture(\n            effect.effect_id\n            for effect in self._effect_table\n            if self.finite_reference_stack_dependency_score_safe(squad, effect)\n        )\n        self._event_counts: dict[tuple[int, str], int] = defaultdict(int)\n'''
+          if t.count(old) != 1:
+              raise SystemExit('dispatcher init effect table anchor changed')
+          t = t.replace(old, new, 1)
+
+          marker = '''    @staticmethod\n    def is_executable_effect(effect: "CompiledEffect") -> bool:\n'''
+          insert = '''    @classmethod\n    def finite_reference_stack_dependency_score_safe(\n        cls, squad: "CompiledSquad", effect: "CompiledEffect"\n    ) -> bool:\n        \"\"\"Own finite captured refs only through one executable self provider.\"\"\"\n\n        if not finite_reference_stack_capture_shape(effect):\n            return False\n        if not effect.target_spec.runtime_supported or not target_scope_is_static(effect.target_spec):\n            return False\n        ref = effect.parameters.get("scaling_ref")\n        providers = tuple(\n            provider\n            for provider in squad.members[effect.actor].effects\n            if provider.effect_id != effect.effect_id and provider.name == ref\n        )\n        if len(providers) != 1:\n            return False\n        provider = providers[0]\n        provider_max = provider.max_stack if provider.max_stack is not None else 1.0\n        if (\n            provider.actor != effect.actor\n            or provider.effect_type != "buff"\n            or provider.target_spec.mode is not TargetMode.SELF\n            or not provider.target_spec.runtime_supported\n            or provider.parameters.get("scaling") == "stack_count"\n            or "scaling_ref" in provider.parameters\n            or float(provider_max) <= 0.0\n            or (float(provider_max) != -1.0 and not float(provider_max).is_integer())\n            or not cls.is_executable_effect(provider)\n        ):\n            return False\n        return True\n\n'''
+          if t.count(marker) != 1:
+              raise SystemExit('dispatcher executable marker changed')
+          t = t.replace(marker, insert + marker, 1)
+          p.write_text(t, encoding='utf-8')
+
+          # score.py: keep ref scaling blocked unless the exact provider proof succeeds.
+          p = Path('fast_engine/engine/score.py')
+          t = p.read_text(encoding='utf-8')
+          old = '''def _direct_damage_buff_score_supported(squad: CompiledSquad, effect) -> bool:\n    if not is_direct_damage_buff_runtime_supported(effect):\n        return False\n'''
+          new = '''def _direct_damage_buff_score_supported(squad: CompiledSquad, effect) -> bool:\n    if not is_direct_damage_buff_runtime_supported(effect):\n        return False\n    if (\n        _has_unowned_reference_stack_scaling(effect)\n        and not TriggerDispatcher.finite_reference_stack_dependency_score_safe(squad, effect)\n    ):\n        return False\n'''
+          if t.count(old) != 1:
+              raise SystemExit('direct damage score anchor changed')
+          t = t.replace(old, new, 1)
+          old = '''        if (\n            _has_unowned_reference_stack_scaling(effect)\n            and stat in _CADENCE_OR_SHAPE_STATS\n        ):\n            blockers.append(f"cadence:{label}")\n            continue\n'''
+          new = '''        if (\n            _has_unowned_reference_stack_scaling(effect)\n            and stat in _CADENCE_OR_SHAPE_STATS\n            and not TriggerDispatcher.finite_reference_stack_dependency_score_safe(squad, effect)\n        ):\n            blockers.append(f"cadence:{label}")\n            continue\n'''
+          if t.count(old) != 1:
+              raise SystemExit('cadence ref guard anchor changed')
+          t = t.replace(old, new, 1)
+          p.write_text(t, encoding='utf-8')
+          PY
+
+      - name: Add finite reference-stack regressions
+        run: |
+          cat > fast_engine/tests/test_damage_reference_stack_capture.py <<'PY'
+          from __future__ import annotations
+
+          import unittest
+          from unittest.mock import patch
+
+          from calculator.buff_manager import BuffManager
+          from context.spec import build_squad
+          from fast_engine.engine.burst import BurstPolicy, BurstSignal
+          from fast_engine.engine.burst_runtime import BurstRuntime
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+
+
+          NAMES = ["라피", "폴리", "프로덕트 12", "미란다", "아니스"]
+
+
+          def compiled(raw_effects):
+              mapping = {NAMES[0]: raw_effects}
+
+              def fake_char_effects(self, name):
+                  return mapping.get(name, [])
+
+              with patch.object(BuffManager, "char_effects", new=fake_char_effects):
+                  return compile_moris_squad(build_squad(NAMES))
+
+
+          class FiniteReferenceStackCaptureTests(unittest.TestCase):
+              def test_owned_finite_ref_freezes_then_refresh_recaptures(self):
+                  provider = {
+                      "source": "skill1", "type": "buff", "name": "AUDIT reference",
+                      "stat": "accuracy_pct", "fixed_value": 1.0,
+                      "polarity": "beneficial", "target": "self", "duration": -1.0,
+                      "max_stack": 3,
+                      "trigger": {"timing": ["burst_enter:1"], "condition": []},
+                  }
+                  consumer = {
+                      "source": "skill2", "type": "buff", "name": "AUDIT captured",
+                      "stat": "crit_dmg", "fixed_value": 10.0,
+                      "polarity": "beneficial", "target": "all_allies", "duration": 10.0,
+                      "trigger": {"timing": ["burst_cast"], "condition": []},
+                      "scaling": "stack_count", "scaling_ref": "AUDIT reference",
+                  }
+                  squad = compiled([provider, consumer])
+                  blockers = static_score_blockers(squad)
+                  self.assertNotIn("normal_delivery:라피:AUDIT captured:crit_dmg", blockers)
+                  self.assertNotIn("skill_state_delivery:라피:AUDIT captured:crit_dmg", blockers)
+
+                  runtime = BurstRuntime(
+                      squad,
+                      BurstPolicy(duration=20.0, first_burst_time=20.0, max_burst_count=0),
+                  )
+                  dispatch = runtime.dispatcher.dispatch
+                  for t in (1.0, 2.0, 3.0):
+                      dispatch(BurstSignal(t, "burst_enter:1", 0, 0))
+                  dispatch(BurstSignal(4.0, "burst_cast", 0, 0))
+                  self.assertEqual(runtime.dispatcher.effects.sum_stat(0, "crit_dmg", now=4.0), 30.0)
+
+                  runtime.dispatcher.effects.adjust_named_stack(
+                      0, "AUDIT reference", -2.0, now=5.0
+                  )
+                  # Existing finite consumer stays at the activation-time 3-stack value.
+                  self.assertEqual(runtime.dispatcher.effects.sum_stat(0, "crit_dmg", now=5.0), 30.0)
+
+                  # Refresh captures the now-current one stack.
+                  dispatch(BurstSignal(6.0, "burst_cast", 0, 0))
+                  self.assertEqual(runtime.dispatcher.effects.sum_stat(0, "crit_dmg", now=6.0), 10.0)
+
+              def test_missing_provider_stays_fail_closed(self):
+                  consumer = {
+                      "source": "skill2", "type": "buff", "name": "AUDIT missing",
+                      "stat": "atk_pct", "fixed_value": 10.0,
+                      "polarity": "beneficial", "target": "all_allies", "duration": 10.0,
+                      "trigger": {"timing": ["burst_cast"], "condition": []},
+                      "scaling": "stack_count", "scaling_ref": "NO provider",
+                  }
+                  blockers = static_score_blockers(compiled([consumer]))
+                  self.assertIn("normal_delivery:라피:AUDIT missing:atk_pct", blockers)
+                  self.assertIn("skill_state_delivery:라피:AUDIT missing:atk_pct", blockers)
+
+              def test_permanent_reference_remains_live_unowned(self):
+                  provider = {
+                      "source": "skill1", "type": "buff", "name": "AUDIT reference",
+                      "stat": "accuracy_pct", "fixed_value": 1.0,
+                      "polarity": "beneficial", "target": "self", "duration": -1.0,
+                      "max_stack": 3,
+                      "trigger": {"timing": ["battle_start"], "condition": []},
+                  }
+                  consumer = {
+                      "source": "skill2", "type": "buff", "name": "AUDIT permanent",
+                      "stat": "reload_speed_pct", "fixed_value": 10.0,
+                      "polarity": "beneficial", "target": "self", "duration": -1.0,
+                      "trigger": {"timing": ["battle_start"], "condition": []},
+                      "scaling": "stack_count", "scaling_ref": "AUDIT reference",
+                  }
+                  blockers = static_score_blockers(compiled([provider, consumer]))
+                  self.assertIn("cadence:라피:AUDIT permanent:reload_speed_pct", blockers)
+
+              def test_public_maidden_mast_ref_blockers_are_owned_but_other_gaps_remain(self):
+                  squad = compile_moris_squad(build_squad([
+                      "목단", "마스트 : 로망틱 메이드", "홍련 : 흑영", "리버렐리오", "앵커 : 이노센트 메이드"
+                  ]))
+                  blockers = static_score_blockers(squad)
+                  self.assertNotIn(
+                      "cadence:마스트 : 로망틱 메이드:파이레츠 스피릿 2:reload_speed_pct", blockers
+                  )
+                  self.assertNotIn(
+                      "normal_delivery:마스트 : 로망틱 메이드:파이레츠 로망 3:atk_caster_based_pct", blockers
+                  )
+                  self.assertNotIn(
+                      "skill_state_delivery:마스트 : 로망틱 메이드:파이레츠 스피릿:split_dmg_pct", blockers
+                  )
+                  self.assertNotIn(
+                      "skill_state_delivery:마스트 : 로망틱 메이드:파이레츠 로망 3:atk_caster_based_pct", blockers
+                  )
+                  self.assertIn(
+                      "normal_state:마스트 : 로망틱 메이드:파이레츠 스피릿 3:remove_named_buff", blockers
+                  )
+
+              def test_arcana_owned_self_provider_opens_but_tove_provider_does_not(self):
+                  squad = compile_moris_squad(build_squad([
+                      "토브", "아르카나 : 포츈 메이트", "도로시 : 세렌디피티", "드레이크", "솔린 : 프로스트 티켓"
+                  ]))
+                  blockers = static_score_blockers(squad)
+                  self.assertNotIn(
+                      "normal_delivery:아르카나 : 포츈 메이트:쌓여가는 사진첩:atk_caster_based_pct", blockers
+                  )
+                  self.assertNotIn(
+                      "skill_state_delivery:아르카나 : 포츈 메이트:쌓여가는 사진첩:atk_caster_based_pct", blockers
+                  )
+                  self.assertIn(
+                      "normal_delivery:토브:급조품의 기적:atk_caster_based_pct", blockers
+                  )
+                  self.assertIn(
+                      "normal_delivery:토브:급조품의 기적 2:atk_caster_based_pct", blockers
+                  )
+
+
+          if __name__ == "__main__":
+              unittest.main()
+          PY
+
+      - name: Focused reference-stack regressions
+        run: |
+          python -m unittest fast_engine.tests.test_damage_reference_stack_capture
+          python -m unittest fast_engine.tests.test_damage_false_supported_guards
+          python -m unittest fast_engine.tests.test_damage_real_squad_certification
+          python -m unittest fast_engine.tests.test_damage_moris_frame_timing
+
+      - name: Full Fast regression
+        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
+
+      - name: Verify public frontier remains fail-closed
         run: |
           python - <<'PY'
+          from collections import Counter
           from context import spec
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.dispatcher import TriggerDispatcher
           from fast_engine.engine.score import static_score_blockers
           from fast_engine.research.public_ranking_probe import _source_corpus
 
           unique = {}
           for members, source in _source_corpus():
               unique.setdefault(tuple(members), source)
-
-          print('PUBLIC_UNIQUE', len(unique))
-          touched = 0
+          families = Counter()
+          certified = []
           for members, source in unique.items():
-              compiled = compile_moris_squad(spec.build_squad(list(members)))
-              rows = []
-              for eff in compiled.effects:
-                  scaling = eff.parameters.get('scaling')
-                  ref = eff.parameters.get('scaling_ref')
-                  if scaling != 'stack_count' and ref is None:
-                      continue
-                  actor_name = compiled.members[eff.actor].name
-                  providers = []
-                  if isinstance(ref, str) and ref:
-                      for p in compiled.members[eff.actor].effects:
-                          if p.effect_id == eff.effect_id or p.name != ref:
-                              continue
-                          providers.append({
-                              'name': p.name,
-                              'stat': p.stat,
-                              'type': p.effect_type,
-                              'target': p.target,
-                              'duration': p.duration,
-                              'max_stack': p.max_stack,
-                              'triggers': [r.raw for r in p.triggers],
-                              'executable': TriggerDispatcher.is_executable_effect(p),
-                          })
-                  rows.append({
-                      'actor': actor_name,
-                      'effect': eff.name,
-                      'stat': eff.stat,
-                      'type': eff.effect_type,
-                      'target': eff.target,
-                      'duration': eff.duration,
-                      'max_stack': eff.max_stack,
-                      'triggers': [r.raw for r in eff.triggers],
-                      'conditions': list(eff.conditions),
-                      'scaling': scaling,
-                      'ref': ref,
-                      'executable': TriggerDispatcher.is_executable_effect(eff),
-                      'providers': providers,
-                  })
-              if not rows:
-                  continue
-              touched += 1
-              print('\nSOURCE', source, 'MEMBERS', members)
-              print('BLOCKERS', static_score_blockers(compiled))
-              for row in rows:
-                  print('REF_EFFECT', row)
-          print('\nTOUCHED_MEMBERSHIPS', touched)
+              blockers = static_score_blockers(compile_moris_squad(spec.build_squad(list(members))))
+              if not blockers:
+                  certified.append(source)
+              for blocker in blockers:
+                  families[blocker.split(':', 1)[0]] += 1
+          print('FRONTIER', len(unique), 'CERTIFIED', certified, 'FAMILIES', dict(families))
+          assert len(unique) == 23
+          assert set(certified) == {'컨트롤_미란다미하라', '레이드_레드후드퀀시'}, certified
           PY
+
+      - name: Commit semantic restoration and remove temporary workflow
+        run: |
+          rm -f .github/workflows/tmp-reference-stack-probe.yml
+          git diff --check
+          git config user.name "asdadas1113"
+          git config user.email "crony06@gmail.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Fast: own finite reference-stack capture"
+          git push origin HEAD:fast-engine-phase2-20260901
