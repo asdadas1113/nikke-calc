@@ -1,0 +1,93 @@
+name: tmp-close-rank-target-timing-hole
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+    paths:
+      - .github/workflows/tmp-close-rank-target-timing-hole.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Add fail-closed guard for unsafe dynamic-rank transactions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p=Path('fast_engine/engine/score.py')
+          t=p.read_text(encoding='utf-8')
+          old='from .target_scope import possible_ally_targets, target_scope_is_static\nfrom .triggers import TriggerMode\n'
+          new='from .target_scope import possible_ally_targets, target_scope_is_static\nfrom .targets import TargetMode\nfrom .triggers import TriggerMode\n'
+          if t.count(old)!=1: raise SystemExit('target import anchor changed')
+          t=t.replace(old,new,1)
+
+          anchor='''def _unsupported_remove_named_buff_changes_scored_state(\n'''
+          helper='''_DYNAMIC_ATK_RANK_TARGET_MODES = frozenset({\n    TargetMode.TOP_ATK,\n    TargetMode.TOP_ATK_EXCL_SELF,\n    TargetMode.LOWEST_ATK_BURST3,\n})\n_ATK_RANK_MUTATION_STATS = frozenset({\n    "atk_pct",\n    "atk_flat",\n    "atk_caster_based_pct",\n    "atk_from_hp_pct",\n    "atk_copy",\n    "atk_buff_mag_pct",\n})\n\n\ndef _dynamic_rank_target_transaction_unsafe(squad: CompiledSquad, effect) -> bool:\n    """Fail closed when a rank selector shares a timestamp with ATK mutation.\n\n    Moris resolves ATK-rank targets lazily within the actor/event transaction.\n    Fast currently resolves on activation. The one owned exception is a same-caster\n    sibling using the exact same raw rank selector: TargetResolver deliberately\n    shares that cohort, matching Moris' same-selector identity.\n    """\n\n    if effect.target_spec.mode not in _DYNAMIC_ATK_RANK_TARGET_MODES:\n        return False\n    if _is_patternless_unreachable(effect) or not effect.triggers:\n        return False\n    event_keys = {rule.event_key for rule in effect.triggers if rule.event_key}\n    if not event_keys:\n        return False\n    for other in squad.effects:\n        if other.effect_id == effect.effect_id:\n            continue\n        if (other.stat or "") not in _ATK_RANK_MUTATION_STATS:\n            continue\n        if other.effect_type != "buff":\n            continue\n        if _is_patternless_unreachable(other):\n            continue\n        if not _direct_damage_buff_score_supported(squad, other):\n            continue\n        if not any(rule.event_key in event_keys for rule in other.triggers):\n            continue\n        if (\n            other.actor == effect.actor\n            and other.target_spec.raw == effect.target_spec.raw\n            and other.target_spec.mode == effect.target_spec.mode\n        ):\n            continue\n        return True\n    return False\n\n\n'''
+          if t.count(anchor)!=1: raise SystemExit('rank helper anchor changed')
+          t=t.replace(anchor,helper+anchor,1)
+
+          old='''    for effect in squad.effects:\n        if (\n            effect.effect_type == "damage"\n'''
+          new='''    for effect in squad.effects:\n        if _dynamic_rank_target_transaction_unsafe(squad, effect):\n            owner = squad.members[effect.actor].name\n            blockers.append(\n                f"normal_state:{owner}:{effect.name or effect.stat or 'rank_target'}:rank_target_timing"\n            )\n\n    for effect in squad.effects:\n        if (\n            effect.effect_type == "damage"\n'''
+          if t.count(old)!=1: raise SystemExit('rank blocker insertion anchor changed')
+          p.write_text(t.replace(old,new,1),encoding='utf-8')
+
+          p=Path('fast_engine/tests/test_damage_false_supported_guards.py')
+          t=p.read_text(encoding='utf-8')
+          old='''    def test_unowned_remove_of_scored_buff_fails_closed(self):\n        provider = {\n            "source": "skill1", "type": "buff", "name": "AUDIT state",\n            "stat": "atk_pct", "fixed_value": 100.0,\n            "polarity": "beneficial", "target": "self", "duration": -1.0,\n            "trigger": {"timing": ["battle_start"], "condition": []},\n        }\n        remover = {\n            "source": "skill1", "type": "instant", "name": "AUDIT remove",\n            "stat": "remove_named_buff", "target": "self",\n            "target_effect": "AUDIT state",\n            "trigger": {"timing": ["full_burst_start"], "condition": []},\n        }\n        blockers = static_score_blockers(_compiled([provider, remover]))\n        self.assertIn(\n            "normal_state:라피:AUDIT remove:remove_named_buff", blockers\n        )\n'''
+          new=old+'''\n    def test_rank_target_with_same_event_atk_mutation_fails_closed(self):\n        rank = {\n            "source": "skill1", "type": "buff", "name": "AUDIT rank",\n            "stat": "crit_rate", "fixed_value": 50.0,\n            "polarity": "beneficial", "target": "allies_top_atk:1",\n            "duration": 10.0,\n            "trigger": {"timing": ["full_burst_start"], "condition": []},\n        }\n        atk = {\n            "source": "skill1", "type": "buff", "name": "AUDIT atk",\n            "stat": "atk_pct", "fixed_value": 100.0,\n            "polarity": "beneficial", "target": "self",\n            "duration": 10.0,\n            "trigger": {"timing": ["full_burst_start"], "condition": []},\n        }\n        blockers = static_score_blockers(_compiled([rank, atk]))\n        self.assertIn(\n            "normal_state:라피:AUDIT rank:rank_target_timing", blockers\n        )\n'''
+          if t.count(old)!=1: raise SystemExit('rank test insertion anchor changed')
+          p.write_text(t.replace(old,new,1),encoding='utf-8')
+          PY
+      - name: Focused rank safety regressions
+        run: |
+          python -m unittest fast_engine.tests.test_damage_false_supported_guards
+          python -m unittest fast_engine.tests.test_target_snapshot
+      - name: Full Fast regression
+        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
+      - name: Verify certified frontier contracts
+        run: |
+          python - <<'PY'
+          from collections import Counter
+          from context import spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.research.public_ranking_probe import _source_corpus
+          unique={}
+          for members,source in _source_corpus(): unique.setdefault(tuple(members),source)
+          family=Counter(); rows=[]
+          for members,source in unique.items():
+              b=static_score_blockers(compile_moris_squad(spec.build_squad(list(members))))
+              rows.append((source,b))
+              for x in b: family[x.split(':',1)[0]]+=1
+          certified=[source for source,b in rows if not b]
+          miranda=next(b for source,b in rows if source=='컨트롤_미란다미하라')
+          red=next(b for source,b in rows if source=='레이드_레드후드퀀시')
+          print('FRONTIER',len(unique),'CERTIFIED',certified,'FAMILIES',dict(family))
+          print('MIRANDA',miranda)
+          print('RED',red)
+          assert certified==['레이드_레드후드퀀시'], certified
+          assert any('미란다:파워 업!:rank_target_timing' in x or '미란다:파워 업! 2:rank_target_timing' in x for x in miranda), miranda
+          assert red==(), red
+          PY
+      - name: Commit rank guard and clean temporary workflows
+        run: |
+          rm -f .github/workflows/tmp-audit-rank-target-timing.yml
+          rm -f .github/workflows/tmp-close-rank-target-timing-hole.yml
+          git diff --check
+          git config user.name "asdadas1113"
+          git config user.email "crony06@gmail.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Fast: fail closed on unsafe rank target timing"
+          git push origin HEAD:fast-engine-phase2-20260901
