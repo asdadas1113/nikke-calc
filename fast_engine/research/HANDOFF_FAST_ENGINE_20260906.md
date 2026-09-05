@@ -11,20 +11,22 @@
 가장 먼저 읽을 문서:
 
 1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260906.md`
-2. `fast_engine/research/FINITE_REFERENCE_STACK_CAPTURE_CHECKPOINT_20260906.md`
-3. `fast_engine/research/LAZY_DYNAMIC_RANK_TARGET_CHECKPOINT_20260906.md`
-4. `fast_engine/research/SPARSE_SAME_TIMESTAMP_ACTOR_TRANSACTION_CHECKPOINT_20260906.md`
-5. `fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md`
-6. `fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md`
+2. `fast_engine/research/FULL_BURST_CONDITIONAL_PERMANENT_PASSIVE_CHECKPOINT_20260906.md`
+3. `fast_engine/research/FINITE_REFERENCE_STACK_CAPTURE_CHECKPOINT_20260906.md`
+4. `fast_engine/research/LAZY_DYNAMIC_RANK_TARGET_CHECKPOINT_20260906.md`
+5. `fast_engine/research/SPARSE_SAME_TIMESTAMP_ACTOR_TRANSACTION_CHECKPOINT_20260906.md`
+6. `fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md`
+7. `fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md`
 
 ## 1. 현재 production 상태
 
 latest semantic production commit:
 
-- `2184b253ab22969fff63bc9a95b44aa8a6fc49d9` — finite reference-stack capture ownership
+- `7df61bd3853cca202808a43d2d155a38a36df450` — full-burst conditional permanent passive ownership
 
 직전 semantics restoration:
 
+- `2184b253ab22969fff63bc9a95b44aa8a6fc49d9` — finite reference-stack capture ownership
 - `cc11c5c08d907001ab6e7841c05da7f3179afa67` — lazy dynamic-rank first-read target ownership
 - `0351fb40bd7faae5c62697c22588239b4c6868d4` — sparse same-timestamp actor transaction ownership
 
@@ -36,81 +38,91 @@ latest semantic production commit:
 
 safety guard는 실제 semantics ownership을 확보한 narrow shape에서만 철회한다. 미소유 surface는 계속 fail-closed다.
 
-## 2. 최신 완료 — finite reference-stack capture
+## 2. 최신 완료 — full-burst conditional permanent passive
 
-Moris의 `stack_count + scaling_ref` 의미론을 직접 확인했다.
+Moris의 permanent `passive + during_full_burst` 의미론을 직접 확인했다.
 
-- finite duration consumer: activation 순간 provider stack을 `scaling_stack`으로 capture
-- provider stack이 이후 변해도 기존 finite consumer magnitude는 고정
-- refresh/reactivation: current provider stack을 다시 capture
-- permanent/infinite consumer: captured value 없이 live reference 유지
-- activation 순간 provider가 없으면 `None`을 유지해 이후 live ref lookup fallback
+- battle start에서 condition false여도 passive row 자체는 등록
+- permanent runtime condition은 `get_buffs()`에서 live gate
+- full burst start 즉시 contribution ON
+- full burst end 즉시 contribution OFF
+- `tick()`의 activate/expire transition log는 실제 phase edge보다 정확히 1/60 s 늦음
+- 이 로그 지연은 딜 적용 지연이 아님
 
-Fast는 이를 다음 좁은 shape로 소유한다.
+Fast는 exact phase edge에서 sparse materialize/de-materialize한다. global frame loop는 추가하지 않았다.
 
-- finite positive-duration buff
-- `scaling == stack_count`
-- named `scaling_ref`
-- consumer max stack 1
-- no max-trigger / periodic tick
-- same-caster exact-name provider가 정확히 하나
-- provider가 executable self buff이고 자체 reference-scaling이 아님
+첫 owned shape는 의도적으로 좁다.
 
-결과:
+- direct ATK stat: `atk_pct`, `atk_flat`, `atk_caster_based_pct`
+- self target
+- duration `None/-1`
+- max stack 1
+- no parameters / max-trigger / tick interval
+- exactly `passive + during_full_burst`
 
-- Maid Mast `취기` 기반 finite direct reference effects owned
-- Arcana : Fortune Mate `소중한 추억 → 쌓여가는 사진첩` owned
-- Tove `임시 개조` provider는 미소유이므로 계속 fail-closed
-- Solin permanent/gauge live reference도 이번 slice에서 열지 않음
+public anchor:
+
+- Dorothy : Serendipity `광익 2` — owned
+- `광익 3:accuracy_pct` — 계속 fail-closed
 
 상세:
 
-- `fast_engine/research/FINITE_REFERENCE_STACK_CAPTURE_CHECKPOINT_20260906.md`
+- `fast_engine/research/FULL_BURST_CONDITIONAL_PERMANENT_PASSIVE_CHECKPOINT_20260906.md`
 
-## 3. 연쇄 복구 — Brady split stat_applied
+## 3. Moris/Fast phase trace
 
-Maid Mast `파이레츠 스피릿:split_dmg_pct`가 실제 owned producer가 되면서 Brady `나누고 싶은 맛`의 `event:stat_applied:split_dmg_pct` branch가 reachable해졌다.
+통제 squad:
 
-40 s `레이드_앨리스브래디` 직접 trace:
+- `라피 : 레드 후드`
+- `레드 후드`
+- `프리카`
+- `민트`
+- `도로시 : 세렌디피티`
 
-- Fast activation 5개
-- Moris activation 5개
-- 모든 timestamp 1:1 동일
-- pairwise diff 전부 `0.0`
+30 s Fast full-burst start:
 
-따라서 이 exact split branch만 dependency-safe로 복구했다.
+- `3.399999999999993`
+- `15.933333333333705`
+- `28.46666666666633`
 
-`dot_dmg_pct → 머물고 싶은 맛`은 provider가 아직 미소유이므로 계속 fail-closed다.
+Fast end:
 
-probe:
+- `13.400000000000245`
+- `25.93333333333314`
 
-- run `33985501903`
-- job `101358141415`
+Moris `광익 2` transition logs are each exactly one `DT=1/60 s` later.
+
+하지만 Moris timeline은 phase state와 buff cache를 같은 edge에서 먼저 갱신하고 같은 `t`의 buff read / pending burst damage를 처리하므로 actual contribution boundary는 Fast가 사용하는 exact start/end와 같다.
 
 ## 4. 이전 완료 semantics
 
-### 4.1 lazy dynamic-rank resolution
+### 4.1 finite reference-stack capture
 
-- unresolved rank buff를 pending으로 보관
-- first stat read에서 live ATK로 target snapshot
-- activation time은 cohort identity로 사용
+- finite `stack_count + scaling_ref` consumer는 activation 순간 provider stack capture
+- refresh에서 recapture
+- permanent ref는 live이므로 별도 미소유
+- Maid Mast/Arcana finite reference owned
+- Tove provider는 계속 fail-closed
+- Maid Mast split provider가 owned되며 Brady `나누고 싶은 맛` stat_applied branch도 5/5 timestamp exact match로 복구
+
+### 4.2 lazy dynamic-rank resolution
+
+- unresolved rank buff pending
+- first stat read에서 live ATK target snapshot
+- activation time cohort identity
 - same caster/time/raw selector sibling cohort 공유
-- `컨트롤_미란다미하라` certification 복구
+- Miranda certification 복구
 
-상세: `LAZY_DYNAMIC_RANK_TARGET_CHECKPOINT_20260906.md`
+### 4.3 sparse same-timestamp actor transaction
 
-### 4.2 sparse same-timestamp actor transaction
-
-- phase-30 equal-time weapon work roster actor order
-- static shot cursor exact timestamp actor prefix consume
-- global 60 Hz/per-shot loop 없음
-- `레이드_레드후드퀀시` certification 복구
-
-상세: `SPARSE_SAME_TIMESTAMP_ACTOR_TRANSACTION_CHECKPOINT_20260906.md`
+- equal-time weapon work roster actor order
+- exact timestamp actor-prefix shot consumption
+- global frame loop 없음
+- RHQ certification 복구
 
 ## 5. 현재 public frontier
 
-latest semantic `2184b253ab22969fff63bc9a95b44aa8a6fc49d9` 기준:
+latest semantic `7df61bd3853cca202808a43d2d155a38a36df450` 기준:
 
 - source cases: `24`
 - unique ordered memberships: `23`
@@ -124,40 +136,47 @@ certified:
 
 fresh blocker families:
 
-- normal delivery `49`
+- normal delivery `47`
 - normal state `34`
 - skill damage `27`
-- skill-state delivery `51`
+- skill-state delivery `49`
 - weapon change `12`
 - cadence `59`
 - control `4`
 - periodic grid `1`
 
-직전 lazy-rank checkpoint 대비:
+직전 finite-reference checkpoint 대비:
 
-- normal delivery `55 → 49`
-- skill-state delivery `62 → 51`
-- cadence `62 → 59`
+- normal delivery `49 → 47`
+- skill-state delivery `51 → 49`
 - certified `2 → 2`
 
-이번 slice는 새로운 membership을 성급히 인증하지 않고 기존 gaps 내부의 실제 reference semantics를 복구했다.
+Dorothy `광익 2`가 등장하는 두 membership에서 normal/skill blocker만 각각 하나씩 제거됐다.
 
 ## 6. 검증
 
-finite reference-stack promotion workflow:
+full-burst passive promotion workflow:
 
-- run `33985621674`
-- job `101358468826`
+- run `33987191917`
+- job `101362856181`
 - focused regressions: success
-- Fast complete discovery: **284/284**
-- structural 180 s median 약 `178.67 ms`, events `539`
+- Fast complete discovery: **288/288**
+- structural 180 s median 약 `187.97 ms`, events `539`
 - RHQ 30 s relative error 약 `+0.0386%` 유지
 - frontier exact family assertion: success
-- safe stat-applied match: Brady `나누고 싶은 맛 / split_dmg_pct` 하나뿐
 
-임시 workflow 5개는 semantic commit에서 전부 제거했다.
+semantic promotion 과정에서 temporary full-burst workflows 3개를 전부 제거했다.
 
-이 handoff/checkpoint docs commit의 clean HEAD에서 canonical `ci.yml` 전체 gate를 다시 확인해 최종 상태로 사용한다.
+참고로 직전 finite-reference docs clean HEAD canonical CI `33985770383`의 rerun job `101359495014`는 최종 full success였다.
+
+- Fast 284/284
+- calculator 137/137 (1 skip)
+- optimizer 374/374
+- bridge 31/31 (1 skip)
+- site 385/385
+- golden 29/29
+
+이번 handoff/checkpoint docs commit의 clean HEAD에서는 canonical `ci.yml` 전체 gate를 다시 확인해 최종 상태로 사용한다.
 
 ## 7. 현재 phase
 
@@ -167,37 +186,42 @@ finite reference-stack promotion workflow:
 
 1. sparse same-timestamp actor transaction → RHQ certification 복구
 2. lazy dynamic-rank first-read resolution → Miranda certification 복구
-3. finite named reference-stack capture → Maid Mast/Arcana delivery 및 Brady split dependency 복구
+3. finite named reference-stack capture → Maid Mast/Arcana 및 Brady split dependency 복구
+4. full-burst conditional permanent ATK passive → Dorothy `광익 2` delivery 복구
 
 아직 fail-closed:
 
-1. generic full-burst conditional permanent passive
-2. broader producer/mutator dependency ownership
-3. permanent/live reference-stack generic semantics
-4. unowned providers such as Tove `임시 개조`
+1. broader producer/mutator dependency ownership
+2. permanent/live reference-stack generic semantics
+3. `not_during_full_burst` 및 non-ATK permanent passive
+4. Dorothy `광익 3:accuracy_pct`
+5. Tove `임시 개조` 같은 unowned providers
+6. other multi-stack / on-attack / hit-count full-burst families
 
 raw coverage expansion이나 optimizer production integration으로 돌아가지 않는다.
 
 ## 8. 다음 단일 체크포인트
 
-**generic full-burst conditional permanent passive semantics**
+**broader producer/mutator dependency ownership**
 
-확인할 핵심:
+먼저 current public blocker에서 scored direct-damage state를 실제로 만들거나 지우는 producer/mutator pair를 전수 추출한다.
 
-- permanent buff가 full-burst 조건에서 언제 activation되는가
-- full burst가 끝났을 때 condition false가 되면 active row를 remove하는가
-- 한번 activation된 permanent passive가 이후에도 남는가
-- battle start / full burst enter / full burst end에서 Moris state transition이 정확히 무엇인가
-- public에서 실제 provider/consumer reachability가 있는 narrow shape가 무엇인가
+핵심 확인:
 
-static permanent modifier로 무조건 fold하거나 guard만 제거하지 않는다. 먼저 Moris trace를 직접 probe하고, current public reachable surface만 generic ownership한다.
+- `remove_named_buff`가 지우는 provider가 실제 score-affecting state인가 marker-only state인가
+- provider와 remover target cohort가 겹치는가
+- activation/removal이 같은 timestamp일 때 Moris ordering은 무엇인가
+- remover가 finite effect의 expiry/refresh와 만날 때 state lifetime이 어떻게 바뀌는가
+- reachable provider가 여러 개인 경우 dependency를 어떻게 fail-closed할 것인가
 
-broader producer/mutator dependency와 raw coverage expansion은 이 뒤로 둔다.
+단순히 provider가 executable이라는 이유로 remover를 자동 지원하지 않는다. Moris trace로 exact pair semantics를 확정한 뒤 narrow generic ownership을 구현한다.
+
+raw coverage expansion, optimizer production integration, global frame loop는 계속 보류한다.
 
 ## 9. 작업공간 상태
 
 - branch: `fast-engine-phase2-20260901`
-- pre-doc latest semantic: `2184b253ab22969fff63bc9a95b44aa8a6fc49d9`
+- pre-doc latest semantic: `7df61bd3853cca202808a43d2d155a38a36df450`
 - master: `fb2fd9157aa14499daf6b9f185beb685d4393f90`
 - temporary workflow: 없음
 - `.github/workflows`: `ci.yml`, `pages.yml`만 유지
