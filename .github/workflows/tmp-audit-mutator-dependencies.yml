@@ -61,7 +61,7 @@ jobs:
                       'owner':squad.members[e.actor].name,'name':e.name,'stat':stat,
                       'target':e.target_spec.raw,'target_effect':target_effect,
                       'timings':tuple((r.raw,r.event_key,r.mode.value) for r in e.triggers),
-                      'conditions':tuple((r.mode.value,r.key,r.threshold) for r in e.condition_rules),
+                      'conditions':tuple((r.raw,r.mode.value,r.key,r.value,r.value2) for r in e.condition_rules),
                       'possible_targets':possible_ally_targets(squad,e),
                       'exec':TriggerDispatcher.is_executable_effect(e),
                       'providers':provider,
@@ -82,5 +82,5 @@ jobs:
           for e in squad.effects:
               owner=squad.members[e.actor].name
               if owner=='민트':
-                  print('MINT',e.effect_id,e.name,e.effect_type,e.stat,e.target_spec.raw,tuple((r.raw,r.event_key,r.mode.value) for r in e.triggers),tuple((r.mode.value,r.key,r.threshold) for r in e.condition_rules),dict(e.parameters),'EXEC',TriggerDispatcher.is_executable_effect(e))
+                  print('MINT',e.effect_id,e.name,e.effect_type,e.stat,e.target_spec.raw,tuple((r.raw,r.event_key,r.mode.value) for r in e.triggers),tuple((r.raw,r.mode.value,r.key,r.value,r.value2) for r in e.condition_rules),dict(e.parameters),'EXEC',TriggerDispatcher.is_executable_effect(e))
           PY
