@@ -1,0 +1,78 @@
+name: tmp-full-burst-passive-restore-v2
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+    paths: ['.github/workflows/tmp-full-burst-passive-restore-v2.yml']
+permissions:
+  contents: write
+jobs:
+  restore:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Reapply candidate with corrected regression
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          source=Path('.github/workflows/tmp-full-burst-passive-probe.yml').read_text(encoding='utf-8')
+          marker="          python - <<'PY'\n"
+          start=source.find(marker)+len(marker)
+          stop=source.find("\n          PY",start)
+          if start < len(marker) or stop < 0:
+              raise SystemExit('candidate patch block missing')
+          exec(compile(textwrap.dedent(source[start:stop]),'<full-burst-patch>','exec'),{})
+
+          marker="          cat > fast_engine/tests/test_damage_full_burst_conditional_passive.py <<'PY'\n"
+          start=source.find(marker)+len(marker)
+          stop=source.find("\n          PY",start)
+          if start < len(marker) or stop < 0:
+              raise SystemExit('test block missing')
+          body=textwrap.dedent(source[start:stop])
+          body=body.replace(
+              "from fast_engine.engine.score import static_score_blockers\n",
+              "from fast_engine.engine.score import static_score_blockers\nfrom fast_engine.engine.targets import TargetMode\n",
+              1,
+          )
+          old="self.assertFalse(full_burst_conditional_permanent_passive_shape(replace(effect, target='all_allies')))"
+          new="self.assertFalse(full_burst_conditional_permanent_passive_shape(replace(effect, target_spec=replace(effect.target_spec, mode=TargetMode.ALL_ALLIES))))"
+          if old not in body:
+              raise SystemExit('target regression anchor missing')
+          body=body.replace(old,new,1)
+          Path('fast_engine/tests/test_damage_full_burst_conditional_passive.py').write_text(body,encoding='utf-8')
+          PY
+      - name: Focused regressions
+        run: |
+          python -m unittest fast_engine.tests.test_damage_full_burst_conditional_passive
+          python -m unittest fast_engine.tests.test_conditional_passive_self_stack
+          python -m unittest fast_engine.tests.test_damage_false_supported_guards
+          python -m unittest fast_engine.tests.test_damage_real_squad_certification
+      - name: Full Fast discovery
+        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
+      - name: Public frontier assertion
+        if: always()
+        run: |
+          python - <<'PY'
+          from collections import Counter
+          from context import spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.research.public_ranking_probe import _source_corpus
+          unique={}
+          for members,source in _source_corpus(): unique.setdefault(tuple(members),source)
+          fam=Counter(); cert=[]
+          for members,source in unique.items():
+              b=static_score_blockers(compile_moris_squad(spec.build_squad(list(members))))
+              if not b: cert.append(source)
+              for row in b: fam[row.split(':',1)[0]]+=1
+          print('FRONTIER',len(unique),'CERT',cert,'FAMILIES',dict(fam))
+          assert len(unique)==23
+          assert set(cert)=={'레이드_레드후드퀀시','컨트롤_미란다미하라'}
+          assert fam==Counter({'normal_delivery':47,'normal_state':34,'skill_damage':27,'skill_state_delivery':49,'weapon_change':12,'cadence':59,'control':4,'periodic_grid':1}),fam
+          PY
