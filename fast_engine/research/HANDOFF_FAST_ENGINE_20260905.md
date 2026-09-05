@@ -11,7 +11,8 @@
 가장 먼저 읽을 문서:
 
 1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md`
-2. `fast_engine/research/CHARGE_RELOAD_CANCEL_CONTROL_CHECKPOINT_20260905.md`
+2. `fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md`
+3. `fast_engine/research/CHARGE_RELOAD_CANCEL_CONTROL_CHECKPOINT_20260905.md`
 3. `fast_engine/research/PATTERNLESS_SQUAD_PART_HIT_CHECKPOINT_20260905.md`
 3. `fast_engine/research/PERIODIC_ENEMY_RECEIVED_DAMAGE_CHECKPOINT_20260905.md`
 3. `fast_engine/research/STAT_APPLIED_CHARGE_SPEED_CHECKPOINT_20260905.md`
@@ -27,14 +28,17 @@
 
 현재 최신 production semantic commit:
 
+- `438eef65426d1ed9e17b871db7cd74e334c8e921` — cross-actor post-shot same-timestamp ordering fail-closed
+
+직전 safety production commits:
+
+- `aadfde37ad7be708f6b3d3312ff828844a8a391a` — unsafe dynamic-rank target timing fail-closed
+- `4c11c2dd4317393c3220b6f0957e12e34e3b6502` — comparison-critical scored-state remover dependency fail-closed
+
+직전 coverage production semantic commits:
+
 - `1902a71a4283528f3bea009ee4d3af6aba476a13` — pure charge `reload.cancel_on_full` ownership
-
-직전 production semantic commit:
-
 - `745d9f1afcf10d092bb58bf9e0235724a5c41946` — patternless `squad_part_hit` blocker hygiene
-
-직전 주요 semantic commit:
-
 - `37a7da91974222ab49bb0ef6b869d06a34100a4d` — post-shot `full_charge_hit` next-bullet lifetime delivery
 
 - `4a6cbe388cd0ef32ec07e5b825078fe457619181` — fixed-grid periodic enemy `received_dmg_pct` certification
@@ -127,31 +131,39 @@ post-patch frontier에서 D `캄 스나이핑` blocker 1개만 제거됐고 `nor
 
 ## 1. 현재 phase / public accounting
 
-현재는 **coverage expansion** 단계다.
+현재는 **false-supported safety closure 이후 semantics restoration** 단계다. raw coverage expansion은 일시 중단한다.
 
 Fast-certified real public memberships:
 
-- `컨트롤_미란다미하라`
-- `레이드_레드후드퀀시`
+- 현재 **없음**
 
-표준 public accounting:
+표준 public accounting (`438eef65426d1ed9e17b871db7cd74e334c8e921`):
 
 - source cases: `24`
 - unique ordered memberships: `23`
-- certified: `2`
-- coverage gaps: `21`
+- certified: `0`
+- coverage gaps: `23`
 
-latest standardized public ranking은 Helm periodic enemy candidate gate에서 실제 재실행했고 certified universe는 여전히 2개다.
+현재 fresh blocker families:
 
-- clean relative error median: `+0.0626832%`
-- min: `+0.0349533%`
-- max: `+0.0904131%`
-- pairwise accuracy: `1.0`
-- top-N recall: `1.0`
+- normal state `76`
+- normal delivery `55`
+- skill-state delivery `62`
+- skill damage `27`
+- cadence `62`
+- weapon change `12`
+- control `4`
+- periodic grid `1`
 
-Helm periodic enemy gate run `33932690769`에서 ranking probe를 재실행했고 certified universe는 이후에도 2개로 유지됐다. 최신 fresh frontier는 cadence `59`, normal delivery `41`, skill-state delivery `43`, skill damage `27`, weapon change `12`, normal state `7`, control `4`, periodic grid `1`이다.
+감사 전 certified 2개 중 `컨트롤_미란다미하라`는 lazy rank timing 미소유로, `레이드_레드후드퀀시`는 same-timestamp cross-actor post-shot ordering 미소유로 인증을 철회했다. 이는 synthetic error magnitude를 public team에 전이한 판정이 아니라, 실제 public reachability가 있는 미소유 semantics를 fail-closed한 것이다.
 
-optimizer production integration은 아직 하지 않는다.
+certified universe가 비어 있으므로 과거 2-team relative error / pairwise / top-N 수치는 현재 production certification metric으로 사용하지 않는다.
+
+다음 단일 우선순위는 global frame loop 없이 의미 있는 timestamp에서만 actor order를 보존하는 **sparse same-timestamp actor transaction** semantics다. 그 다음 lazy rank, reference-stack capture, generic full-burst conditional passive 순으로 복구한다.
+
+`레이드_볼륨`의 Scarlet ammo blocker 제거는 Maid Mast reference-stack semantics 소유 전까지 보류한다. optimizer production integration도 아직 하지 않는다.
+
+상세: `fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md`
 
 ---
 

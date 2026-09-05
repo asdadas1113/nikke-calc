@@ -1,33 +1,4 @@
-name: tmp-record-false-supported-safety-checkpoint
-
-on:
-  push:
-    branches:
-      - fast-engine-phase2-20260901
-    paths:
-      - .github/workflows/tmp-record-false-supported-safety-checkpoint.yml
-
-permissions:
-  contents: write
-
-jobs:
-  record:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-
-      - name: Write safety checkpoint and refresh handoff
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          checkpoint = Path('fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md')
-          checkpoint.write_text('''# Fast Engine false-supported 안전성 봉합 체크포인트 — 2026-09-06
+# Fast Engine false-supported 안전성 봉합 체크포인트 — 2026-09-06
 
 ## 1. 목적
 
@@ -163,8 +134,7 @@ same-timestamp production promotion run:
 coverage blocker를 단순 제거하는 단계로 바로 복귀하지 않는다. 다음은 fail-closed를 다시 실제 semantics ownership으로 바꾸는 단계다.
 
 1. **sparse same-timestamp actor transaction**
-   - 가장 먼저 검토한다.
-   - global 60 Hz loop 없이 의미 있는 timestamp에서만 actor order를 분할하는 방식이 목표다.
+   - global 60 Hz loop 없이 의미 있는 timestamp에서만 actor order를 분할한다.
    - RHQ certification 복구에 직접 연결될 가능성이 가장 높다.
 2. **lazy dynamic-rank resolution / same-event cohort semantics**
    - Miranda surface 복구 후보.
@@ -186,44 +156,3 @@ coverage blocker를 단순 제거하는 단계로 바로 복귀하지 않는다.
 - `.github/workflows`: `ci.yml`, `pages.yml`만 유지
 
 다음 재개점은 **sparse same-timestamp actor transaction semantics 설계/검증**이다.
-''', encoding='utf-8')
-
-          p = Path('fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md')
-          t = p.read_text(encoding='utf-8')
-
-          old = '''1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md`\n2. `fast_engine/research/CHARGE_RELOAD_CANCEL_CONTROL_CHECKPOINT_20260905.md`\n'''
-          new = '''1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md`\n2. `fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md`\n3. `fast_engine/research/CHARGE_RELOAD_CANCEL_CONTROL_CHECKPOINT_20260905.md`\n'''
-          if t.count(old) != 1:
-              raise SystemExit('handoff reading-order anchor changed')
-          t = t.replace(old, new, 1)
-
-          old = '''현재 최신 production semantic commit:\n\n- `1902a71a4283528f3bea009ee4d3af6aba476a13` — pure charge `reload.cancel_on_full` ownership\n\n직전 production semantic commit:\n\n- `745d9f1afcf10d092bb58bf9e0235724a5c41946` — patternless `squad_part_hit` blocker hygiene\n\n직전 주요 semantic commit:\n\n- `37a7da91974222ab49bb0ef6b869d06a34100a4d` — post-shot `full_charge_hit` next-bullet lifetime delivery\n'''
-          new = '''현재 최신 production semantic commit:\n\n- `438eef65426d1ed9e17b871db7cd74e334c8e921` — cross-actor post-shot same-timestamp ordering fail-closed\n\n직전 safety production commits:\n\n- `aadfde37ad7be708f6b3d3312ff828844a8a391a` — unsafe dynamic-rank target timing fail-closed\n- `4c11c2dd4317393c3220b6f0957e12e34e3b6502` — comparison-critical scored-state remover dependency fail-closed\n\n직전 coverage production semantic commit:\n\n- `1902a71a4283528f3bea009ee4d3af6aba476a13` — pure charge `reload.cancel_on_full` ownership\n- `745d9f1afcf10d092bb58bf9e0235724a5c41946` — patternless `squad_part_hit` blocker hygiene\n- `37a7da91974222ab49bb0ef32ec07e5b825078fe457619181` — placeholder\n'''
-          # Keep the historical full-charge line correct; construct explicitly after validating old block.
-          if t.count(old) != 1:
-              raise SystemExit('handoff latest semantic anchor changed')
-          new = new.replace('`37a7da91974222ab49bb0ef32ec07e5b825078fe457619181` — placeholder', '`37a7da91974222ab49bb0ef6b869d06a34100a4d` — post-shot `full_charge_hit` next-bullet lifetime delivery')
-          t = t.replace(old, new, 1)
-
-          old = '''## 1. 현재 phase / public accounting\n\n현재는 **coverage expansion** 단계다.\n\nFast-certified real public memberships:\n\n- `컨트롤_미란다미하라`\n- `레이드_레드후드퀀시`\n\n표준 public accounting:\n\n- source cases: `24`\n- unique ordered memberships: `23`\n- certified: `2`\n- coverage gaps: `21`\n\nlatest standardized public ranking은 Helm periodic enemy candidate gate에서 실제 재실행했고 certified universe는 여전히 2개다.\n\n- clean relative error median: `+0.0626832%`\n- min: `+0.0349533%`\n- max: `+0.0904131%`\n- pairwise accuracy: `1.0`\n- top-N recall: `1.0`\n\nHelm periodic enemy gate run `33932690769`에서 ranking probe를 재실행했고 certified universe는 이후에도 2개로 유지됐다. 최신 fresh frontier는 cadence `59`, normal delivery `41`, skill-state delivery `43`, skill damage `27`, weapon change `12`, normal state `7`, control `4`, periodic grid `1`이다.\n\noptimizer production integration은 아직 하지 않는다.\n'''
-          new = '''## 1. 현재 phase / public accounting\n\n현재는 **false-supported safety closure 이후 semantics restoration** 단계다. raw coverage expansion은 일시 중단한다.\n\nFast-certified real public memberships:\n\n- 현재 **없음**\n\n표준 public accounting (`438eef65426d1ed9e17b871db7cd74e334c8e921`):\n\n- source cases: `24`\n- unique ordered memberships: `23`\n- certified: `0`\n- coverage gaps: `23`\n\n현재 fresh blocker families:\n\n- normal state `76`\n- normal delivery `55`\n- skill-state delivery `62`\n- skill damage `27`\n- cadence `62`\n- weapon change `12`\n- control `4`\n- periodic grid `1`\n\n감사 전 certified 2개 중 `컨트롤_미란다미하라`는 lazy rank timing 미소유로, `레이드_레드후드퀀시`는 same-timestamp cross-actor post-shot ordering 미소유로 인증을 철회했다. 이는 synthetic error magnitude를 public team에 전이한 판정이 아니라, 실제 public reachability가 있는 미소유 semantics를 fail-closed한 것이다.\n\ncertified universe가 비어 있으므로 과거 2-team relative error / pairwise / top-N 수치는 현재 production certification metric으로 사용하지 않는다.\n\n다음 단일 우선순위는 global frame loop 없이 의미 있는 timestamp에서만 actor order를 보존하는 **sparse same-timestamp actor transaction** semantics다. 그 다음 lazy rank, reference-stack capture, generic full-burst conditional passive 순으로 복구한다.\n\n`레이드_볼륨`의 Scarlet ammo blocker 제거는 Maid Mast reference-stack semantics 소유 전까지 보류한다. optimizer production integration도 아직 하지 않는다.\n\n상세: `fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md`\n'''
-          if t.count(old) != 1:
-              raise SystemExit('handoff phase/accounting anchor changed')
-          t = t.replace(old, new, 1)
-          p.write_text(t, encoding='utf-8')
-          PY
-
-      - name: Sanity check docs and clean workflow
-        run: |
-          test -f fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md
-          grep -q 'certified: `0`' fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md
-          grep -q '438eef65426d1ed9e17b871db7cd74e334c8e921' fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md
-          ! grep -q '현재는 \*\*coverage expansion\*\* 단계다' fast_engine/research/HANDOFF_FAST_ENGINE_20260905.md
-          rm -f .github/workflows/tmp-record-false-supported-safety-checkpoint.yml
-          git diff --check
-          git config user.name "asdadas1113"
-          git config user.email "crony06@gmail.com"
-          git add -A
-          git diff --cached --check
-          git commit -m "docs: record false-supported safety repair checkpoint"
-          git push origin HEAD:fast-engine-phase2-20260901
