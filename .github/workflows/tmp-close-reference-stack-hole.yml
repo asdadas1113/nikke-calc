@@ -1,0 +1,118 @@
+name: tmp-close-reference-stack-hole
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+    paths:
+      - .github/workflows/tmp-close-reference-stack-hole.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Add narrow reference-stack fail-closed guards
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('fast_engine/engine/damage_policy.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''    if effect.effect_type != "buff" or (effect.stat or "") not in DIRECT_DAMAGE_STATE_STATS:\n        return False\n    if not _one_shot_lifetime_supported(effect):\n'''
+          new = '''    if effect.effect_type != "buff" or (effect.stat or "") not in DIRECT_DAMAGE_STATE_STATS:\n        return False\n    # Moris captures stack_count reference scaling at the activation boundary.\n    # Fast does not own that captured multiplier yet, so this exact family must\n    # fail closed instead of applying the raw unscaled value.\n    if (\n        effect.parameters.get("scaling") == "stack_count"\n        or "scaling_ref" in effect.parameters\n    ):\n        return False\n    if not _one_shot_lifetime_supported(effect):\n'''
+          if text.count(old) != 1:
+              raise SystemExit('direct damage support anchor changed')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          path = Path('fast_engine/engine/score.py')
+          text = path.read_text(encoding='utf-8')
+          anchor = '''def _is_patternless_unreachable(effect) -> bool:\n    return (\n'''
+          helper = '''def _has_unowned_reference_stack_scaling(effect) -> bool:\n    return (\n        effect.parameters.get("scaling") == "stack_count"\n        or "scaling_ref" in effect.parameters\n    )\n\n\n'''
+          if text.count(anchor) != 1:
+              raise SystemExit('score helper anchor changed')
+          text = text.replace(anchor, helper + anchor, 1)
+          old = '''        if _is_patternless_unreachable(effect):\n            continue\n\n        if effect.effect_type == "weapon_change":\n'''
+          new = '''        if _is_patternless_unreachable(effect):\n            continue\n\n        if (\n            _has_unowned_reference_stack_scaling(effect)\n            and stat in _CADENCE_OR_SHAPE_STATS\n        ):\n            blockers.append(f"cadence:{label}")\n            continue\n\n        if effect.effect_type == "weapon_change":\n'''
+          if text.count(old) != 1:
+              raise SystemExit('score blocker anchor changed')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          Path('fast_engine/tests/test_damage_false_supported_guards.py').write_text('''from __future__ import annotations\n\nimport unittest\nfrom unittest.mock import patch\n\nfrom calculator.buff_manager import BuffManager\nfrom context.spec import build_squad\nfrom fast_engine.engine.compiler import compile_moris_squad\nfrom fast_engine.engine.score import static_score_blockers\n\n\n_NAMES = ["라피", "폴리", "프로덕트 12", "미란다", "아니스"]\n\n\ndef _effect(name: str, stat: str, *, target: str, duration: float, timing: str):\n    return {\n        "source": "skill1",\n        "type": "buff",\n        "name": name,\n        "stat": stat,\n        "fixed_value": 100.0,\n        "polarity": "beneficial",\n        "target": target,\n        "duration": duration,\n        "trigger": {"timing": [timing], "condition": []},\n        "scaling": "stack_count",\n        "scaling_ref": "AUDIT reference",\n    }\n\n\ndef _compiled(raw_effects):\n    mapping = {_NAMES[0]: raw_effects}\n    def fake_char_effects(self, name):\n        return mapping.get(name, [])\n    with patch.object(BuffManager, "char_effects", new=fake_char_effects):\n        return compile_moris_squad(build_squad(_NAMES))\n\n\nclass FalseSupportedScalingGuardTests(unittest.TestCase):\n    def test_reference_scaled_direct_buff_fails_closed(self):\n        squad = _compiled([_effect(\n            "AUDIT scaled atk", "atk_pct",\n            target="all_allies", duration=10.0, timing="burst_cast",\n        )])\n        blockers = static_score_blockers(squad)\n        self.assertIn("normal_delivery:라피:AUDIT scaled atk:atk_pct", blockers)\n        self.assertIn("skill_state_delivery:라피:AUDIT scaled atk:atk_pct", blockers)\n\n    def test_reference_scaled_permanent_cadence_buff_is_not_static_folded(self):\n        squad = _compiled([_effect(\n            "AUDIT scaled reload", "reload_speed_pct",\n            target="self", duration=-1.0, timing="battle_start",\n        )])\n        blockers = static_score_blockers(squad)\n        self.assertIn("cadence:라피:AUDIT scaled reload:reload_speed_pct", blockers)\n\n\nif __name__ == "__main__":\n    unittest.main()\n''', encoding='utf-8')
+          PY
+      - name: Inspect real reference-scaling effects
+        run: |
+          python - <<'PY'
+          from context import spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.research.public_ranking_probe import _source_corpus
+          seen = set()
+          for members, source in _source_corpus():
+              key = tuple(members)
+              if key in seen:
+                  continue
+              seen.add(key)
+              squad = compile_moris_squad(spec.build_squad(list(members)))
+              for effect in squad.effects:
+                  if effect.parameters.get('scaling') == 'stack_count' or 'scaling_ref' in effect.parameters:
+                      owner = squad.members[effect.actor].name
+                      print('REF', source, owner, effect.name, effect.stat, dict(effect.parameters))
+          PY
+      - name: Focused adversarial regression
+        run: python -m unittest fast_engine.tests.test_damage_false_supported_guards fast_engine.tests.test_damage_stat_applied_charge_speed
+      - name: Full Fast regression and capture status
+        id: full
+        shell: bash
+        run: |
+          set +e
+          python -m unittest discover -s fast_engine/tests -p 'test_*.py'
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Recompute public frontier
+        run: |
+          python - <<'PY'
+          from collections import Counter
+          from context import spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.research.public_ranking_probe import _source_corpus
+          unique = {}
+          for members, source in _source_corpus():
+              unique.setdefault(tuple(members), source)
+          family = Counter(); rows=[]
+          for members, source in unique.items():
+              blockers = static_score_blockers(compile_moris_squad(spec.build_squad(list(members))))
+              rows.append((source, len(blockers), blockers))
+              for blocker in blockers:
+                  family[blocker.split(':',1)[0]] += 1
+          print('FRONTIER', len(unique), 'CERTIFIED', sum(n == 0 for _,n,_ in rows), 'FAMILIES', dict(family))
+          for source,n,blockers in rows:
+              if source in {'레이드_볼륨','스쿼드4','스쿼드3','레이드_소다','레이드_앨리스브래디','레이드_루주','레이드_브리드디젤'}:
+                  print('ROW', source, n, blockers)
+          PY
+      - name: Stop before commit if legacy expectations need update
+        if: steps.full.outputs.status != '0'
+        run: |
+          echo "Full Fast regressions need expectation updates; leaving semantic files uncommitted."
+          exit 1
+      - name: Commit guard and remove temporary workflows
+        if: steps.full.outputs.status == '0'
+        run: |
+          rm -f .github/workflows/tmp-close-scaling-hole.yml
+          rm -f .github/workflows/tmp-close-reference-stack-hole.yml
+          git diff --check
+          git config user.name "asdadas1113"
+          git config user.email "crony06@gmail.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "Fast: fail closed on unowned reference stack scaling"
+          git push origin HEAD:fast-engine-phase2-20260901
