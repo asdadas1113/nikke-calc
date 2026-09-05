@@ -6,11 +6,13 @@ from context import snapshot, spec
 from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.score import static_score_blockers
 
-source = [
-    (label, tuple(cfg['members']))
-    for label, cfg in snapshot.SQUADS.items()
-    if len(tuple(cfg['members'])) == 5
-]
+source = []
+for label, cfg in snapshot.SQUADS.items():
+    members = tuple(str(m) for m in cfg['members'])
+    if len(members) != 5 or any(m.startswith('test_') for m in members):
+        continue
+    source.append((str(label), members))
+
 unique = []
 seen = set()
 for label, members in source:
