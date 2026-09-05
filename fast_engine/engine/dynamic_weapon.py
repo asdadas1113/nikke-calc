@@ -7,7 +7,11 @@ from .dynamic_rapid import DynamicRapidCadenceRuntime
 from .scheduler import EventScheduler, ScheduledEvent
 from .state import StateStore
 from .triggers import TriggerMode
-from .weapon import DynamicChargeCadenceRuntime, is_supported_charge_hold_control
+from .weapon import (
+    DynamicChargeCadenceRuntime,
+    is_supported_charge_hold_control,
+    is_supported_charge_reload_cancel_control,
+)
 
 if TYPE_CHECKING:
     from .effects import ActiveEffectStore
@@ -224,8 +228,8 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
     ) -> bool:
         """Apply an instant ammo refill to dynamic weapon state.
 
-        All recipients are validated before mutation. Reload-cancel-on-full is
-        intentionally outside this slice; certification rejects such controls.
+        All recipients are validated before mutation. Pure charge
+        ``reload.cancel_on_full`` cancels only an active reload filled to full.
         """
 
         if value < 0.0:
@@ -265,7 +269,15 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
             full = self._full_ammo(actor, float(now))
             gain = self._ammo_charge_gain(full, stat, value)
             st.ammo = min(full, st.ammo + gain)
-            if st.phase == "post_fire_reload" and st.ammo > 0:
+            if (
+                st.phase == "reloading"
+                and st.ammo >= full
+                and is_supported_charge_reload_cancel_control(self.squad.members[actor])
+            ):
+                # Moris keeps the refill, cancels the active reload without
+                # full_reload/post-reload semantics, and may charge immediately.
+                self._enter_charge(st, float(now), float(now))
+            elif st.phase == "post_fire_reload" and st.ammo > 0:
                 # Refill arrived after the last shot but before reload start.
                 # Keep the existing post-fire boundary, then charge again.
                 st.phase = "post_fire"

@@ -48,6 +48,28 @@ def is_supported_charge_hold_control(member) -> bool:
     return lead >= 0.0
 
 
+def is_supported_charge_reload_cancel_control(member) -> bool:
+    """Certify pure non-clip charge ``reload.cancel_on_full`` control.
+
+    Mixed charge controls and any additional reload policy remain fail-closed.
+    """
+
+    weapon = member.weapon
+    if str(weapon.get("fire_mode") or "") != "charge":
+        return False
+    if weapon.get("is_clip"):
+        return False
+    control = weapon.get("control") or {}
+    if not isinstance(control, dict) or set(control) != {"reload"}:
+        return False
+    reload_control = control.get("reload")
+    return (
+        isinstance(reload_control, dict)
+        and set(reload_control) == {"cancel_on_full"}
+        and reload_control.get("cancel_on_full") is True
+    )
+
+
 def _round_half_up(value: float) -> int:
     return math.floor(value + 0.5)
 

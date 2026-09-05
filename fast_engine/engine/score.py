@@ -22,7 +22,11 @@ from .shot_blocks import (
 )
 from .target_scope import possible_ally_targets, target_scope_is_static
 from .triggers import TriggerMode
-from .weapon import StaticCadenceModifiers, is_supported_charge_hold_control
+from .weapon import (
+    StaticCadenceModifiers,
+    is_supported_charge_hold_control,
+    is_supported_charge_reload_cancel_control,
+)
 
 if TYPE_CHECKING:
     from .burst import BurstPolicy
@@ -240,7 +244,10 @@ def _charge_actor_score_safe(squad: CompiledSquad, actor: int) -> bool:
     if str(member.weapon.get("fire_mode") or "") != "charge":
         return False
     control = member.weapon.get("control") or {}
-    if control and not is_supported_charge_hold_control(member):
+    if control and not (
+        is_supported_charge_hold_control(member)
+        or is_supported_charge_reload_cancel_control(member)
+    ):
         return False
     if member.weapon.get("is_clip"):
         return False

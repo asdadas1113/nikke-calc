@@ -62,7 +62,7 @@ class FullChargeHitChargeSpeedTests(unittest.TestCase):
                     )
         self.assertEqual(len(seen), 23)
         self.assertEqual(certified, 2)
-        self.assertEqual(cadence, 63)
+        self.assertEqual(cadence, 59)
         self.assertEqual(len(matches), 2)
         self.assertEqual(
             {(row[1], row[2], row[3]) for row in matches},
