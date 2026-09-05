@@ -3,20 +3,33 @@ on:
   push:
     branches: [fast-engine-phase2-20260901]
     paths:
-      - 'fast_engine/research/tmp_maid_mast_multistack_audit.py'
-      - 'fast_engine/research/tmp_maid_mast_b1_trace.py'
-      - 'fast_engine/research/tmp_maid_mast_fast_probe.py'
-      - 'fast_engine/research/tmp_anchor_harmful_stack_scope.py'
+      - 'fast_engine/research/tmp_patch_maid_mast_stack.py'
       - '.github/workflows/tmp-maid-mast-multistack-audit.yml'
+permissions:
+  contents: write
 jobs:
-  audit:
+  patch:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: fast-engine-phase2-20260901
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Audit Anchor harmful-stack scope
-        run: PYTHONPATH=. python fast_engine/research/tmp_anchor_harmful_stack_scope.py
+      - name: Apply narrow stack patch
+        run: PYTHONPATH=. python fast_engine/research/tmp_patch_maid_mast_stack.py
+      - name: Focused regressions
+        run: |
+          PYTHONPATH=. python -m unittest fast_engine.tests.test_damage_maid_mast_stack_mutation
+          PYTHONPATH=. python -m unittest fast_engine.tests.test_damage_false_supported_guards
+          PYTHONPATH=. python -m unittest fast_engine.tests.test_dispatch_burst_runtime
+      - name: Commit semantic patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add fast_engine/engine/effects.py fast_engine/engine/dispatcher.py fast_engine/engine/score.py fast_engine/tests/test_damage_maid_mast_stack_mutation.py
+          git diff --cached --check
+          git commit -m 'Fast: own generic harmful stack decrement'
+          git push origin HEAD:fast-engine-phase2-20260901
