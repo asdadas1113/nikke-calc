@@ -16,14 +16,23 @@ class DynamicWeaponChangeTest(unittest.TestCase):
         return squad, compile_moris_squad(squad)
 
     def test_red_hood_mint_frika_team_clears_weapon_change_and_max_ammo_blockers(self):
-        _squad, compiled = self._team("레이드_레드후드퀀시")
+        squad, compiled = self._team("레이드_레드후드퀀시")
         blockers = static_score_blockers(compiled)
-        self.assertFalse(
-            any("weapon_change" in item or "max_ammo" in item for item in blockers), blockers
+        self.assertEqual(blockers, ())
+        self.assertFalse(any("weapon_change" in item or "max_ammo" in item for item in blockers))
+        cfg = spec.build_config(squad, {
+            "duration": 30.0,
+            "first_burst_time": 3.0,
+            "rng_mode": "expected",
+        })
+        policy = compile_burst_policy(squad, compiled, cfg)
+        score = score_static_squad(
+            compiled,
+            policy,
+            EnemyStaticProfile(defense=31784.0, duration=30.0),
         )
-        self.assertIn(
-            "normal_state:프리카:무대, 시작할게. 3:same_timestamp_actor_order", blockers
-        )
+        self.assertEqual(score.unsupported, ())
+        self.assertGreater(score.squad_total, 0.0)
 
     def test_red_hood_transform_activates_and_restores_effective_weapon(self):
         from fast_engine.engine.burst import BurstPolicy, BurstSignal
