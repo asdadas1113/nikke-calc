@@ -1,0 +1,39 @@
+name: tmp-finish-charge-reload-checkpoint
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+    paths:
+      - .github/workflows/tmp-finish-charge-reload-checkpoint.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Record checkpoint and refresh handoff
+        run: python .tmp_record_charge_reload_checkpoint.py
+      - name: Validate and clean temporary recorder files
+        run: |
+          python -m context.doclint
+          rm .tmp_record_charge_reload_checkpoint.py
+          rm .github/workflows/tmp-record-charge-reload-checkpoint.yml
+          rm .github/workflows/tmp-finish-charge-reload-checkpoint.yml
+          git diff --check
+      - name: Commit final checkpoint cleanup
+        run: |
+          git config user.name "asdadas1113"
+          git config user.email "crony06@gmail.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "docs: finalize charge reload checkpoint"
+          git push origin HEAD:fast-engine-phase2-20260901
