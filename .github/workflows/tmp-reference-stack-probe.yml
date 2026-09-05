@@ -1,0 +1,80 @@
+name: tmp-reference-stack-probe
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+    paths:
+      - .github/workflows/tmp-reference-stack-probe.yml
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Probe public reference-stack surface
+        run: |
+          python - <<'PY'
+          from context import spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.research.public_ranking_probe import _source_corpus
+
+          unique = {}
+          for members, source in _source_corpus():
+              unique.setdefault(tuple(members), source)
+
+          print('PUBLIC_UNIQUE', len(unique))
+          touched = 0
+          for members, source in unique.items():
+              compiled = compile_moris_squad(spec.build_squad(list(members)))
+              rows = []
+              for eff in compiled.effects:
+                  scaling = eff.parameters.get('scaling')
+                  ref = eff.parameters.get('scaling_ref')
+                  if scaling != 'stack_count' and ref is None:
+                      continue
+                  actor_name = compiled.members[eff.actor].name
+                  providers = []
+                  if isinstance(ref, str) and ref:
+                      for p in compiled.members[eff.actor].effects:
+                          if p.effect_id == eff.effect_id or p.name != ref:
+                              continue
+                          providers.append({
+                              'name': p.name,
+                              'stat': p.stat,
+                              'type': p.effect_type,
+                              'target': p.target,
+                              'duration': p.duration,
+                              'max_stack': p.max_stack,
+                              'triggers': [r.raw for r in p.triggers],
+                              'executable': TriggerDispatcher.is_runtime_executable_effect(p),
+                          })
+                  rows.append({
+                      'actor': actor_name,
+                      'effect': eff.name,
+                      'stat': eff.stat,
+                      'type': eff.effect_type,
+                      'target': eff.target,
+                      'duration': eff.duration,
+                      'max_stack': eff.max_stack,
+                      'triggers': [r.raw for r in eff.triggers],
+                      'conditions': list(eff.conditions),
+                      'scaling': scaling,
+                      'ref': ref,
+                      'runtime_executable': TriggerDispatcher.is_runtime_executable_effect(eff),
+                      'providers': providers,
+                  })
+              if not rows:
+                  continue
+              touched += 1
+              print('\nSOURCE', source, 'MEMBERS', members)
+              print('BLOCKERS', static_score_blockers(compiled))
+              for row in rows:
+                  print('REF_EFFECT', row)
+          print('\nTOUCHED_MEMBERSHIPS', touched)
+          PY
