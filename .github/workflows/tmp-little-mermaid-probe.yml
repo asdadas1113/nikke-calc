@@ -7,6 +7,7 @@ on:
       - .github/workflows/tmp-little-mermaid-probe.yml
       - .github/tmp_little_mermaid_patch.py
       - .github/tmp_little_mermaid_fix.py
+      - .github/tmp_little_mermaid_test_refresh.py
   workflow_dispatch:
 permissions:
   contents: write
@@ -22,6 +23,7 @@ jobs:
         run: |
           python .github/tmp_little_mermaid_patch.py
           python .github/tmp_little_mermaid_fix.py
+          python .github/tmp_little_mermaid_test_refresh.py
           git diff --check
       - name: Focused semantic contract
         run: |
@@ -73,7 +75,11 @@ jobs:
             fast_engine/engine/damage_runtime.py \
             fast_engine/engine/score.py \
             fast_engine/engine/burst_runtime.py \
-            fast_engine/tests/test_damage_little_mermaid_lifecycle.py
+            fast_engine/tests/test_damage_little_mermaid_lifecycle.py \
+            fast_engine/tests/test_damage_full_charge_bullet_lifetime.py \
+            fast_engine/tests/test_damage_full_charge_hit_charge_speed.py \
+            fast_engine/tests/test_damage_stat_applied_charge_speed.py \
+            fast_engine/tests/test_damage_state_end_named_stack.py
           git diff --cached --check
           git commit -m "Fast: own Little Mermaid replacement and squad-ammo lifecycle"
           git push origin HEAD:fast-engine-phase2-20260901
