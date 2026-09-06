@@ -14,72 +14,57 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Moris Little Mermaid lifecycle trace
+      - name: Little Mermaid ownership surface audit
         run: |
           python - <<'PY'
-          from unittest.mock import patch
           from context import snapshot, spec
-          from calculator.timeline import simulate
-          from calculator.buff_manager import BuffManager
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import (
+              static_score_blockers,
+              _dynamic_charge_score_actors,
+              _dynamic_rapid_reload_score_actors,
+              _charge_actor_score_safe,
+              _rapid_actor_score_safe,
+          )
+          from fast_engine.engine.dispatcher import TriggerDispatcher
 
-          for team in ('레이드_델타','스쿼드1'):
-              squad=spec.build_squad(list(snapshot.SQUADS[team]['members']))
-              events=[]
-              squad_ammo=0
-              lm_hits=0
-              crossings=[]
-              orig_notify=BuffManager.notify
-              orig_instant=BuffManager._dispatch_instant
+          delta=compile_moris_squad(spec.build_squad(list(snapshot.SQUADS['레이드_델타']['members'])))
+          print('DELTA MEMBERS')
+          for i,m in enumerate(delta.members):
+              mode=str(m.weapon.get('fire_mode') or '')
+              safe=_charge_actor_score_safe(delta,i) if mode=='charge' else _rapid_actor_score_safe(delta,i)
+              print(i,m.name,'mode',mode,'type',m.weapon.get('weapon_type'),'ammo',m.weapon.get('max_ammo'),'reload',m.weapon.get('reload_time'),'clip',m.weapon.get('is_clip'),'control',m.weapon.get('control'),'safe',safe)
+          print('DYNAMIC_CHARGE',_dynamic_charge_score_actors(delta))
+          print('DYNAMIC_RAPID',_dynamic_rapid_reload_score_actors(delta))
+          print('BLOCKERS',static_score_blockers(delta))
 
-              def traced_notify(self,event,t,caster,**ctx):
-                  global squad_ammo, lm_hits
-                  if event=='squad_ammo_consume':
-                      squad_ammo += 1
-                      if squad_ammo in (498,499,500,501,998,999,1000,1001):
-                          crossings.append(('squad_ammo',squad_ammo,float(t),caster))
-                  if event=='hit_count' and caster=='리틀 머메이드':
-                      lm_hits += 1
-                      if lm_hits in (48,49,50,51,98,99,100,101):
-                          crossings.append(('lm_hit',lm_hits,float(t),caster))
-                  return orig_notify(self,event,t,caster,**ctx)
+          print('\nALL SQUAD_AMMO EFFECTS IN PUBLIC FRONTIER')
+          seen=set()
+          for label,row in snapshot.SQUADS.items():
+              if str(label).startswith('지그_'): continue
+              members=tuple(row.get('members') or ())
+              if len(members)!=5 or any(str(x).startswith('test_') for x in members) or members in seen: continue
+              seen.add(members)
+              squad=compile_moris_squad(spec.build_squad(list(members)))
+              for e in squad.effects:
+                  for r in e.triggers:
+                      if r.event_key=='squad_ammo_consume':
+                          print(label,squad.members[e.actor].name,repr(e.name),e.effect_type,e.stat,e.value,'target',e.target,'rule',r.raw,r.mode.value,r.threshold,'exec',TriggerDispatcher.is_executable_effect(e),'conds',e.conditions)
 
-              def traced_instant(self,eff,caster,t,*args,**kwargs):
-                  if eff.get('stat')=='remove_named_buff' and eff.get('target_effect')=='거품':
-                      before=[(ab.effect.get('name'),ab.caster,list(ab.target_chars or [])) for ab in self._active if ab.effect.get('name') in {'거품','터진 거품','터진 거품 2'}]
-                      events.append(('remove_before',float(t),eff.get('name'),before))
-                      out=orig_instant(self,eff,caster,t,*args,**kwargs)
-                      after=[(ab.effect.get('name'),ab.caster,list(ab.target_chars or [])) for ab in self._active if ab.effect.get('name') in {'거품','터진 거품','터진 거품 2'}]
-                      events.append(('remove_after',float(t),eff.get('name'),after))
-                      return out
-                  return orig_instant(self,eff,caster,t,*args,**kwargs)
-
-              with patch.object(BuffManager,'notify',new=traced_notify), patch.object(BuffManager,'_dispatch_instant',new=traced_instant):
-                  result=simulate(squad,config={'duration':60.0,'rng_mode':'expected'},verbose=True)
-
-              print('\n===',team,'===')
-              print('MEMBERS',snapshot.SQUADS[team]['members'])
-              print('COUNTS squad_ammo',squad_ammo,'lm_hits',lm_hits)
-              for row in crossings:
-                  print('CROSS',row)
-              for row in result.log.buff_events:
-                  if row.name in {'거품','터진 거품','터진 거품 2'}:
-                      print('BUFF',row.kind,row.name,'t',repr(float(row.t)),'target',row.target,'expires',row.expires_at,'stat',row.stat,'value',row.value)
-              for row in result.log.instant_events:
-                  if row.name in {'터진 거품 3','버블 오더 4'}:
-                      print('INSTANT',row.name,'t',repr(float(row.t)),'caster',row.caster,'target',row.target,'stat',row.stat,'value',row.value)
-              for row in events:
-                  print('STATE',row)
-              skill_hits=[h for h in result.hits if h.caster=='리틀 머메이드' and h.skill_name in {'거품 난사','버블 웨이브'}]
-              by_skill={}
-              for h in skill_hits:
-                  by_skill.setdefault(h.skill_name,[]).append(h)
-              for skill, rows in by_skill.items():
-                  print('SKILL',skill,'count',len(rows),'total',sum(r.damage for r in rows))
-                  groups=[]
-                  for r in rows:
-                      if not groups or abs(groups[-1][0]-r.t)>1e-9:
-                          groups.append([float(r.t),1,r.damage])
-                      else:
-                          groups[-1][1]+=1; groups[-1][2]+=r.damage
-                  for g in groups[:12]: print(' HITGROUP',skill,g)
+          print('\nLM RELATED STATE OBSERVERS / MUTATORS')
+          names={'거품','터진 거품','터진 거품 2'}
+          for label,row in snapshot.SQUADS.items():
+              if str(label).startswith('지그_') or '리틀 머메이드' not in row.get('members',()): continue
+              squad=compile_moris_squad(spec.build_squad(list(row['members'])))
+              print('TEAM',label)
+              for e in squad.effects:
+                  touches=[]
+                  if e.name in names: touches.append('name')
+                  if e.parameters.get('target_effect') in names: touches.append('target_effect')
+                  if any(rule.key in names for rule in e.condition_rules): touches.append('condition')
+                  if any((r.event_key or '').startswith('event:state_end:') and (r.event_key or '').split(':',2)[-1] in names for r in e.triggers): touches.append('state_end')
+                  raw=' '.join(e.conditions)
+                  if 'stun' in raw or '기절' in raw: touches.append('stun_condition')
+                  if touches:
+                      print(' ',squad.members[e.actor].name,e.effect_id,e.actor_effect_index,repr(e.name),e.effect_type,e.stat,'touch',touches,'target',e.target,'conds',e.conditions,'trig',[r.raw for r in e.triggers])
           PY
