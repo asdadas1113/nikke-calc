@@ -8,7 +8,7 @@ on:
       - '.github/tmp_crown_test_refresh.py'
       - '.github/workflows/tmp-crown-probe.yml'
 permissions:
-  contents: read
+  contents: write
 jobs:
   probe:
     runs-on: ubuntu-latest
@@ -62,3 +62,20 @@ jobs:
           target=compile_moris_squad(spec.build_squad(list(snapshot.SQUADS['레이드_아스카루드밀라']['members'])))
           print('TARGET_BLOCKERS',static_score_blockers(target))
           PY
+      - name: Promote semantic checkpoint
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            fast_engine/engine/dispatcher.py \
+            fast_engine/engine/burst_runtime.py \
+            fast_engine/tests/test_damage_crown_royal_attire_lifecycle.py \
+            fast_engine/tests/test_damage_dynamic_ammo_charge.py \
+            fast_engine/tests/test_damage_full_charge_bullet_lifetime.py \
+            fast_engine/tests/test_damage_full_charge_hit_charge_speed.py \
+            fast_engine/tests/test_damage_shield_runtime.py \
+            fast_engine/tests/test_damage_stat_applied_charge_speed.py \
+            fast_engine/tests/test_stack_heal_received_runtime.py
+          git diff --cached --check
+          git commit -m "Fast: own Crown heal-received lifetime and zero-core guard"
+          git push origin HEAD:fast-engine-phase2-20260901
