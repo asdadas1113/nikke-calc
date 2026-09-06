@@ -12,60 +12,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Trace raid volume Moris oracle
+      - name: Audit raid volume cadence recipients
         run: |
           python - <<'PY'
           from context import snapshot, spec
-          import calculator.buff_manager as bm_mod
-          import calculator.timeline as tl
+          from fast_engine.engine.compiler import compile_moris_squad
+          import fast_engine.engine.score as score
+          from fast_engine.engine.target_scope import possible_ally_targets
+          from fast_engine.engine.dispatcher import TriggerDispatcher
 
-          members = list(snapshot.SQUADS['레이드_볼륨']['members'])
-          squad = spec.build_squad(members)
-          print('MEMBERS', members)
-          for c in squad:
-              print('CHAR', c['name'], 'burst=', c.get('burst_stage'), 'atk=', c.get('atk'), 'weapon=', c.get('weapon_type'), 'max_ammo=', c.get('max_ammo'), 'charge_time=', c.get('charge_time'), 'control=', c.get('control'))
-
-          orig_lazy = bm_mod.BuffManager._resolve_lazy
-          def traced_lazy(self, ab):
-              if ab.effect.get('name') == '차분한 수심 4' and ab.target_chars is None:
-                  b3 = [n for n in self.squad_names if tl._NIKKE.get(n, {}).get('burst_stage') == '3']
-                  print('LAZY_BEFORE', ab.activated_at, [(n, self._effective_atk(n)) for n in b3])
-                  out = orig_lazy(self, ab)
-                  print('LAZY_AFTER', ab.activated_at, out)
-                  return out
-              return orig_lazy(self, ab)
-          bm_mod.BuffManager._resolve_lazy = traced_lazy
-
-          current = {'name': None, 't': None}
-          orig_dispatch = bm_mod.BuffManager._dispatch_instant
-          def traced_dispatch(self, eff, caster, t, *args, **kwargs):
-              prev = dict(current)
-              current['name'] = eff.get('name')
-              current['t'] = t
-              try:
-                  return orig_dispatch(self, eff, caster, t, *args, **kwargs)
-              finally:
-                  current.update(prev)
-          bm_mod.BuffManager._dispatch_instant = traced_dispatch
-
-          orig_full = tl.CharState._full_ammo
-          def traced_full(self, bm, t):
-              full = orig_full(self, bm, t)
-              if self.name == '홍련 : 흑영' and current.get('name') == '화무십일홍 · 수라 2':
-                  print('AMMO_CHARGE_INPUT', t, 'ammo_before=', self.ammo, 'effective_full=', full, 'phase_reload_until=', self.reloading_until)
-              return full
-          tl.CharState._full_ammo = traced_full
-
-          result = tl.simulate(
-              squad,
-              config={'duration': 75.0, 'first_burst_time': 3.0, 'rng_mode': 'expected'},
-              seed=42,
-              verbose=True,
-          )
-          log = result.log
-          print('BURSTS', [(round(x.t,9), x.event, x.caster) for x in log.burst_log])
-          print('LIBERALIO_BUFF_EVENTS', [(round(x.t,9), x.kind, x.name, x.target, x.value, x.expires_at) for x in log.buff_events if x.caster=='리버렐리오' and x.name.startswith('차분한 수심')])
-          print('SCARLET_BUFF_EVENTS', [(round(x.t,9), x.kind, x.name, x.target, x.value, x.expires_at) for x in log.buff_events if x.caster=='홍련 : 흑영' and x.name.startswith('화무십일홍 · 수라')])
-          print('SCARLET_INSTANTS', [(round(x.t,9), x.name, x.stat, x.value) for x in log.instant_events if x.caster=='홍련 : 흑영' and x.name.startswith('화무십일홍 · 수라')])
-          print('SCARLET_AMMO_NEAR_FB', [(round(x.t,9), x.ammo) for x in log.ammo_log if x.caster=='홍련 : 흑영' and any(abs(x.t-b.t)<0.05 for b in log.burst_log if b.event=='full_burst 시작')])
+          squad = compile_moris_squad(spec.build_squad(list(snapshot.SQUADS['레이드_볼륨']['members'])))
+          for i,m in enumerate(squad.members):
+              print('MEMBER',i,m.name,'burst=',m.burst_stage,'weapon=',dict(m.weapon))
+              print('  charge_safe=',score._charge_actor_score_safe(squad,i),'rapid_safe=',score._rapid_actor_score_safe(squad,i))
+          for e in squad.effects:
+              if e.name in {'차분한 수심 4','화무십일홍 · 수라','화무십일홍 · 수라 2'}:
+                  print('EFFECT',e.effect_id,e.name,e.effect_type,e.stat,e.value,'duration=',e.duration,'max_stack=',e.max_stack)
+                  print(' target=',e.target_spec.mode,e.target_spec.raw,e.target_spec.runtime_supported,'possible=',[(i,squad.members[i].name) for i in possible_ally_targets(squad,e)])
+                  print(' trigger=',[(r.mode.value,r.event_key,r.raw,r.threshold) for r in e.triggers],'cond=',e.condition_rules,'params=',dict(e.parameters),'cap=',e.capability.disposition.value,e.capability.blockers)
+                  print(' executable=',TriggerDispatcher.is_executable_effect(e))
           PY
