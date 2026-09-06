@@ -41,5 +41,11 @@ if new_runtime not in text:
     if old_runtime not in text:
         raise RuntimeError("Moran test runtime anchor missing")
     text = text.replace(old_runtime, new_runtime, 1)
+old_timing = '''        self.assertEqual(expected, 40)\n        self.assertAlmostEqual(when, 3.1333333333333333, places=8)\n'''
+new_timing = '''        self.assertEqual(expected, 40)\n        # 3.133333... is the nominal deadline; Moris repeated-add 60 Hz\n        # observes it on the next representable outer tick, 3.15.\n        self.assertAlmostEqual(when, 3.15, places=8)\n\n        # Keep nominal deadline accumulation separate from observed shot ticks.\n        # Otherwise 24/s drifts by extra frames after this first crossing.\n        probe = replace(st)\n        shot_times = []\n        for _ in range(8):\n            shot_times.append(probe.phase_end)\n            rapid._after_shot(probe, probe.phase_end)\n        self.assertEqual(probe.hit_count, 45)\n        self.assertAlmostEqual(shot_times[-1], 3.35, places=8)\n'''
+if new_timing not in text:
+    if old_timing not in text:
+        raise RuntimeError("Moran timing assertion anchor missing")
+    text = text.replace(old_timing, new_timing, 1)
 t.write_text(text, encoding="utf-8")
-print("Moran provenance, nominal deadline, and direct score-delivery fixes staged")
+print("Moran provenance, nominal deadline, score-delivery, and lattice tests staged")
