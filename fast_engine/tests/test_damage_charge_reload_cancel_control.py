@@ -96,12 +96,12 @@ class ChargeReloadCancelControlTests(unittest.TestCase):
         self.assertLess(state.ammo, full)
         self.assertEqual(state.phase, 'reloading')
 
-    def test_public_frontier_keeps_scarlet_ammo_charge_fail_closed(self):
+    def test_public_frontier_owns_exact_scarlet_live_max_refill(self):
         volume = compile_moris_squad(
             spec.build_squad(list(snapshot.SQUADS['레이드_볼륨']['members']))
         )
         volume_blockers = static_score_blockers(volume)
-        self.assertIn(
+        self.assertNotIn(
             'cadence:홍련 : 흑영:화무십일홍 · 수라 2:ammo_charge_pct',
             volume_blockers,
         )
@@ -120,7 +120,7 @@ class ChargeReloadCancelControlTests(unittest.TestCase):
         blockers = static_score_blockers(squad4)
         self.assertNotIn('control:홍련 : 흑영', blockers)
         self.assertIn('weapon_change:목단:정정당당 승부다!', blockers)
-        self.assertIn(
+        self.assertNotIn(
             'cadence:홍련 : 흑영:화무십일홍 · 수라 2:ammo_charge_pct',
             blockers,
         )
