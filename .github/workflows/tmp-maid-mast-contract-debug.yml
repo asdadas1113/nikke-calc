@@ -15,3 +15,56 @@ jobs:
           python-version: '3.13'
       - name: Focused Maid Mast contract
         run: python -m unittest -v fast_engine.tests.test_damage_maid_mast_hangover_contract
+      - name: Public frontier audit
+        run: |
+          python - <<'PY'
+          from collections import Counter
+          from context import snapshot, spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+
+          source = []
+          for label, row in snapshot.SQUADS.items():
+              if str(label).startswith('지그_'):
+                  continue
+              members = tuple(row.get('members') or ())
+              if len(members) != 5:
+                  continue
+              if any(str(member).startswith('test_') for member in members):
+                  continue
+              source.append((label, members))
+
+          unique = []
+          seen = set()
+          for label, members in source:
+              if members in seen:
+                  continue
+              seen.add(members)
+              unique.append((label, members))
+
+          category = Counter()
+          certified = []
+          mast_remove = []
+          rows = []
+          for label, members in unique:
+              compiled = compile_moris_squad(spec.build_squad(list(members)))
+              blockers = tuple(static_score_blockers(compiled))
+              rows.append((label, members, blockers))
+              if not blockers:
+                  certified.append(label)
+              for blocker in blockers:
+                  category[blocker.split(':', 1)[0]] += 1
+                  if blocker == 'normal_state:마스트 : 로망틱 메이드:파이레츠 스피릿 3:remove_named_buff':
+                      mast_remove.append(label)
+
+          print('SOURCE_CASES', len(source))
+          print('UNIQUE_MEMBERSHIPS', len(unique))
+          print('CERTIFIED', len(certified), certified)
+          print('GAPS', len(unique) - len(certified))
+          print('CATEGORY_COUNTS', dict(sorted(category.items())))
+          print('MAID_MAST_REMOVE_BLOCKER_MEMBERSHIPS', mast_remove)
+          for label, members, blockers in rows:
+              if label in {'레이드_루주', '레이드_브리드디젤', '스쿼드4', '레이드_앨리스브래디', '레이드_볼륨'}:
+                  print('MAID_PUBLIC', label, members)
+                  print('  blockers=', blockers)
+          PY
