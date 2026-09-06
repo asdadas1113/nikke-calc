@@ -116,6 +116,27 @@ class MoranWeaponChangeLifecycleTest(unittest.TestCase):
         self.assertEqual(st.ammo, rapid._full_ammo(actor, 13.05))
         self.assertAlmostEqual(st.phase_end, 13.05, places=9)
 
+    def test_live_weapon_view_is_scoped_to_actual_weapon_change_actor(self):
+        compiled = self._compiled()
+        effect = self._producer(compiled)
+        actor = effect.actor
+        enemy = EnemyStaticProfile(defense=31784.0, duration=20.0, core_px=0.0)
+        runtime = BurstRuntime(
+            compiled,
+            BurstPolicy(duration=20.0, first_burst_time=3.0),
+            enemy,
+            damage_sink=SimpleDamageScoreSink(compiled, enemy),
+        )
+        rapid = runtime.weapons._rapid_reload
+        self.assertEqual(rapid._effective_weapon_actors, frozenset({actor}))
+
+        mast = next(
+            i for i, member in enumerate(compiled.members)
+            if member.name == "마스트 : 로망틱 메이드"
+        )
+        self.assertNotIn(mast, rapid._effective_weapon_actors)
+        self.assertIs(rapid._weapon(mast, 0.0), compiled.members[mast].weapon)
+
     def test_shape_rejects_wider_weapon_modes(self):
         compiled = self._compiled()
         effect = self._producer(compiled)

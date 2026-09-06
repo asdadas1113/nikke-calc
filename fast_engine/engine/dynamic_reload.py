@@ -91,6 +91,7 @@ class DynamicRapidReloadRuntime:
         "_states",
         "_score_sink",
         "_effective_weapon",
+        "_effective_weapon_actors",
     )
 
     def __init__(
@@ -114,6 +115,7 @@ class DynamicRapidReloadRuntime:
         self._states: dict[int, _RapidActorState] = {}
         self._score_sink: Callable[[int, int, float], None] | None = None
         self._effective_weapon: Callable[[int, float], dict] | None = None
+        self._effective_weapon_actors: frozenset[int] = frozenset()
 
         hit_thresholds: dict[int, tuple[int, ...]] = {}
         pellet_thresholds: dict[int, tuple[int, ...]] = {}
@@ -148,14 +150,24 @@ class DynamicRapidReloadRuntime:
         self._last_bullet_actors = frozenset(last_bullet_actors)
 
     def attach_effective_weapon(
-        self, callback: Callable[[int, float], dict]
+        self,
+        callback: Callable[[int, float], dict],
+        actors: tuple[int, ...] | frozenset[int] | None = None,
     ) -> None:
         if self._states:
             raise RuntimeError("Fast effective weapon callback must be attached before weapon start")
+        selected = (
+            frozenset(range(len(self.squad.members)))
+            if actors is None
+            else frozenset(int(actor) for actor in actors)
+        )
+        if any(actor < 0 or actor >= len(self.squad.members) for actor in selected):
+            raise IndexError("Fast effective weapon actor out of range")
         self._effective_weapon = callback
+        self._effective_weapon_actors = selected
 
     def _weapon(self, actor: int, now: float) -> dict:
-        if self._effective_weapon is None:
+        if self._effective_weapon is None or actor not in self._effective_weapon_actors:
             return self.squad.members[actor].weapon
         return self._effective_weapon(actor, float(now))
 
@@ -269,6 +281,13 @@ class DynamicRapidReloadRuntime:
     @staticmethod
     def _crosses(before: int, after: int, thresholds: tuple[int, ...]) -> bool:
         return any(before // threshold != after // threshold for threshold in thresholds)
+
+    def _has_local_boundary_interest(self, actor: int, now: float) -> bool:
+        return (
+            actor in self._last_bullet_actors
+            or bool(self._hit_thresholds.get(actor))
+            or bool(self._pellet_thresholds.get(actor))
+        )
 
     def _shot_is_boundary(self, st: _RapidActorState) -> bool:
         # Keep ordinary rapid shots compressed, but materialize the magazine's
@@ -396,7 +415,10 @@ class DynamicRapidReloadRuntime:
         return True
 
     def _predict_next_boundary(self, actor: int) -> tuple[float, int] | None:
-        st = replace(self._states[actor])
+        source = self._states[actor]
+        if not self._has_local_boundary_interest(actor, source.phase_end):
+            return None
+        st = replace(source)
         while st.phase_end <= self.duration + _EPS:
             when = st.phase_end
             if st.phase == "firing":

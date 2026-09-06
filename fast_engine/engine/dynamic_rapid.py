@@ -207,6 +207,12 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
             + (self._weapon_block_end(actor, now),)
         )
 
+    def _has_local_boundary_interest(self, actor: int, now: float) -> bool:
+        return (
+            super()._has_local_boundary_interest(actor, now)
+            or self.effects.has_dynamic_bullet_lifetime(actor, now=now)
+        )
+
     def _shot_is_boundary(self, st: _RapidActorState) -> bool:
         if self.effects.has_dynamic_bullet_lifetime(st.actor, now=st.phase_end):
             return True
@@ -334,6 +340,8 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
 
     def _predict_next_boundary(self, actor: int) -> tuple[float, int] | None:
         st = self._states[actor]
+        if not self._has_local_boundary_interest(actor, st.phase_end):
+            return None
         # Keep the base runtime's cheap copy-only prediction contract.
         from dataclasses import replace
 

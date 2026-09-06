@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 from dataclasses import replace
 
 from fast_engine.engine.burst import BurstPolicy
 from fast_engine.engine.burst_runtime import BurstRuntime
+from fast_engine.engine.dynamic_rapid import DynamicRapidCadenceRuntime
 from fast_engine.engine.capabilities import (
     CapabilityDisposition,
     EffectCapability,
@@ -222,6 +224,27 @@ def _run(
 
 
 class DynamicReloadScoringTests(unittest.TestCase):
+    def test_boundaryless_dynamic_actor_does_not_scan_to_horizon_for_plan(self):
+        effect = _reload_effect(duration=180.0)
+        squad = _squad(effect)
+        enemy = EnemyStaticProfile(
+            defense=0.0, core_uptime=0.0, core_px=0.0, duration=180.0
+        )
+        runtime = BurstRuntime(
+            squad, BurstPolicy(duration=180.0, first_burst_time=200.0), enemy
+        )
+        runtime.dispatcher.effects.activate(effect, 0, 0.0, runtime.scheduler)
+        StaticNormalAttackObserver(runtime, duration=180.0)
+        rapid = runtime.weapons._rapid_reload
+        with patch.object(
+            DynamicRapidCadenceRuntime,
+            "_after_shot",
+            side_effect=AssertionError("boundaryless plan simulated physical shots"),
+        ):
+            runtime.weapons.start(0.0)
+        self.assertIsNone(rapid._states[0].scheduled_time)
+        self.assertFalse(rapid._has_local_boundary_interest(0, 0.0))
+
     def test_auto_reload_duration_is_fixed_at_reload_start(self):
         effect = _reload_effect(duration=1.5)
         self.assertNotIn(
