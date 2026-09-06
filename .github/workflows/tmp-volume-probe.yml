@@ -1,0 +1,55 @@
+name: tmp-volume-probe
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+    paths: ['.github/workflows/tmp-volume-probe.yml']
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Probe raid volume blocker shapes
+        run: |
+          python - <<'PY'
+          from context import snapshot, spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          import fast_engine.engine.score as score
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+
+          members = tuple(snapshot.SQUADS['레이드_볼륨']['members'])
+          squad = compile_moris_squad(spec.build_squad(list(members)))
+          print('MEMBERS', members)
+          print('BLOCKERS', score.static_score_blockers(squad))
+          print('--- EFFECTS ---')
+          for e in squad.effects:
+              owner = squad.members[e.actor].name
+              if owner in {'홍련 : 흑영', '리버렐리오'} or (e.stat or '') in {'ammo_charge_pct','atk_pct','atk_flat','atk_caster_based_pct','atk_from_hp_pct','atk_copy','atk_buff_mag_pct'}:
+                  print('EFFECT', e.effect_id, owner, repr(e.name), e.effect_type, repr(e.stat), 'value=', e.value)
+                  print('  target=', e.target_spec.mode, 'raw=', repr(e.target_spec.raw), 'runtime=', e.target_spec.runtime_supported)
+                  print('  trig=', [(r.mode.value, r.event_key, r.raw, r.threshold) for r in e.triggers])
+                  print('  cond=', [(r.mode.value, r.key, r.value, r.raw) for r in e.condition_rules])
+                  print('  params=', dict(e.parameters), 'duration=', e.duration, 'max_stack=', e.max_stack, 'cap=', e.capability.disposition.value, e.capability.blockers)
+                  print('  runtime_exec=', TriggerDispatcher.is_executable_effect(e))
+                  if (e.stat or '') in {'ammo_charge_pct','ammo_charge_flat'}:
+                      print('  ammo_dynamic=', score._is_dynamic_ammo_charge_score_supported(squad, e))
+                      targets = score._possible_ally_targets(squad, e)
+                      print('  possible_targets=', [(a, squad.members[a].name, squad.members[a].weapon.get('fire_mode'), squad.members[a].weapon.get('weapon_type')) for a in targets])
+                      for a in targets:
+                          print('    recipient_safe', a, squad.members[a].name, score._ammo_charge_recipient_score_safe(squad,a), 'rapid=', score._rapid_actor_score_safe(squad,a), 'charge=', score._charge_actor_score_safe(squad,a), 'live_max_ammo=', score._actor_has_live_max_ammo_mutation(squad,a))
+                  if e.target_spec.mode in score._DYNAMIC_ATK_RANK_TARGET_MODES:
+                      print('  lazy_shape=', TriggerDispatcher._lazy_rank_target_shape_supported(e))
+                      print('  lazy_score_safe=', score._lazy_rank_target_score_safe(squad,e))
+                      print('  tx_unsafe=', score._dynamic_rank_target_transaction_unsafe(squad,e))
+                      keys={r.event_key for r in e.triggers if r.event_key}
+                      siblings=[]
+                      for o in squad.effects:
+                          if o.effect_id==e.effect_id or (o.stat or '') not in score._ATK_RANK_MUTATION_STATS or o.effect_type!='buff':
+                              continue
+                          if any(r.event_key in keys for r in o.triggers):
+                              siblings.append((o.effect_id,squad.members[o.actor].name,o.name,o.stat,o.target_spec.mode.value,o.target_spec.raw,score._direct_damage_buff_score_supported(squad,o)))
+                      print('  same_event_atk_mutations=', siblings)
+          PY
