@@ -5,6 +5,8 @@ on:
       - fast-engine-phase2-20260901
     paths:
       - .github/workflows/tmp-little-mermaid-probe.yml
+      - .github/tmp_little_mermaid_patch.py
+      - .github/tmp_little_mermaid_fix.py
   workflow_dispatch:
 jobs:
   probe:
@@ -17,6 +19,7 @@ jobs:
       - name: Apply staged Little Mermaid patch
         run: |
           python .github/tmp_little_mermaid_patch.py
+          python .github/tmp_little_mermaid_fix.py
           git diff --check
       - name: Focused semantic contract
         run: |
