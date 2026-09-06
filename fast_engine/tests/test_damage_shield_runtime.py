@@ -33,13 +33,13 @@ class TimedShieldRuntimeTests(unittest.TestCase):
             if event.kind is EventKind.STATE_EXPIRE:
                 runtime.dispatcher.handle_expiry(event)
 
-    def test_public_naga_shield_damage_blockers_are_removed_but_crown_stays(self):
+    def test_public_naga_shield_and_unreachable_crown_heal_blockers_are_removed(self):
         squad, _runtime = self._runtime()
         blockers = static_score_blockers(squad)
         self.assertFalse(any("나가:우정의 가드 2:core_dmg_pct" in item for item in blockers))
         self.assertFalse(any("나가:친구들과 함께라면! 3:atk_caster_based_pct" in item for item in blockers))
-        self.assertIn("normal_delivery:크라운:로얄 에타이어 4:atk_dmg_pct", blockers)
-        self.assertIn("skill_state_delivery:크라운:로얄 에타이어 4:atk_dmg_pct", blockers)
+        self.assertNotIn("normal_delivery:크라운:로얄 에타이어 4:atk_dmg_pct", blockers)
+        self.assertNotIn("skill_state_delivery:크라운:로얄 에타이어 4:atk_dmg_pct", blockers)
 
     def test_shield_state_precedes_same_time_shield_applied_consumer(self):
         squad, runtime = self._runtime()

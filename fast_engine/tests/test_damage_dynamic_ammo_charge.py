@@ -193,7 +193,8 @@ class DynamicAmmoChargeTests(unittest.TestCase):
         compiled = __import__("fast_engine.engine.compiler", fromlist=["compile_moris_squad"]).compile_moris_squad(build_squad(names))
         blockers = static_score_blockers(compiled)
         self.assertNotIn("cadence:루드밀라 : 윈터 오너:여왕의 시선 3:ammo_charge_flat", blockers)
-        self.assertIn("normal_delivery:크라운:로얄 에타이어 4:atk_dmg_pct", blockers)
+        self.assertNotIn("normal_delivery:크라운:로얄 에타이어 4:atk_dmg_pct", blockers)
+        self.assertNotIn("skill_state_delivery:크라운:로얄 에타이어 4:atk_dmg_pct", blockers)
 
     def test_public_squad1_little_mermaid_ammo_blocker_is_removed(self):
         names = ["리틀 머메이드", "크라운", "라피 : 레드 후드", "미하라 : 본딩 체인", "헬름"]

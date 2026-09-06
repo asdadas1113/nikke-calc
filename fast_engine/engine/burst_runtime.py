@@ -209,6 +209,17 @@ class BurstRuntime:
         if not interested:
             return
 
+        # A structurally zero core probability cannot emit core_hit_count at all.
+        # Skip dynamic cadence validation before it can reject an unreachable
+        # event family. This does not widen live-core support: any nonzero core
+        # profile continues through the existing dynamic/accuracy fail-closed
+        # guards below.
+        if self.enemy.core_px is None:
+            if self.enemy.effective_core_rate <= 0.0:
+                return
+        elif self.enemy.core_px <= 0.0 or self.enemy.core_uptime <= 0.0:
+            return
+
         unsupported = interested & dynamic_actors
         if unsupported:
             names = ", ".join(

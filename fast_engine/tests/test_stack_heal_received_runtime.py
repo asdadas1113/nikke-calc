@@ -35,17 +35,13 @@ class StackHealReceivedRuntimeTests(unittest.TestCase):
             if "크라운:로얄 에타이어 4:atk_dmg_pct" in row
         )
 
-    def test_self_stack_heal_opens_but_external_heal_stays_fail_closed(self):
+    def test_self_stack_heal_and_unreachable_lowest_hp_heal_open(self):
         self.assertEqual(self._royal_blockers(_SELF_ONLY), ())
-        external = self._royal_blockers(_EXTERNAL_HEAL)
-        self.assertIn(
-            "normal_delivery:크라운:로얄 에타이어 4:atk_dmg_pct",
-            external,
-        )
-        self.assertIn(
-            "skill_state_delivery:크라운:로얄 에타이어 4:atk_dmg_pct",
-            external,
-        )
+        # Naga's allies_lowest_hp:2 heal is outside Crown's immutable
+        # full-HP tie cohort in this exact squad, so it is not a reachable
+        # heal_received provider for Crown. Broad external heals remain closed
+        # in test_damage_crown_royal_attire_lifecycle.py.
+        self.assertEqual(self._royal_blockers(_EXTERNAL_HEAL), ())
 
     def test_stack_reach_reset_self_heal_and_received_consumer_are_one_chain(self):
         squad = compile_moris_squad(spec.build_squad(_SELF_ONLY))

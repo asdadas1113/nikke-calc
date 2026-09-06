@@ -896,15 +896,90 @@ class TriggerDispatcher:
     def _self_stack_heal_runtime_supported(self, effect: "CompiledEffect") -> bool:
         return self._self_stack_heal_chain_shape_supported(self.squad, effect)
 
+    _FULL_HP_TIE_SAFE_STATS = frozenset({
+        # These effects cannot lower an ally's current HP ratio from the 100%
+        # patternless initial state. Cover/shield stats are separate resources;
+        # heal modifiers and positive heals can only leave the tie unchanged.
+        "heal_hp_pct",
+        "lifesteal_pct",
+        "heal_received_pct",
+        "outgoing_heal_pct",
+        "heal_given_pct",
+        "cover_hp_pct",
+        "cover_heal_pct",
+        "shield_from_max_hp_pct",
+    })
+
+    @classmethod
+    def _full_hp_rank_tie_stable(cls, squad: "CompiledSquad") -> bool:
+        """Prove the patternless squad cannot leave its initial 100% HP tie.
+
+        This is deliberately whitelist-shaped. Any current-HP loss, max-HP
+        mutation, derived HP stat, overcharge/split heal primitive, or future
+        unknown HP-family stat revokes the proof instead of being guessed safe.
+        """
+        for effect in squad.effects:
+            stat = effect.stat or ""
+            lowered = stat.lower()
+            if not any(token in lowered for token in ("hp", "heal", "life")):
+                continue
+            if stat not in cls._FULL_HP_TIE_SAFE_STATS:
+                return False
+        return True
+
+    @classmethod
+    def _lowest_hp_heal_owner_unreachable(
+        cls,
+        squad: "CompiledSquad",
+        provider: "CompiledEffect",
+        owner: int,
+    ) -> bool:
+        """Exclude one exact lowest-HP heal that cannot select ``owner``.
+
+        Moris starts every actor at 100% HP and breaks an ``allies_lowest_hp:N``
+        tie by immutable squad order. When this squad can never leave that tie,
+        an owner whose index is outside the first N is unreachable for the heal.
+        The provider remains unsupported as a general heal primitive; this proof
+        only removes a false provider edge from a heal_received dependency graph.
+        """
+        count = provider.target_spec.count
+        threshold = provider.triggers[0].threshold if len(provider.triggers) == 1 else None
+        if not (
+            provider.capability.disposition is CapabilityDisposition.PLANNED
+            and provider.effect_type == "instant"
+            and (provider.stat or "") == "heal_hp_pct"
+            and provider.target_spec.mode is TargetMode.LOWEST_HP
+            and count is not None
+            and 0 < int(count) < len(squad.members)
+            and int(owner) >= int(count)
+            and provider.value is not None
+            and float(provider.value) > 0.0
+            and provider.duration is None
+            and provider.max_stack is None
+            and provider.max_trigger is None
+            and provider.tick_interval is None
+            and not provider.parameters
+            and not provider.condition_rules
+            and len(provider.triggers) == 1
+            and provider.triggers[0].mode is TriggerMode.MODULO
+            and provider.triggers[0].event_key == "hit_count"
+            and threshold is not None
+            and float(threshold) > 0.0
+            and float(threshold).is_integer()
+        ):
+            return False
+        return cls._full_hp_rank_tie_stable(squad)
+
     @classmethod
     def heal_received_dependency_score_safe(
         cls, squad: "CompiledSquad", consumer: "CompiledEffect"
     ) -> bool:
-        """Certify heal_received only when every possible provider is owned.
+        """Certify heal_received only when every reachable provider is owned.
 
-        The first slice intentionally supports only a recurring self stack-heal
-        chain. External instant heals and lifesteal remain fail-closed so omitted
-        refreshes cannot silently change a comparison-critical buff window.
+        Supported providers remain the recurring self stack-heal chain. One
+        additional compile-time proof may discard an exact dynamic lowest-HP
+        provider when the consumer can never be selected under an immutable
+        full-HP tie. External heals/lifesteal otherwise remain fail-closed.
         """
         owner = consumer.actor
         providers = tuple(
@@ -916,12 +991,19 @@ class TriggerDispatcher:
         )
         if not providers:
             return False
+        reachable = tuple(
+            provider
+            for provider in providers
+            if not cls._lowest_hp_heal_owner_unreachable(squad, provider, owner)
+        )
+        if not reachable:
+            return False
         return all(
             (provider.stat or "") == "heal_hp_pct"
             and provider.actor == owner
             and provider.target_spec.mode is TargetMode.SELF
             and cls._self_stack_heal_chain_shape_supported(squad, provider)
-            for provider in providers
+            for provider in reachable
         )
 
     _NAMED_EVENT_EXEMPT = frozenset({
