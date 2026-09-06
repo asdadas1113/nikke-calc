@@ -229,6 +229,30 @@ public/full promotion after stale-test update:
 - events `539`
 - RHQ relative error `0.0003858566668650809` (~`+0.0386%`)
 
+clean docs/cleanup HEAD canonical CI:
+
+- clean HEAD `38229816f09b64fe2e71a64423b55319b4ddeff2`
+- run `33999212340`
+- job `101394980727`
+- conclusion: **success**
+- Fast damage shard **194/194**
+- Fast complete discovery **303/303**
+- structural 180s median `178.74 ms`, events `539`
+- complete-discovery 180s median `181.96 ms`, events `539`
+- RHQ relative error `0.0003858566668650809`
+- calculator **137/137** (`1 skip`)
+- optimizer **374/374**
+- bridge **31/31** (`1 skip`)
+- site **385/385** across 24 files
+- golden snapshot **29/29**
+- doclint: 199 characters complete, 309 implementation keys, 18 exceptions
+
+known non-failing warnings only:
+
+- GitHub Actions Node 20 deprecation / forced Node 24 warning
+- optimizer scraper `ResourceWarning` for unclosed data files
+- jsdom `HTMLCanvasElement.getContext()` not implemented warnings
+
 ## 6. 현재 phase
 
 현재는 **false-supported safety closure → semantics restoration**을 계속한다.
@@ -280,27 +304,18 @@ remover가 executable이라는 이유만으로 열지 않는다. shot cadence와
 
 ## 8. 작업공간 cleanup
 
-이번 checkpoint 종료 commit에서 다음 temporary 파일을 모두 제거한다.
+이번 checkpoint의 temporary 파일은 모두 제거 완료했다.
 
-- `.github/workflows/tmp-maid-mast-multistack-audit.yml`
-- `fast_engine/research/tmp_maid_mast_multistack_audit.py`
-- `fast_engine/research/tmp_maid_mast_b1_trace.py`
-- `fast_engine/research/tmp_maid_mast_fast_probe.py`
-- `fast_engine/research/tmp_anchor_harmful_stack_scope.py`
-- `fast_engine/research/tmp_patch_maid_mast_stack.py`
-- `fast_engine/research/tmp_debug_maid_mast_unreachable.py`
-- `fast_engine/research/tmp_fix_maid_mast_stack_patch.py`
-- `fast_engine/research/tmp_maid_mast_promotion.py`
-
-최종 clean `.github/workflows`는 다시:
+최종 clean `.github/workflows`에는:
 
 - `ci.yml`
 - `pages.yml`
 
-만 남겨야 한다.
+만 남아 있다.
 
 - branch: `fast-engine-phase2-20260901`
 - latest semantic production: `608fe036ed836a35e25736ea9d967bff106af972`
+- clean checkpoint HEAD: `38229816f09b64fe2e71a64423b55319b4ddeff2`
 - master: `fb2fd9157aa14499daf6b9f185beb685d4393f90`
 
-이 docs/cleanup commit의 clean HEAD에서 canonical `ci.yml` 전체 gate를 최종 확인한다.
+`38229816f09b64fe2e71a64423b55319b4ddeff2`의 canonical `ci.yml` 전체 gate는 run `33999212340`에서 success로 확인했다.
