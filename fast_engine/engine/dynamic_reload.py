@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 from typing import Callable, TYPE_CHECKING
 
 from .scheduler import EventKind, EventScheduler, ScheduledEvent
+from .frame_lattice import moris_observed_tick
 from .state import StateStore
 from .triggers import TriggerMode
 from .weapon import (
@@ -89,6 +90,7 @@ class DynamicRapidReloadRuntime:
         "_last_bullet_actors",
         "_states",
         "_score_sink",
+        "_effective_weapon",
     )
 
     def __init__(
@@ -111,6 +113,7 @@ class DynamicRapidReloadRuntime:
         self._machines: dict[int, WeaponCadenceMachine] = {}
         self._states: dict[int, _RapidActorState] = {}
         self._score_sink: Callable[[int, int, float], None] | None = None
+        self._effective_weapon: Callable[[int, float], dict] | None = None
 
         hit_thresholds: dict[int, tuple[int, ...]] = {}
         pellet_thresholds: dict[int, tuple[int, ...]] = {}
@@ -143,6 +146,18 @@ class DynamicRapidReloadRuntime:
         self._hit_thresholds = hit_thresholds
         self._pellet_thresholds = pellet_thresholds
         self._last_bullet_actors = frozenset(last_bullet_actors)
+
+    def attach_effective_weapon(
+        self, callback: Callable[[int, float], dict]
+    ) -> None:
+        if self._states:
+            raise RuntimeError("Fast effective weapon callback must be attached before weapon start")
+        self._effective_weapon = callback
+
+    def _weapon(self, actor: int, now: float) -> dict:
+        if self._effective_weapon is None:
+            return self.squad.members[actor].weapon
+        return self._effective_weapon(actor, float(now))
 
     def attach_score_sink(
         self,
@@ -194,6 +209,9 @@ class DynamicRapidReloadRuntime:
         )
 
     def _full_ammo(self, actor: int, now: float) -> int:
+        weapon = self._weapon(actor, now)
+        if int(weapon.get("max_ammo", 0)) < 0:
+            return 999999
         base_full = self._machine(actor)._full_ammo()
         base_weapon = int(self.squad.members[actor].weapon["max_ammo"])
         pct_gain = 0; flat_gain = 0.0
@@ -207,26 +225,34 @@ class DynamicRapidReloadRuntime:
         return max(1, base_full+pct_gain+_round_half_up(flat_gain))
 
     def _signature(self, actor: int, now: float) -> tuple[float, ...]:
-        mode = str(self.squad.members[actor].weapon.get("fire_mode") or "auto")
+        weapon = self._weapon(actor, now)
+        mode = str(weapon.get("fire_mode") or "auto")
         warmup_speed = (
             self.effects.sum_stat(actor, "mg_warmup_speed_pct", now=now)
             if mode == "auto_warmup"
             else 0.0
         )
         return (
+            float(weapon.get("_weapon_change_effect_id", -1)),
             self.effects.sum_stat(actor, "reload_speed_pct", now=now),
             warmup_speed,
             float(self._full_ammo(actor, now)),
         )
 
-    def _hits_per_shot(self, actor: int) -> int:
-        return self._machine(actor)._hits_per_shot()
+    def _hits_per_shot(self, actor: int, now: float | None = None) -> int:
+        when = self._states[actor].phase_end if now is None and actor in self._states else float(now or 0.0)
+        weapon = self._weapon(actor, when)
+        return max(1, int(weapon.get("pellets") or 1) * int(weapon.get("muzzles") or 1))
 
     def _shot_interval(self, st: _RapidActorState) -> float:
         machine = self._machine(st.actor)
-        mode = str(self.squad.members[st.actor].weapon.get("fire_mode") or "auto")
+        weapon = self._weapon(st.actor, st.phase_end)
+        mode = str(weapon.get("fire_mode") or "auto")
         if mode == "auto":
-            return 1.0 / machine._fixed_rate()
+            base_rate = max(float(self.squad.members[st.actor].weapon.get("fire_rate") or 1.0), 1e-9)
+            static_factor = machine._fixed_rate() / base_rate
+            rate = min(60.0, max(0.01, float(weapon.get("fire_rate") or base_rate) * static_factor))
+            return 1.0 / rate
 
         rate = machine._mg_rate(st.warmup)
         inter = 1.0 / rate
@@ -262,15 +288,22 @@ class DynamicRapidReloadRuntime:
         )
 
     def _after_shot(self, st: _RapidActorState, shot_time: float) -> None:
-        hits = self._hits_per_shot(st.actor)
+        weapon = self._weapon(st.actor, shot_time)
+        hits = self._hits_per_shot(st.actor, shot_time)
         inter = self._shot_interval(st)
-        st.ammo -= 1
+        infinite = int(weapon.get("max_ammo", 0)) < 0
+        if not infinite:
+            st.ammo -= 1
         st.hit_count += 1
         st.pellet_count += hits
         st.last_shot = shot_time
         st.last_inter = inter
-        st.phase = "reload_wait" if st.ammo <= 0 else "firing"
-        st.phase_end = shot_time + inter
+        st.phase = "firing" if infinite or st.ammo > 0 else "reload_wait"
+        if weapon.get("_moris_frame_observed"):
+            st.fire_deadline = float(st.fire_deadline) + inter
+            st.phase_end = moris_observed_tick(st.fire_deadline, horizon=self.duration)
+        else:
+            st.phase_end = shot_time + inter
 
     def _finish_nonshot_phase(
         self,
@@ -278,7 +311,7 @@ class DynamicRapidReloadRuntime:
         transition_time: float,
     ) -> None:
         actor = st.actor
-        weapon = self.squad.members[actor].weapon
+        weapon = self._weapon(actor, transition_time)
         if st.phase == "reload_wait":
             factor = self._reload_factor(actor, transition_time)
             st.phase = "reloading"
@@ -406,6 +439,7 @@ class DynamicRapidReloadRuntime:
                 ammo=full,
                 phase="firing",
                 phase_end=float(now),
+                fire_deadline=float(now),
                 signature=self._signature(actor, now),
             )
             self._states[actor] = st
@@ -416,11 +450,22 @@ class DynamicRapidReloadRuntime:
         for actor in self.actors:
             st = self._states[actor]
             signature = self._signature(actor, now)
-            full = int(signature[2])
+            full = int(signature[3])
+            weapon_changed = st.signature is not None and signature[0] != st.signature[0]
+            if weapon_changed:
+                # Moris starts/ends a weapon-change session with fresh physical
+                # weapon state, but BuffManager hit_count is whole-combat and is
+                # deliberately preserved.
+                st.ammo = full
+                st.phase = "firing"
+                st.phase_end = float(now)
+                st.fire_deadline = float(now)
+                st.warmup = 0.0
+                st.last_inter = 0.0
             clamped = st.phase != "reloading" and st.ammo > full
             if clamped:
                 st.ammo = full
-            if clamped or signature != st.signature:
+            if weapon_changed or clamped or signature != st.signature:
                 st.signature = signature
                 self._invalidate(st)
             if st.scheduled_time is None:

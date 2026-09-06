@@ -139,6 +139,7 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
             duration=duration,
             effect_filter=effect_filter,
         )
+        self._rapid_reload.attach_effective_weapon(self.effective_weapon)
 
         actors = set(self.actors)
         for actor in interesting:

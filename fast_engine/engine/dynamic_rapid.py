@@ -278,25 +278,9 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
         transition_time: float,
     ) -> None:
         actor = st.actor
-        weapon = self.squad.members[actor].weapon
+        weapon = self._weapon(actor, transition_time)
         if not self._squad_ammo_thresholds:
-            if st.phase == "reload_wait":
-                factor = self._reload_factor(actor, transition_time)
-                st.phase = "reloading"
-                st.phase_end = transition_time + (
-                    float(weapon.get("reload_start_delay", 0.0))
-                    + float(weapon.get("reload_time", 0.0))
-                ) * factor
-                return
-            if st.phase == "reloading":
-                st.ammo = self._full_ammo(actor, transition_time)
-                factor = self._reload_factor(actor, transition_time)
-                st.phase = "firing"
-                st.phase_end = transition_time + float(
-                    weapon.get("post_reload_delay", 0.0)
-                ) * factor
-                return
-            raise RuntimeError(f"unexpected rapid cadence phase: {st.phase!r}")
+            return super()._finish_nonshot_phase(st, transition_time)
 
         # Empty-magazine reload is noticed only on an outer Moris tick. Reload
         # completion and post-reload delay are likewise observed on ticks. The

@@ -241,6 +241,69 @@ def _temporary_self_charge_weapon_change_score_supported(
     return len(related) == 1 and related[0].effect_id == effect.effect_id
 
 
+def _temporary_self_rapid_weapon_change_score_supported(
+    squad: CompiledSquad, effect
+) -> bool:
+    if not TriggerDispatcher._temporary_self_rapid_weapon_change_shape_supported(effect):
+        return False
+    actor = effect.actor
+    member = squad.members[actor]
+    if not (
+        str(member.weapon.get("fire_mode") or "") == "auto"
+        and not member.weapon.get("control")
+        and not member.weapon.get("is_clip")
+        and not member.weapon.get("cover_during_delay")
+        and effect.name
+    ):
+        return False
+    related = tuple(
+        other for other in squad.effects
+        if other.effect_type == "weapon_change"
+        and actor in _possible_ally_targets(squad, other)
+    )
+    if len(related) != 1 or related[0].effect_id != effect.effect_id:
+        return False
+
+    name = effect.name
+    consumers = []
+    for other in squad.effects:
+        if other.effect_id == effect.effect_id:
+            continue
+        references = (
+            any(rule.key == name for rule in other.condition_rules)
+            or any((rule.event_key or "") == f"event:state_end:{name}" for rule in other.triggers)
+            or other.parameters.get("target_effect") == name
+        )
+        if references:
+            consumers.append(other)
+    if len(consumers) != 1:
+        return False
+    consumer = consumers[0]
+    if not (
+        consumer.actor == actor
+        and consumer.effect_type == "damage"
+        and (consumer.stat or "") == "bonus_damage"
+        and consumer.target_spec.mode is TargetMode.ENEMY
+        and consumer.target_spec.runtime_supported
+        and consumer.value is not None and float(consumer.value) >= 0.0
+        and consumer.duration is None
+        and consumer.max_stack is None
+        and consumer.max_trigger is None
+        and consumer.tick_interval is None
+        and set(consumer.parameters).issubset({"favorite"})
+        and len(consumer.condition_rules) == 1
+        and consumer.condition_rules[0].mode is ConditionMode.SELF_STATE
+        and consumer.condition_rules[0].key == name
+        and len(consumer.triggers) == 1
+        and consumer.triggers[0].mode is TriggerMode.MODULO
+        and consumer.triggers[0].event_key == "hit_count"
+        and consumer.triggers[0].trigger_count_reducible
+        and int(consumer.triggers[0].threshold or 0) > 0
+    ):
+        return False
+    return True
+
+
 def _charge_actor_score_safe(squad: CompiledSquad, actor: int) -> bool:
     """Safety contract for per-shot dynamic SR/RL score ownership."""
 
@@ -317,11 +380,16 @@ def _rapid_actor_score_safe(
     elif control and not is_supported_rapid_cover_control(member):
         return False
 
-    for effect in squad.effects:
-        if effect.effect_type != "weapon_change":
-            continue
-        if actor in _possible_ally_targets(squad, effect):
-            return False
+    weapon_changes = tuple(
+        effect for effect in squad.effects
+        if effect.effect_type == "weapon_change"
+        and actor in _possible_ally_targets(squad, effect)
+    )
+    if weapon_changes and not (
+        len(weapon_changes) == 1
+        and _temporary_self_rapid_weapon_change_score_supported(squad, weapon_changes[0])
+    ):
+        return False
 
     if _actor_has_executable_core_count(squad, actor):
         return False
@@ -741,6 +809,13 @@ def _dynamic_rapid_reload_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
         for row in certified_stack3_self_stun_remove_lifecycles(squad)
         if _rapid_actor_score_safe(squad, row.actor)
     )
+    actors.update(
+        effect.actor
+        for effect in squad.effects
+        if effect.effect_type == "weapon_change"
+        and _temporary_self_rapid_weapon_change_score_supported(squad, effect)
+        and _rapid_actor_score_safe(squad, effect.actor)
+    )
     return tuple(sorted(actors))
 
 
@@ -775,6 +850,12 @@ def _squad_ammo_sequential_damage_score_supported(
     # First slice is intentionally all-rapid. Requiring every actor to already
     # belong to the score runtime avoids inventing a second cadence model solely
     # for this global counter.
+    if any(
+        effect.effect_type == "weapon_change"
+        and _temporary_self_rapid_weapon_change_score_supported(squad, effect)
+        for effect in squad.effects
+    ):
+        return False
     rapid=set(_dynamic_rapid_reload_score_actors(squad))
     if rapid != set(range(len(squad.members))):
         return False
@@ -1346,7 +1427,10 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
             continue
 
         if effect.effect_type == "weapon_change":
-            if not _temporary_self_charge_weapon_change_score_supported(squad, effect):
+            if not (
+                _temporary_self_charge_weapon_change_score_supported(squad, effect)
+                or _temporary_self_rapid_weapon_change_score_supported(squad, effect)
+            ):
                 blockers.append(f"weapon_change:{owner}:{effect.name or 'unnamed'}")
             continue
 

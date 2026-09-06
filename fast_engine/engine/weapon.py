@@ -18,6 +18,29 @@ from .model import CompiledCharacter, CompiledSquad
 _EPS = 1e-9
 _FRAME_RATE_CAP = 60.0
 
+_CERTIFIED_AUTO_WEAPON_CHANGE_DEFAULTS = {
+    "SMG": {
+        "fire_mode": "auto",
+        "fire_rate": 24.0,
+        "fire_rate_max": None,
+        "warmup_bullets": 1.0,
+        "warmup_cooldown_time": 1.0,
+        "post_fire_delay": 0.0,
+        "post_reload_delay": 0.0,
+        "reload_start_delay": 0.0,
+        "cover_during_delay": False,
+        "charge_time": 0.0,
+        "pellets": 1,
+        "muzzles": 1,
+        "is_clip": False,
+        "normal_hit_coeff": 1.0,
+        "core_base_diameter": 110.0,
+        "core_acc_slope": 1.0,
+        "core_model_n": 2.55,
+        "control": {},
+    },
+}
+
 
 def is_supported_charge_hold_control(member) -> bool:
     """Certify the first sparse pure charge-hold control shape.
@@ -654,6 +677,14 @@ class DynamicChargeCadenceRuntime:
         effect, _active = row
         params = effect.parameters
         weapon = dict(base)
+        changed_type = str(params.get("weapon_type") or weapon.get("weapon_type") or "")
+        base_type = str(base.get("weapon_type") or "")
+        defaults = _CERTIFIED_AUTO_WEAPON_CHANGE_DEFAULTS.get(changed_type)
+        if changed_type != base_type and defaults is not None:
+            weapon.update(defaults)
+            weapon["weapon_type"] = changed_type
+            weapon["_moris_frame_observed"] = True
+            weapon["_weapon_change_effect_id"] = int(effect.effect_id)
         for key in (
             "weapon_type", "damage_coeff", "max_ammo", "full_charge_mult",
             "post_fire_delay", "cover_during_delay",
