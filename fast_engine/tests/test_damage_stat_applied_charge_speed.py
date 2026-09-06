@@ -78,8 +78,8 @@ class StatAppliedChargeSpeedTests(unittest.TestCase):
                     matches.add((compiled.members[effect.actor].name, effect.name, key))
 
         self.assertEqual(len(seen), 23)
-        self.assertEqual(certified, 2)
-        self.assertEqual(cadence, 59)
+        self.assertEqual(certified, 3)
+        self.assertEqual(cadence, 57)
         self.assertEqual(
             matches,
             {("브래디", "나누고 싶은 맛", "event:stat_applied:split_dmg_pct")},
