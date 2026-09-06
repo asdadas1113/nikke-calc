@@ -1,4 +1,4 @@
-name: Temporary Moran lifecycle probe
+name: Temporary Moran lifecycle apply
 
 on:
   push:
@@ -6,13 +6,36 @@ on:
       - fast-engine-phase2-20260901
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-  probe:
+  apply:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: fast-engine-phase2-20260901
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Run Moran lifecycle probe
-        run: python .github/tmp_moran_probe.py
+      - name: Apply Moran lifecycle patch
+        run: python .github/tmp_moran_apply.py
+      - name: Focused Moran regression
+        run: |
+          python -m unittest fast_engine.tests.test_damage_moran_weapon_change_lifecycle
+          python -m unittest fast_engine.tests.test_dynamic_weapon_change
+          python -m unittest fast_engine.tests.test_damage_dynamic_reload_scoring
+          python -m unittest fast_engine.tests.test_damage_little_mermaid_lifecycle
+      - name: Commit semantic patch
+        run: |
+          if git diff --quiet -- fast_engine; then
+            echo "No semantic changes to commit"
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add fast_engine
+          git commit -m "Fast: own finite rapid weapon-change lifecycle"
+          git push origin HEAD:fast-engine-phase2-20260901
