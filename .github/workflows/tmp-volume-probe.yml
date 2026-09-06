@@ -12,58 +12,33 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Audit dry-run proof scope and runtime
+      - name: Verify dry-run runtime ordering
         run: |
           python - <<'PY'
           from pathlib import Path
           p=Path('fast_engine/engine/dispatcher.py'); s=p.read_text()
           old='''    @staticmethod\n    def _lazy_rank_target_shape_supported(effect: "CompiledEffect") -> bool:\n        """Own simple Moris lazy ATK-rank direct buffs without bullet lifetimes."""\n\n        max_stack = effect.max_stack if effect.max_stack is not None else 1.0\n        return (\n            effect.effect_type == "buff"\n            and effect.target_spec.mode in TriggerDispatcher._LAZY_ATK_RANK_MODES\n            and is_direct_damage_buff_runtime_supported(effect)\n            and float(max_stack) == 1.0\n            and effect.max_trigger is None\n            and effect.tick_interval is None\n            and effect.parameters.get("duration_bullets") is None\n            and effect.parameters.get("event_scope") != "recipients"\n            and not effect.condition_rules\n        )\n'''
-          new='''    @staticmethod\n    def _lazy_rank_target_shape_supported(effect: "CompiledEffect") -> bool:\n        """Own simple Moris lazy ATK-rank states without bullet lifetimes.\n\n        Direct damage buffs retain the existing generic slice. The first cadence\n        slice is one finite positive caster-based charge-speed buff delivered to\n        the lowest-ATK B3 at full-burst start.\n        """\n        max_stack = effect.max_stack if effect.max_stack is not None else 1.0\n        common = (\n            effect.effect_type == "buff"\n            and effect.target_spec.mode in TriggerDispatcher._LAZY_ATK_RANK_MODES\n            and float(max_stack) == 1.0\n            and effect.max_trigger is None\n            and effect.tick_interval is None\n            and effect.parameters.get("duration_bullets") is None\n            and effect.parameters.get("event_scope") != "recipients"\n            and not effect.condition_rules\n        )\n        if not common:\n            return False\n        if is_direct_damage_buff_runtime_supported(effect):\n            return True\n        return (\n            effect.target_spec.mode is TargetMode.LOWEST_ATK_BURST3\n            and int(effect.target_spec.count or 0) == 1\n            and (effect.stat or "") == "charge_speed_caster_based_pct"\n            and effect.value is not None\n            and float(effect.value) >= 0.0\n            and effect.duration is not None\n            and float(effect.duration) > 0.0\n            and not effect.parameters\n            and len(effect.triggers) == 1\n            and effect.triggers[0].mode is TriggerMode.EVENT\n            and effect.triggers[0].event_key == "full_burst_start"\n        )\n'''
+          new='''    @staticmethod\n    def _lazy_rank_target_shape_supported(effect: "CompiledEffect") -> bool:\n        """Own simple Moris lazy ATK-rank states without bullet lifetimes."""\n        max_stack = effect.max_stack if effect.max_stack is not None else 1.0\n        common = (effect.effect_type == "buff" and effect.target_spec.mode in TriggerDispatcher._LAZY_ATK_RANK_MODES and float(max_stack) == 1.0 and effect.max_trigger is None and effect.tick_interval is None and effect.parameters.get("duration_bullets") is None and effect.parameters.get("event_scope") != "recipients" and not effect.condition_rules)\n        if not common: return False\n        if is_direct_damage_buff_runtime_supported(effect): return True\n        return (effect.target_spec.mode is TargetMode.LOWEST_ATK_BURST3 and int(effect.target_spec.count or 0) == 1 and (effect.stat or "") == "charge_speed_caster_based_pct" and effect.value is not None and float(effect.value) >= 0.0 and effect.duration is not None and float(effect.duration) > 0.0 and not effect.parameters and len(effect.triggers) == 1 and effect.triggers[0].mode is TriggerMode.EVENT and effect.triggers[0].event_key == "full_burst_start")\n'''
           assert old in s; p.write_text(s.replace(old,new))
 
           p=Path('fast_engine/engine/score.py'); s=p.read_text()
           old='''def _ammo_charge_recipient_score_safe(squad: CompiledSquad, actor: int) -> bool:\n    if _actor_has_live_max_ammo_mutation(squad, actor):\n        return False\n    mode = str(squad.members[actor].weapon.get("fire_mode") or "")\n    if mode in {"auto", "auto_warmup"}:\n        return _rapid_actor_score_safe(squad, actor)\n    if mode == "charge":\n        return _charge_actor_score_safe(squad, actor)\n    return False\n'''
-          new='''def _same_event_self_max_ammo_before_refill_score_safe(\n    squad: CompiledSquad, effect, actor: int\n) -> bool:\n    """Own one live self max-ammo -> 100% refill transaction in actor order."""\n    if not (\n        effect.actor == actor and effect.effect_type == "instant"\n        and (effect.stat or "") == "ammo_charge_pct"\n        and effect.target_spec.mode is TargetMode.SELF\n        and effect.value is not None and abs(float(effect.value) - 100.0) <= 1e-9\n        and not effect.parameters and not effect.condition_rules\n        and len(effect.triggers) == 1\n        and effect.triggers[0].mode is TriggerMode.EVENT\n        and effect.triggers[0].event_key == "full_burst_start"\n    ): return False\n    live = tuple(\n        other for other in squad.effects\n        if (other.stat or "") in {"max_ammo_pct", "max_ammo_flat", "max_ammo_infinite"}\n        and not _is_folded_static_self_modifier(other)\n        and actor in _possible_ally_targets(squad, other)\n    )\n    if len(live) != 1: return False\n    source = live[0]\n    if not (\n        source.actor == actor and (source.stat or "") == "max_ammo_pct"\n        and source.effect_type == "buff" and source.target_spec.mode is TargetMode.SELF\n        and source.value is not None and float(source.value) > 0.0\n        and source.duration is not None and float(source.duration) > 0.0\n        and source.max_stack in (None, 1, 1.0)\n        and source.max_trigger is None and source.tick_interval is None\n        and not source.parameters and not source.condition_rules\n        and len(source.triggers) == 1\n        and source.triggers[0].mode is TriggerMode.EVENT\n        and source.triggers[0].event_key == "full_burst_start"\n        and _is_dynamic_max_ammo_score_supported(squad, source)\n    ): return False\n    ordered = tuple(row.effect_id for row in squad.members[actor].effects)\n    return ordered.index(source.effect_id) < ordered.index(effect.effect_id)\n\n\ndef _ammo_charge_recipient_score_safe(squad: CompiledSquad, actor: int, effect=None) -> bool:\n    if _actor_has_live_max_ammo_mutation(squad, actor):\n        if effect is None or not _same_event_self_max_ammo_before_refill_score_safe(squad, effect, actor):\n            return False\n    mode = str(squad.members[actor].weapon.get("fire_mode") or "")\n    if mode in {"auto", "auto_warmup"}: return _rapid_actor_score_safe(squad, actor)\n    if mode == "charge": return _charge_actor_score_safe(squad, actor)\n    return False\n'''
+          new='''def _same_event_self_max_ammo_before_refill_score_safe(squad: CompiledSquad, effect, actor: int) -> bool:\n    if not (effect.actor == actor and effect.effect_type == "instant" and (effect.stat or "") == "ammo_charge_pct" and effect.target_spec.mode is TargetMode.SELF and effect.value is not None and abs(float(effect.value)-100.0) <= 1e-9 and not effect.parameters and not effect.condition_rules and len(effect.triggers)==1 and effect.triggers[0].mode is TriggerMode.EVENT and effect.triggers[0].event_key == "full_burst_start"): return False\n    live=tuple(other for other in squad.effects if (other.stat or "") in {"max_ammo_pct","max_ammo_flat","max_ammo_infinite"} and not _is_folded_static_self_modifier(other) and actor in _possible_ally_targets(squad,other))\n    if len(live)!=1: return False\n    source=live[0]\n    if not (source.actor==actor and (source.stat or "") == "max_ammo_pct" and source.effect_type=="buff" and source.target_spec.mode is TargetMode.SELF and source.value is not None and float(source.value)>0.0 and source.duration is not None and float(source.duration)>0.0 and source.max_stack in (None,1,1.0) and source.max_trigger is None and source.tick_interval is None and not source.parameters and not source.condition_rules and len(source.triggers)==1 and source.triggers[0].mode is TriggerMode.EVENT and source.triggers[0].event_key=="full_burst_start" and _is_dynamic_max_ammo_score_supported(squad,source)): return False\n    ordered=tuple(row.effect_id for row in squad.members[actor].effects)\n    return ordered.index(source.effect_id)<ordered.index(effect.effect_id)\n\n\ndef _ammo_charge_recipient_score_safe(squad: CompiledSquad, actor: int, effect=None) -> bool:\n    if _actor_has_live_max_ammo_mutation(squad, actor) and (effect is None or not _same_event_self_max_ammo_before_refill_score_safe(squad,effect,actor)): return False\n    mode=str(squad.members[actor].weapon.get("fire_mode") or "")\n    if mode in {"auto","auto_warmup"}: return _rapid_actor_score_safe(squad,actor)\n    if mode=="charge": return _charge_actor_score_safe(squad,actor)\n    return False\n'''
           assert old in s; s=s.replace(old,new)
           old='''    return bool(targets) and all(\n        _ammo_charge_recipient_score_safe(squad, actor) for actor in targets\n    )\n'''; new='''    return bool(targets) and all(\n        _ammo_charge_recipient_score_safe(squad, actor, effect) for actor in targets\n    )\n'''
           assert old in s; s=s.replace(old,new,1)
           old='''def _lazy_rank_target_score_safe(squad: CompiledSquad, effect) -> bool:\n    if not TriggerDispatcher._lazy_rank_target_shape_supported(effect):\n        return False\n    if not effect.name:\n        return True\n    named_event_key = f"event:{effect.name}"\n    if any(\n        any((rule.event_key or "") == named_event_key for rule in other.triggers)\n        for other in squad.effects\n        if other.effect_id != effect.effect_id\n    ):\n        return False\n    return not any(\n        rule.key == effect.name\n        for other in squad.effects\n        if other.effect_id != effect.effect_id\n        for rule in other.condition_rules\n    )\n'''
-          new='''def _lazy_rank_target_score_safe(squad: CompiledSquad, effect) -> bool:\n    if not TriggerDispatcher._lazy_rank_target_shape_supported(effect): return False\n    if (effect.stat or "") == "charge_speed_caster_based_pct":\n        if effect.target_spec.mode is not TargetMode.LOWEST_ATK_BURST3: return False\n        candidates = tuple(actor for actor, member in enumerate(squad.members) if member.burst_stage == "3")\n        if not candidates or not all(_charge_actor_score_safe(squad, actor) for actor in candidates): return False\n        if not _charge_actor_score_safe(squad, effect.actor): return False\n    if not effect.name: return True\n    named_event_key = f"event:{effect.name}"\n    if any(any((rule.event_key or "") == named_event_key for rule in other.triggers) for other in squad.effects if other.effect_id != effect.effect_id): return False\n    return not any(rule.key == effect.name for other in squad.effects if other.effect_id != effect.effect_id for rule in other.condition_rules)\n'''
+          new='''def _lazy_rank_target_score_safe(squad: CompiledSquad, effect) -> bool:\n    if not TriggerDispatcher._lazy_rank_target_shape_supported(effect): return False\n    if (effect.stat or "") == "charge_speed_caster_based_pct":\n        if effect.target_spec.mode is not TargetMode.LOWEST_ATK_BURST3: return False\n        candidates=tuple(actor for actor,member in enumerate(squad.members) if member.burst_stage=="3")\n        if not candidates or not all(_charge_actor_score_safe(squad,actor) for actor in candidates): return False\n        if not _charge_actor_score_safe(squad,effect.actor): return False\n    if not effect.name: return True\n    named_event_key=f"event:{effect.name}"\n    if any(any((rule.event_key or "")==named_event_key for rule in other.triggers) for other in squad.effects if other.effect_id!=effect.effect_id): return False\n    return not any(rule.key==effect.name for other in squad.effects if other.effect_id!=effect.effect_id for rule in other.condition_rules)\n'''
           assert old in s; p.write_text(s.replace(old,new))
           PY
           python - <<'PY'
-          from context import snapshot, spec
+          from context import snapshot,spec
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.burst_runtime import BurstRuntime
           from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
           from fast_engine.engine.model import EnemyStaticProfile
-          import fast_engine.engine.score as score
-
-          def unique_rows():
-              src=[]
-              for label,row in snapshot.SQUADS.items():
-                  if str(label).startswith('지그_'): continue
-                  mem=tuple(row.get('members') or ())
-                  if len(mem)!=5 or any(str(x).startswith('test_') for x in mem): continue
-                  src.append((label,mem))
-              seen=set()
-              for label,mem in src:
-                  if mem in seen: continue
-                  seen.add(mem); yield label,mem
-
-          print('NEW_LAZY_SCOPE')
-          for label,mem in unique_rows():
-              c=compile_moris_squad(spec.build_squad(list(mem)))
-              for e in c.effects:
-                  if e.name == '차분한 수심 4' and score._lazy_rank_target_score_safe(c,e):
-                      print(label,[(i,m.name,m.burst_stage,score._charge_actor_score_safe(c,i)) for i,m in enumerate(c.members) if m.burst_stage=='3'])
-          print('NEW_AMMO_SCOPE')
-          for label,mem in unique_rows():
-              c=compile_moris_squad(spec.build_squad(list(mem)))
-              for e in c.effects:
-                  if e.name == '화무십일홍 · 수라 2' and score._is_dynamic_ammo_charge_score_supported(c,e):
-                      print(label, score._same_event_self_max_ammo_before_refill_score_safe(c,e,e.actor))
+          from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
 
           moris=spec.build_squad(list(snapshot.SQUADS['레이드_볼륨']['members']))
           c=compile_moris_squad(moris)
@@ -71,11 +46,17 @@ jobs:
           enemy=EnemyStaticProfile(duration=15.0,core_px=0.0)
           sink=SimpleDamageScoreSink(c,enemy)
           rt=BurstRuntime(c,policy,enemy,damage_sink=sink)
-          out=rt.run(duration=3.401)
+          obs=StaticNormalAttackObserver(rt,duration=3.401)
+          out=rt.run(duration=3.401,score_observer=obs)
           scarlet=next(i for i,m in enumerate(c.members) if m.name=='홍련 : 흑영')
+          rows=[(eff.name,active.target,active.expires_at) for eff,active in rt.dispatcher.effects.iter_stat('charge_speed_caster_based_pct',now=3.4)]
           print('FAST_FB',out.full_burst_starts)
           print('FAST_SCARLET_AMMO',rt.weapons._states[scarlet].ammo,'FULL',rt.weapons._full_ammo(scarlet,3.4),'PHASE',rt.weapons._states[scarlet].phase)
-          rows=[(eff.name,active.target,active.activated_at,active.expires_at) for eff,active in rt.dispatcher.effects.iter_stat('charge_speed_caster_based_pct',now=3.4)]
-          print('FAST_LAZY_ROWS',rows,[(i,c.members[i].name) for _,i,_,_ in rows])
-          print('BLOCKERS',score.static_score_blockers(c))
+          print('FAST_LAZY_ROWS',rows,[(i,c.members[i].name) for _,i,_ in rows])
+          print('BLOCKERS',static_score_blockers(c))
+          assert abs(out.full_burst_starts[0]-3.4)<=1/60+1e-9
+          assert rt.weapons._full_ammo(scarlet,3.4)==26
+          assert rt.weapons._states[scarlet].ammo==26
+          assert any(i==scarlet for _,i,_ in rows)
+          assert static_score_blockers(c)==()
           PY
