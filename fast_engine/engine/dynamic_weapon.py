@@ -32,6 +32,8 @@ class DynamicChargeBoundary:
     actor: int
     signals: tuple[DynamicCountSignal, ...]
     is_last_bullet: bool = False
+    pre_signals: tuple[DynamicCountSignal, ...] = ()
+    score_pending: bool = False
 
 
 class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
@@ -185,6 +187,27 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
     ) -> None:
         self._rapid_reload.attach_weapon_block_until(callback)
 
+    def attach_squad_ammo_thresholds(self, thresholds: tuple[int, ...]) -> None:
+        self._rapid_reload.attach_squad_ammo_thresholds(thresholds)
+
+    def refresh_squad_ammo_plan(self, now: float) -> None:
+        self._rapid_reload.refresh_squad_ammo_plan(now)
+
+    def handle_pre_shot_boundary(self, event: ScheduledEvent) -> DynamicChargeBoundary | None:
+        row=self._rapid_reload.handle_pre_shot_boundary(event)
+        if row is None:
+            return None
+        return DynamicChargeBoundary(
+            row.actor,
+            tuple(DynamicCountSignal(x.event_key,x.count_increment) for x in row.signals),
+            is_last_bullet=row.is_last_bullet,
+            pre_signals=tuple(DynamicCountSignal(x.event_key,x.count_increment) for x in row.pre_signals),
+            score_pending=row.score_pending,
+        )
+
+    def score_pending_shot(self, actor: int, now: float) -> None:
+        self._rapid_reload.score_pending_shot(actor,now)
+
     def _charge_shot_release_time(self, actor: int, ready_time: float) -> float:
         release = float(self._charge_hold_release.get(actor, -1.0))
         return release if ready_time < release - 1e-9 else float(ready_time)
@@ -249,8 +272,10 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         # callback safe for direct tests and future non-burst instant sources.
         self.advance_to(float(now), inclusive=False)
 
+        rapid_changed = False
         for actor in selected:
             if actor in self._rapid_reload.actors:
+                rapid_changed = True
                 runtime = self._rapid_reload
                 st = runtime._states.get(actor)
                 if st is None:
@@ -289,6 +314,8 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
             self._invalidate(st)
             self._plan(actor, float(now))
             self.state.set_ammo(actor, st.ammo)
+        if rapid_changed:
+            self._rapid_reload.refresh_squad_ammo_plan(float(now))
         return True
 
     def apply_force_reload(self, targets: tuple[int, ...], now: float) -> bool:
@@ -358,6 +385,11 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
                 rapid.actor,
                 tuple(signals),
                 is_last_bullet=rapid.is_last_bullet,
+                pre_signals=tuple(
+                    DynamicCountSignal(row.event_key,row.count_increment)
+                    for row in rapid.pre_signals
+                ),
+                score_pending=rapid.score_pending,
             )
 
         row = super().handle_boundary(event)

@@ -61,7 +61,7 @@ class FullChargeHitChargeSpeedTests(unittest.TestCase):
                         (team, squad.members[candidate.actor].name, candidate.name, candidate.stat)
                     )
         self.assertEqual(len(seen), 23)
-        self.assertEqual(certified, 3)
+        self.assertEqual(certified, 4)
         self.assertEqual(cadence, 57)
         self.assertEqual(len(matches), 2)
         self.assertEqual(

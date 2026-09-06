@@ -1,9 +1,26 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
 from typing import Callable, Sequence
 
-from .dynamic_reload import DynamicRapidReloadRuntime, _RapidActorState
+from .dynamic_reload import (
+    DynamicRapidBoundary,
+    DynamicRapidCountSignal,
+    DynamicRapidReloadRuntime,
+    _RapidActorState,
+)
+from .scheduler import EventKind, ScheduledEvent
+from .frame_lattice import moris_observed_tick
 from .weapon import _EPS
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicSquadAmmoToken:
+    generation: int
+    actor: int
+    expected_hit_count: int
+    expected_global_count: int
+    count_increment: int
 
 
 def is_supported_rapid_cover_control(member) -> bool:
@@ -63,12 +80,20 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
     likewise gated elsewhere.
     """
 
-    __slots__ = ("_cover_until", "_weapon_block_until")
+    __slots__ = (
+        "_cover_until", "_weapon_block_until", "_squad_ammo_thresholds",
+        "_squad_ammo_generation", "_squad_ammo_scheduled_time",
+        "_squad_ammo_dispatched_count",
+    )
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._cover_until: dict[int, float] = {}
         self._weapon_block_until: Callable[[int, float], float | None] | None = None
+        self._squad_ammo_thresholds: tuple[int, ...] = ()
+        self._squad_ammo_generation = 0
+        self._squad_ammo_scheduled_time: float | None = None
+        self._squad_ammo_dispatched_count = 0
 
     def attach_score_sink(
         self,
@@ -80,6 +105,82 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
         # effect store knows not to schedule a stale static Nth-shot expiry.
         self.effects.enable_dynamic_bullet_lifetime_targets(selected)
         super().attach_score_sink(selected, sink)
+
+    def attach_squad_ammo_thresholds(self, thresholds: tuple[int, ...]) -> None:
+        if self._states:
+            raise RuntimeError("Fast squad-ammo thresholds must be attached before weapon start")
+        values=tuple(sorted({int(value) for value in thresholds if int(value)>0}))
+        if values and set(self.actors) != set(range(len(self.squad.members))):
+            raise NotImplementedError("Fast squad-ammo first slice requires every squad actor on rapid runtime")
+        self._squad_ammo_thresholds=values
+
+    def _next_squad_ammo_target(self, current: int) -> int | None:
+        if not self._squad_ammo_thresholds:
+            return None
+        return min(((current // threshold) + 1) * threshold for threshold in self._squad_ammo_thresholds)
+
+    def _probe_next_physical_shot(self, st: _RapidActorState) -> float | None:
+        while st.phase_end <= self.duration + _EPS:
+            if self._postpone_firing_for_block(st):
+                continue
+            if st.phase == "firing":
+                return float(st.phase_end)
+            self._finish_nonshot_phase(st, float(st.phase_end))
+        return None
+
+    def _predict_next_squad_ammo_boundary(self) -> tuple[float, int, int, int] | None:
+        if not self._squad_ammo_thresholds or not self.actors:
+            return None
+        probes={actor: replace(self._states[actor]) for actor in self.actors}
+        current=sum(st.hit_count for st in probes.values())
+        target=self._next_squad_ammo_target(current)
+        if target is None:
+            return None
+        while current < target:
+            candidates=[]
+            for actor,st in probes.items():
+                when=self._probe_next_physical_shot(st)
+                if when is not None:
+                    candidates.append((when,actor))
+            if not candidates:
+                return None
+            when,actor=min(candidates)
+            if when > self.duration + _EPS:
+                return None
+            st=probes[actor]
+            self._after_shot(st,when)
+            current += 1
+            if current == target:
+                return when,actor,st.hit_count,target
+        return None
+
+    def _plan_squad_ammo(self, now: float) -> None:
+        if not self._squad_ammo_thresholds or self._squad_ammo_scheduled_time is not None:
+            return
+        row=self._predict_next_squad_ammo_boundary()
+        if row is None:
+            return
+        when,actor,expected,target=row
+        when=max(float(now),float(when))
+        if when > self.duration + _EPS:
+            return
+        increment=target-self._squad_ammo_dispatched_count
+        if increment <= 0:
+            return
+        self._squad_ammo_scheduled_time=when
+        self.scheduler.schedule(
+            when,EventKind.PRE_SHOT_BOUNDARY,actor=actor,
+            payload=DynamicSquadAmmoToken(
+                self._squad_ammo_generation,actor,expected,target,increment
+            ),
+        )
+
+    def refresh_squad_ammo_plan(self, now: float) -> None:
+        if not self._squad_ammo_thresholds:
+            return
+        self._squad_ammo_generation += 1
+        self._squad_ammo_scheduled_time=None
+        self._plan_squad_ammo(now)
 
     def _cover_end(self, actor: int) -> float:
         return float(self._cover_until.get(actor, -1.0))
@@ -149,7 +250,27 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
         # shot. Doing it here handles ordinary reloads and long cover intervals
         # uniformly and avoids double-cooling when a reload completes in cover.
         self._cool_warmup_before_shot(st, shot_time)
-        super()._after_shot(st, shot_time)
+        if not self._squad_ammo_thresholds:
+            super()._after_shot(st, shot_time)
+            return
+
+        # Exact squad-ammo ownership needs physical shot timestamps, not merely
+        # continuous-rate damage integration. Moris advances next_fire_time from
+        # the *nominal* previous deadline, then the outer 60 Hz loop observes that
+        # deadline on its first qualifying tick. Do not feed the observed shot
+        # time back into the next deadline or a 24/s weapon drifts by half a frame.
+        hits = self._hits_per_shot(st.actor)
+        inter = self._shot_interval(st)
+        st.ammo -= 1
+        st.hit_count += 1
+        st.pellet_count += hits
+        st.last_shot = float(shot_time)
+        st.last_inter = inter
+        st.fire_deadline = float(st.fire_deadline) + inter
+        st.phase = "reload_wait" if st.ammo <= 0 else "firing"
+        st.phase_end = moris_observed_tick(
+            st.fire_deadline, horizon=self.duration
+        )
 
     def _finish_nonshot_phase(
         self,
@@ -158,21 +279,47 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
     ) -> None:
         actor = st.actor
         weapon = self.squad.members[actor].weapon
+        if not self._squad_ammo_thresholds:
+            if st.phase == "reload_wait":
+                factor = self._reload_factor(actor, transition_time)
+                st.phase = "reloading"
+                st.phase_end = transition_time + (
+                    float(weapon.get("reload_start_delay", 0.0))
+                    + float(weapon.get("reload_time", 0.0))
+                ) * factor
+                return
+            if st.phase == "reloading":
+                st.ammo = self._full_ammo(actor, transition_time)
+                factor = self._reload_factor(actor, transition_time)
+                st.phase = "firing"
+                st.phase_end = transition_time + float(
+                    weapon.get("post_reload_delay", 0.0)
+                ) * factor
+                return
+            raise RuntimeError(f"unexpected rapid cadence phase: {st.phase!r}")
+
+        # Empty-magazine reload is noticed only on an outer Moris tick. Reload
+        # completion and post-reload delay are likewise observed on ticks. The
+        # first shot after completion resets next_fire_time to that observed tick.
         if st.phase == "reload_wait":
             factor = self._reload_factor(actor, transition_time)
-            st.phase = "reloading"
-            st.phase_end = transition_time + (
+            deadline = float(transition_time) + (
                 float(weapon.get("reload_start_delay", 0.0))
                 + float(weapon.get("reload_time", 0.0))
             ) * factor
+            st.phase = "reloading"
+            st.phase_end = moris_observed_tick(deadline, horizon=self.duration)
             return
         if st.phase == "reloading":
             st.ammo = self._full_ammo(actor, transition_time)
             factor = self._reload_factor(actor, transition_time)
-            st.phase = "firing"
-            st.phase_end = transition_time + float(
+            deadline = float(transition_time) + float(
                 weapon.get("post_reload_delay", 0.0)
             ) * factor
+            first_shot = moris_observed_tick(deadline, horizon=self.duration)
+            st.phase = "firing"
+            st.phase_end = first_shot
+            st.fire_deadline = first_shot
             return
         raise RuntimeError(f"unexpected rapid cadence phase: {st.phase!r}")
 
@@ -266,4 +413,80 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
             self._plan(actor, now)
             self.state.set_ammo(actor, st.ammo)
             entered.append(actor)
+        if entered:
+            self.refresh_squad_ammo_plan(now)
         return tuple(entered)
+
+    def start(self, now: float = 0.0) -> None:
+        super().start(now)
+        self._plan_squad_ammo(now)
+
+    def sync(self, now: float) -> None:
+        before=tuple((actor,self._states[actor].generation) for actor in self.actors if actor in self._states)
+        super().sync(now)
+        after=tuple((actor,self._states[actor].generation) for actor in self.actors if actor in self._states)
+        if before != after:
+            self.refresh_squad_ammo_plan(now)
+        elif self._squad_ammo_scheduled_time is None:
+            self._plan_squad_ammo(now)
+
+    def apply_force_reload(self, targets: tuple[int, ...], now: float) -> bool:
+        changed=super().apply_force_reload(targets,now)
+        if changed:
+            self.refresh_squad_ammo_plan(now)
+        return changed
+
+    def handle_pre_shot_boundary(self, event: ScheduledEvent) -> DynamicRapidBoundary | None:
+        token=event.payload
+        if not isinstance(token,DynamicSquadAmmoToken):
+            return None
+        if token.generation != self._squad_ammo_generation:
+            return None
+        if self._squad_ammo_scheduled_time is None or abs(self._squad_ammo_scheduled_time-event.time)>1e-7:
+            return None
+
+        # Moris weapon actors fire in roster order. Consume same-frame physical
+        # shots belonging to earlier actors, but stop immediately before the
+        # threshold-crossing actor's own shot.
+        for actor in self.actors:
+            self._advance_actor_to(
+                actor,event.time,inclusive=actor < token.actor
+            )
+        st=self._states.get(token.actor)
+        if st is None or st.phase != "firing" or abs(st.phase_end-event.time)>1e-7:
+            self.refresh_squad_ammo_plan(event.time)
+            return None
+        before=sum(state.hit_count for state in self._states.values())
+        if st.hit_count + 1 != token.expected_hit_count or before + 1 != token.expected_global_count:
+            self.refresh_squad_ammo_plan(event.time)
+            return None
+
+        self._after_shot(st,float(event.time))
+        self.state.set_ammo(token.actor,st.ammo)
+        self._invalidate(st)  # invalidate any same-shot local token
+        self._squad_ammo_scheduled_time=None
+        self._squad_ammo_dispatched_count=token.expected_global_count
+
+        signals=[]
+        pellet_incs,pellet_last=self._crossing_increments(
+            st.dispatched_pellet_count,st.pellet_count,
+            self._pellet_thresholds.get(token.actor,()),
+        )
+        signals.extend(DynamicRapidCountSignal("pellet_hit",inc) for inc in pellet_incs)
+        st.dispatched_pellet_count=pellet_last
+        hit_incs,hit_last=self._crossing_increments(
+            st.dispatched_hit_count,st.hit_count,
+            self._hit_thresholds.get(token.actor,()),
+        )
+        signals.extend(DynamicRapidCountSignal("hit_count",inc) for inc in hit_incs)
+        st.dispatched_hit_count=hit_last
+        return DynamicRapidBoundary(
+            token.actor,tuple(signals),is_last_bullet=st.ammo<=0,
+            pre_signals=(DynamicRapidCountSignal("squad_ammo_consume",token.count_increment),),
+            score_pending=True,
+        )
+
+    def score_pending_shot(self, actor: int, now: float) -> None:
+        if self._score_sink is None:
+            raise RuntimeError("Fast rapid cadence actor has no score sink")
+        self._score_sink(actor,1,float(now))

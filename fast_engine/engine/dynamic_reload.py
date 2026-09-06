@@ -33,6 +33,8 @@ class DynamicRapidBoundary:
     actor: int
     signals: tuple[DynamicRapidCountSignal, ...]
     is_last_bullet: bool = False
+    pre_signals: tuple[DynamicRapidCountSignal, ...] = ()
+    score_pending: bool = False
 
 
 @dataclass(slots=True)
@@ -41,6 +43,10 @@ class _RapidActorState:
     ammo: int
     phase: str
     phase_end: float
+    # Moris keeps a nominal auto-fire deadline separate from the 60 Hz tick on
+    # which that deadline is observed. The field is inert for ordinary Fast
+    # rapid slices and is used only by the certified squad-ammo lifecycle.
+    fire_deadline: float = 0.0
     hit_count: int = 0
     pellet_count: int = 0
     dispatched_hit_count: int = 0

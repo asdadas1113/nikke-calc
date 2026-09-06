@@ -13,6 +13,7 @@ from .damage_policy import (
     is_direct_damage_buff_runtime_supported,
 )
 from .effects import ActiveEffectStore
+from .enemy_replacement import certified_enemy_received_damage_replacements
 from .shot_blocks import static_bullet_lifetime_cadence_safe
 from .reference_stack import finite_reference_stack_capture_shape
 from .state import ENEMY, StateStore
@@ -50,6 +51,7 @@ class TriggerDispatcher:
         "_unsafe_gauge_families", "_strict_score_delivery", "_ammo_charge_sink",
         "_force_reload_sink", "_named_event_names_needed", "_control_lifecycles",
         "_control_effect_ids", "_control_remover_ids",
+        "_enemy_replacement_lifecycles", "_enemy_replacement_remover_ids",
     )
 
     _AUXILIARY_STATS = frozenset({
@@ -138,6 +140,10 @@ class TriggerDispatcher:
         )
         self._control_remover_ids = frozenset(
             row.remover_effect_id for row in self._control_lifecycles
+        )
+        self._enemy_replacement_lifecycles = certified_enemy_received_damage_replacements(squad)
+        self._enemy_replacement_remover_ids = frozenset(
+            row.remover_effect_id for row in self._enemy_replacement_lifecycles
         )
         self.effects.enable_finite_reference_stack_capture(
             effect.effect_id
@@ -1524,6 +1530,8 @@ class TriggerDispatcher:
     def is_runtime_executable_effect(self, effect: "CompiledEffect") -> bool:
         if effect.effect_id in self._control_effect_ids or effect.effect_id in self._control_remover_ids:
             return True
+        if effect.effect_id in self._enemy_replacement_remover_ids:
+            return True
         if self._temporary_self_charge_weapon_change_runtime_supported(effect):
             return True
         if self._trigger_count_reduce_runtime_supported(effect):
@@ -1922,6 +1930,11 @@ class TriggerDispatcher:
                 self.dispatch(
                     BurstSignal(now, "event:heal_received", effect.actor, effect.actor)
                 )
+            elif stat == "remove_named_buff" and effect.effect_id in self._enemy_replacement_remover_ids:
+                name = str(effect.parameters.get("target_effect") or "")
+                if tuple(targets) != (ENEMY,):
+                    return False
+                self.effects.remove_named_state(ENEMY, name, now=now)
             elif stat == "remove_named_buff" and self._enemy_remove_named_state_runtime_supported(effect):
                 name = str(effect.parameters.get("target_effect") or "")
                 if tuple(targets) != (ENEMY,):

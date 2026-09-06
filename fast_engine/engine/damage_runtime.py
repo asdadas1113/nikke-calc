@@ -89,9 +89,16 @@ class SimpleDamageScoreSink:
         "stateful_dot_specs", "unsupported_effect_ids", "char_total", "runtime",
         "resolver", "_pending_effect_ids", "_effect_actor", "_dot_generation",
         "_stateful_dot_names", "_weapon_hit_source_ids",
+        "_certified_squad_ammo_effect_ids",
     )
 
-    def __init__(self, squad: "CompiledSquad", enemy: "EnemyStaticProfile") -> None:
+    def __init__(
+        self,
+        squad: "CompiledSquad",
+        enemy: "EnemyStaticProfile",
+        *,
+        certified_squad_ammo_effect_ids: frozenset[int] = frozenset(),
+    ) -> None:
         self.squad = squad
         self.enemy = enemy
         self.specs: dict[int, DamageEventSpec] = {}
@@ -110,6 +117,7 @@ class SimpleDamageScoreSink:
         self._dot_generation: dict[int, int] = {}
         self._stateful_dot_names: dict[str, list[int]] = {}
         self._weapon_hit_source_ids: set[int] = set()
+        self._certified_squad_ammo_effect_ids = frozenset(certified_squad_ammo_effect_ids)
 
         downstream_keys = set(squad.trigger_index.by_event)
         scaled_names = {
@@ -693,6 +701,14 @@ class SimpleDamageScoreSink:
         for rule in effect.triggers:
             if rule.mode is TriggerMode.PERIODIC:
                 if rule.interval is None or float(rule.interval) <= 0.0:
+                    return False
+                continue
+            if rule.event_key == "squad_ammo_consume":
+                if (
+                    effect.effect_id not in self._certified_squad_ammo_effect_ids
+                    or rule.mode is not TriggerMode.MODULO
+                    or int(rule.threshold or 0) <= 0
+                ):
                     return False
                 continue
             if rule.event_key not in _SAFE_EVENT_KEYS:

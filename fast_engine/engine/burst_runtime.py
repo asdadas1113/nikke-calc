@@ -459,7 +459,10 @@ class BurstRuntime:
             if score_observer is None:
                 return
             score_observer.consume_until(event.time, inclusive=False)
-            if event.phase >= 30:
+            # PRE_SHOT_BOUNDARY exists specifically to run after ammo decrement
+            # but before the threshold-crossing normal attack is scored. Consuming
+            # =t here would advance that shot and stale its token before dispatch.
+            if event.phase >= 30 and event.kind is not EventKind.PRE_SHOT_BOUNDARY:
                 score_observer.consume_until(event.time, inclusive=True)
 
         def score_end_of_time(time: float) -> None:
@@ -473,6 +476,46 @@ class BurstRuntime:
             event = self.scheduler.pop()
             processed += 1
             score_before_event(event)
+
+            if event.kind is EventKind.PRE_SHOT_BOUNDARY:
+                boundary = self.weapons.handle_pre_shot_boundary(event)
+                if boundary is not None:
+                    from .burst import BurstSignal
+                    for pre in boundary.pre_signals:
+                        if pre.event_key == "squad_ammo_consume":
+                            self.dispatcher.dispatch_team_hit(
+                                pre.event_key,
+                                time=event.time,
+                                attacker=boundary.actor,
+                                context=SignalContext(),
+                                count_increment=pre.count_increment,
+                            )
+                        else:
+                            self.dispatcher.dispatch(
+                                BurstSignal(
+                                    event.time,pre.event_key,boundary.actor,boundary.actor,
+                                    count_increment=pre.count_increment,
+                                ),
+                                context=SignalContext(),
+                            )
+                    if boundary.score_pending:
+                        self.weapons.score_pending_shot(boundary.actor,event.time)
+                    for count_signal in boundary.signals:
+                        self.dispatcher.dispatch(
+                            BurstSignal(
+                                event.time,count_signal.event_key,boundary.actor,boundary.actor,
+                                count_increment=count_signal.count_increment,
+                            ),
+                            context=SignalContext(),
+                        )
+                    if boundary.is_last_bullet:
+                        self.dispatcher.dispatch(
+                            BurstSignal(event.time,"last_bullet",boundary.actor,boundary.actor),
+                            context=SignalContext(),
+                        )
+                    self.weapons.sync(event.time)
+                score_end_of_time(event.time)
+                continue
 
             if event.kind is EventKind.WEAPON_BOUNDARY:
                 boundary = self.weapons.handle_boundary(event)

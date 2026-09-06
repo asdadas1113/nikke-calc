@@ -14,6 +14,7 @@ from .damage_policy import (
 )
 from .damage_state import DamageTermResolver
 from .dispatcher import TriggerDispatcher
+from .enemy_replacement import certified_enemy_received_damage_replacements
 from .dynamic_rapid import is_supported_rapid_cover_control
 from .model import CompiledSquad, EnemyStaticProfile, FastScore
 from .normal_attack import NormalAttackSpec, compile_normal_attack_spec, expected_normal_block_damage
@@ -743,6 +744,76 @@ def _dynamic_rapid_reload_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
     return tuple(sorted(actors))
 
 
+def _squad_ammo_sequential_damage_score_supported(
+    squad: CompiledSquad, effect
+) -> bool:
+    stat=effect.stat or ""
+    if not stat.startswith("sequential_damage:"):
+        return False
+    suffix=stat.split(":",1)[1]
+    if not suffix.isdigit() or int(suffix)<=0:
+        return False
+    if not (
+        effect.effect_type=="damage"
+        and effect.target_spec.mode is TargetMode.ENEMY
+        and effect.target_spec.runtime_supported
+        and effect.value is not None and float(effect.value)>=0.0
+        and not effect.parameters
+        and not effect.condition_rules
+        and len(effect.triggers)==1
+    ):
+        return False
+    rule=effect.triggers[0]
+    if not (
+        rule.event_key=="squad_ammo_consume"
+        and rule.mode is TriggerMode.MODULO
+        and not rule.trigger_count_reducible
+        and int(rule.threshold or 0)>0
+        and abs(float(rule.threshold or 0)-int(rule.threshold or 0))<=1e-9
+    ):
+        return False
+    # First slice is intentionally all-rapid. Requiring every actor to already
+    # belong to the score runtime avoids inventing a second cadence model solely
+    # for this global counter.
+    rapid=set(_dynamic_rapid_reload_score_actors(squad))
+    if rapid != set(range(len(squad.members))):
+        return False
+    for actor,member in enumerate(squad.members):
+        if str(member.weapon.get("fire_mode") or "") not in {"auto","auto_warmup"}:
+            return False
+        if member.weapon.get("is_clip") or member.weapon.get("control"):
+            return False
+        if not _rapid_actor_score_safe(squad,actor):
+            return False
+    if any(
+        (other.stat or "")=="max_ammo_infinite"
+        and any(actor in _possible_ally_targets(squad,other) for actor in range(len(squad.members)))
+        for other in squad.effects
+    ):
+        return False
+    if effect.name and any(
+        (other.stat or "")=="trigger_count_reduce"
+        and other.parameters.get("target_effect")==effect.name
+        for other in squad.effects
+    ):
+        return False
+    for other in squad.effects:
+        if other.effect_id==effect.effect_id:
+            continue
+        if not any(rule.event_key=="squad_ammo_consume" for rule in other.triggers):
+            continue
+        if other.capability.disposition.value != "mirror_moris_nop":
+            return False
+    return True
+
+
+def _certified_squad_ammo_effect_ids(squad: CompiledSquad) -> frozenset[int]:
+    return frozenset(
+        effect.effect_id for effect in squad.effects
+        if _squad_ammo_sequential_damage_score_supported(squad,effect)
+    )
+
+
 def _is_score_safe_fixed_periodic(effect) -> bool:
     if (
         TriggerDispatcher._periodic_permanent_self_direct_stack_shape_supported(effect)
@@ -1191,6 +1262,11 @@ def _unsupported_remove_named_buff_changes_scored_state(
         for row in certified_stack3_self_stun_remove_lifecycles(squad)
     ):
         return False
+    if any(
+        row.remover_effect_id == effect.effect_id
+        for row in certified_enemy_received_damage_replacements(squad)
+    ):
+        return False
     if TriggerDispatcher._full_burst_end_self_direct_remove_dependency_supported(
         squad, effect
     ):
@@ -1335,7 +1411,9 @@ def static_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
     from .model import EnemyStaticProfile
 
     damage_sink = SimpleDamageScoreSink(
-        squad, EnemyStaticProfile(defense=0.0, duration=1.0)
+        squad,
+        EnemyStaticProfile(defense=0.0, duration=1.0),
+        certified_squad_ammo_effect_ids=_certified_squad_ammo_effect_ids(squad),
     )
     for effect in squad.effects:
         if _unsupported_remove_named_buff_changes_scored_state(
@@ -1449,6 +1527,15 @@ class StaticNormalAttackObserver:
                 self.dynamic_reload_actors,
                 self._score_dynamic_reload_block,
             )
+        squad_ammo_ids=_certified_squad_ammo_effect_ids(runtime.squad)
+        if squad_ammo_ids:
+            thresholds=tuple(sorted({
+                int(rule.threshold or 0)
+                for effect_id in squad_ammo_ids
+                for rule in runtime.squad.effects[effect_id].triggers
+                if rule.event_key=="squad_ammo_consume"
+            }))
+            runtime.weapons.attach_squad_ammo_thresholds(thresholds)
         runtime.dispatcher.attach_ammo_charge_sink(runtime.weapons.apply_ammo_charge)
         runtime.dispatcher.attach_force_reload_sink(runtime.weapons.apply_force_reload)
 
@@ -1564,7 +1651,11 @@ def score_static_squad(
 
     horizon = policy.duration if duration is None else min(float(duration), policy.duration)
     enemy_profile = enemy or EnemyStaticProfile(duration=policy.duration)
-    sink = SimpleDamageScoreSink(squad, enemy_profile)
+    sink = SimpleDamageScoreSink(
+        squad,
+        enemy_profile,
+        certified_squad_ammo_effect_ids=_certified_squad_ammo_effect_ids(squad),
+    )
     runtime = BurstRuntime(
         squad,
         policy,

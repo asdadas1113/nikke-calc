@@ -40,7 +40,7 @@ class StateEndNamedStackDamageTests(unittest.TestCase):
         )
         return squad, sink, by_name
 
-    def test_real_asuka_damage_and_remove_open_without_little_mermaid_leak(self):
+    def test_real_asuka_damage_and_remove_coexist_with_owned_little_mermaid_lifecycle(self):
         squad, sink, by_name = self._fixture()
         annihilation = by_name["섬멸"]
         remove = by_name["섬멸 2"]
@@ -52,7 +52,11 @@ class StateEndNamedStackDamageTests(unittest.TestCase):
             "skill_damage:아스카 : WILLE:섬멸:bonus_damage",
             blockers,
         )
-        self.assertTrue(
+        # Little Mermaid is now opened only by its own separately proven
+        # replacement + squad-ammo lifecycle; Asuka state-end ownership must not
+        # be the reason it becomes executable. At the integrated public fixture
+        # both independent proofs are present, so neither blocker remains.
+        self.assertFalse(
             any("리틀 머메이드:거품 난사" in blocker for blocker in blockers),
             blockers,
         )

@@ -21,6 +21,7 @@ class EventKind(IntEnum):
     STATE_END_NOTIFY = 21
     PERIODIC_TICK = 30
     RELOAD_DONE = 40
+    PRE_SHOT_BOUNDARY = 45
     WEAPON_BOUNDARY = 50
     TRIGGER_BOUNDARY = 60
     CUSTOM = 100
@@ -43,6 +44,7 @@ _EVENT_PHASE: dict[EventKind, int] = {
     EventKind.FULL_BURST_END: 20,
     EventKind.BURST_END_FINALIZE: 20,
     EventKind.RELOAD_DONE: 30,
+    EventKind.PRE_SHOT_BOUNDARY: 30,
     EventKind.WEAPON_BOUNDARY: 30,
     EventKind.TRIGGER_BOUNDARY: 30,
     EventKind.CUSTOM: 100,
@@ -75,7 +77,7 @@ def score_actor_cutoff(time: float) -> int | None:
 
 @dataclass(order=True, slots=True)
 class ScheduledEvent:
-    sort_key: tuple[float, int, int, int] = field(init=False, repr=False)
+    sort_key: tuple[float, int, int, int, int] = field(init=False, repr=False)
     time: float = field(compare=False)
     phase: int = field(compare=False)
     sequence: int = field(compare=False)
@@ -89,10 +91,14 @@ class ScheduledEvent:
         # work sparse-actor ordered so dynamic and static boundaries share one
         # transaction without introducing a frame loop.
         actor_order = self.actor if self.phase == 30 and self.actor >= 0 else -1
+        # A pre-shot boundary must run after earlier roster actors at the same
+        # timestamp, but before any ordinary boundary belonging to its own actor.
+        actor_subphase = -1 if self.kind is EventKind.PRE_SHOT_BOUNDARY else 0
         self.sort_key = (
             float(self.time),
             int(self.phase),
             int(actor_order),
+            int(actor_subphase),
             int(self.sequence),
         )
 
