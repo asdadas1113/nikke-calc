@@ -20,67 +20,82 @@ Fast Engine의 목적은 Moris 복제품이 아니라 optimizer용 고속 sparse
 가장 먼저 읽을 문서:
 
 1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260906.md`
-2. `fast_engine/research/MAID_MAST_HANGOVER_LIFECYCLE_CHECKPOINT_20260906.md`
-3. `fast_engine/research/MAID_MAST_GENERIC_STACK_DECREMENT_CHECKPOINT_20260906.md`
-4. `fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md`
-5. `fast_engine/research/FINITE_REFERENCE_STACK_CAPTURE_CHECKPOINT_20260906.md`
-6. `fast_engine/research/SPARSE_SAME_TIMESTAMP_ACTOR_TRANSACTION_CHECKPOINT_20260906.md`
+2. `fast_engine/research/VOLUME_LIVE_AMMO_LAZY_RANK_CHECKPOINT_20260906.md`
+3. `fast_engine/research/MAID_MAST_HANGOVER_LIFECYCLE_CHECKPOINT_20260906.md`
+4. `fast_engine/research/MAID_MAST_GENERIC_STACK_DECREMENT_CHECKPOINT_20260906.md`
+5. `fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md`
+6. `fast_engine/research/FINITE_REFERENCE_STACK_CAPTURE_CHECKPOINT_20260906.md`
+7. `fast_engine/research/SPARSE_SAME_TIMESTAMP_ACTOR_TRANSACTION_CHECKPOINT_20260906.md`
 
 ## 1. latest completed semantic checkpoint
 
-**Maid Mast reachable stack-3 hangover/removal lifecycle 완료.**
+**`레이드_볼륨` live-ammo refill + lazy B3 rank-target certification 완료.**
 
 semantic production commit:
 
-- `10f9d52a608cc9c68e6f7183d4868d60314c45e2` — `Fast: own Maid Mast hangover lifecycle`
+- `6bc7cbd0350da24dcb1bd5136dbdf0e5941f4103` — `Fast: own Volume live-ammo and lazy-rank cadence`
 
-hardening follow-up:
+public target:
 
-- `85562b38aec8f890b90a4720a1cc6f895f608158` — Moris/finite-reference/negative contract 추가
-- `410332448a61c8f20362a5c007ce7bdc1e8825dd` — condition compiler import correction
-- `a0a5a65474f036a8a0167033455062b4e045d472` — contract harness correction
+- `레이드_볼륨`
 
-public anchors:
+마지막 두 blocker:
 
-- `레이드_루주`
-- `레이드_브리드디젤`
+- `cadence:홍련 : 흑영:화무십일홍 · 수라 2:ammo_charge_pct`
+- `normal_state:리버렐리오:차분한 수심 4:rank_target_timing`
 
-Moris oracle에서 첫 reachable hangover:
+둘 다 Moris oracle로 독립 검증 후 제거했다.
 
-- 루주: FB end/stun/removal `39.4`, logical stun end `49.4`
-- 브리드디젤: `38.4666666667`, logical stun end `48.4666666667`
+### owned live-ammo transaction
 
-Moris separate expire log는 다음 observed 60Hz tick에 나오지만 logical active interval은 정확히 `[start,start+10)`이다.
+Moris는 `ammo_charge_pct` activation 순간의 live effective max ammo를 기준으로 refill한다.
 
-함께 소유한 의미론:
+public first full burst에서:
 
-- 3-stack full-burst-end stun 생성
-- same-timestamp paired `취기` removal
-- source removal 후 finite stun lifetime 독립 유지
-- stun 동안 normal shot suppression
-- no catch-up shot debt
-- MG warmup/ammo/ongoing reload 보존
-- burst candidate exclusion / alternate candidate / sparse earliest-unblock wait
-- `파이레츠 하트` conditional passive removal sync
-- next B1 `취기=1` + passive restart
-- finite captured `scaling_ref=취기` consumer lifetime 유지
+- 홍련 base magazine `16`
+- same-event 선행 `max_ammo_pct +60%` 반영 effective max `26`
+- 이어지는 `ammo_charge_pct=100` refill 후 ammo `26`
 
-runtime은 generic control/remove family를 열지 않는다. exact `certified_stack3_self_stun_remove_lifecycles()` proof를 dispatcher, scorer, dynamic rapid selection이 공유한다.
+Fast는 기존 `_full_ammo()`와 ammo sink를 그대로 사용한다. 새 지원은 exact same-actor `full_burst_start`, single positive finite self max-ammo provider가 refill보다 먼저 오는 100% self refill transaction에서만 열린다.
+
+### owned lazy rank cadence
+
+`리버렐리오 / 차분한 수심 4`는:
+
+- `LOWEST_ATK_BURST3:1`
+- finite positive `charge_speed_caster_based_pct`
+- `full_burst_start`
+
+Moris는 same-timestamp ATK transaction이 정착된 뒤 first target read에서 lazy resolve한다. public trace recipient는 관찰한 모든 full-burst start에서 `홍련 : 흑영`이었다.
+
+Fast는 기존 lazy target primitive를 재사용하고, 가능한 static B3 후보 전원이 charge cadence-safe일 때만 scorer가 ownership을 인정한다.
+
+캐릭터명 runtime hack은 없다.
 
 ## 2. fail-closed safety
 
-ownership은 다음에서 철회된다.
+이번 checkpoint에서도 broad family는 열지 않았다.
 
-- duplicate `취기` provider
-- competing stack provider/mutator
-- 다른 stun provider
-- `stun_immune`
-- named/state-end consumer collision
-- ambiguous/unsupported target 또는 condition
-- unsupported weapon/control shape
-- standalone stun/remove family
+live-ammo proof는 다음에서 철회된다.
 
-캐릭터명 runtime hack은 없다.
+- refill이 100%가 아님
+- self가 아닌 target
+- 다른 event/condition/parameter
+- competing live max-ammo provider
+- provider가 refill 뒤에 오는 order
+- wider flat/infinite max-ammo combination
+- recipient weapon cadence unsafe
+
+lazy rank cadence proof는 다음에서 철회된다.
+
+- `LOWEST_ATK_BURST3:1` 외 selector/count
+- `charge_speed_caster_based_pct` 외 cadence stat
+- non-finite/negative/bullet lifetime shape
+- named-state/event consumer collision
+- 가능한 B3 후보 중 하나라도 charge unsafe
+- 다른 actor의 burst-stage mutation 가능성
+
+기존 broad generic stun/remove/live-reference/multi-stack/weapon-replacement family도 계속 fail closed다.
 
 ## 3. current public frontier
 
@@ -91,66 +106,83 @@ canonical filter:
 - `test_*` fixture member 제외
 - exact ordered membership dedupe
 
-fresh audit run:
-
-- `34006920000`
-- job `101415740830`
-
-결과:
+fresh production audit 결과:
 
 - source cases `24`
 - unique memberships `23`
-- certified **2**
-- gaps **21**
+- certified **3**
+- gaps **20**
 
 certified:
 
 - `레이드_레드후드퀀시`
+- `레이드_볼륨`
 - `컨트롤_미란다미하라`
 
 blocker families:
 
 - normal delivery `47`
-- normal state `25`
+- normal state `22`
 - skill damage `27`
 - skill-state delivery `49`
 - weapon change `12`
-- cadence `59`
+- cadence `57`
 - control `4`
 - periodic grid `1`
 
-직전 checkpoint에서 `normal_state 27 → 25`만 변했다. Anchor-free `레이드_루주`, `레이드_브리드디젤`의 `파이레츠 스피릿 3:remove_named_buff` blocker 2개가 정확히 제거됐다. certified가 2로 유지되는 것은 정상이다.
+직전 Maid Mast lifecycle checkpoint 대비:
 
-`레이드_볼륨`의 남은 blockers는 정확히:
+- certified `2 → 3`
+- gaps `21 → 20`
+- cadence `59 → 57`
+- normal state `25 → 22`
+- 나머지 unchanged
 
-- `cadence:홍련 : 흑영:화무십일홍 · 수라 2:ammo_charge_pct`
-- `normal_state:리버렐리오:차분한 수심 4:rank_target_timing`
+same exact generic shape coverage audit:
 
-## 4. validation already completed
+lazy B3 charge-speed:
 
-Moris lifecycle trace:
+- `스쿼드4`
+- `레이드_네온벨벳`
+- `레이드_볼륨`
 
-- 루주/브리드디젤 activation/removal/expiry semantics 확인
-- `[start,end)` normal shot 0 확인
-- next B1 restart 확인
+live max-ammo → 100% refill:
 
-focused production lifecycle regression:
+- `스쿼드4`
+- `레이드_볼륨`
 
-- semantic promotion 과정에서 existing Maid Mast stack-mutation + new lifecycle suite 모두 success
+따라서 frontier 감소가 Volume 한 membership에만 국한되지 않는 것은 의도된 generic-shape coverage다.
 
-hardening contract:
+## 4. validation completed
 
-- run `34006869114`
-- job `101415603964`
-- `5/5` success
+focused promotion:
 
-public frontier:
+- Volume/new cadence contract + existing refill/Maid regressions `33/33` success
 
-- run `34006920000`
-- job `101415740830`
-- `source24 / unique23 / certified2 / normal_state25`
+production frontier + 180초 score audit:
 
-상세는 `MAID_MAST_HANGOVER_LIFECYCLE_CHECKPOINT_20260906.md` 참고.
+- frontier `24 source / 23 unique / 3 certified / 20 gaps`
+- `레이드_볼륨 score_static_squad()` 180초 완주
+- `unsupported=()`
+- Fast events `1653`
+
+pre-cleanup canonical CI:
+
+- run `34016205089`
+- result: success
+- Fast damage `215/215`
+- Fast complete discovery `324/324`
+- structural performance median `186.61ms`, events `539`
+- calculator `137/137` (`1` skip)
+- optimizer `374/374`
+- bridge `31/31` (`1` skip)
+- site `385/385`
+- golden `29/29`
+- doclint characters `199`, implementation keys `309`, exceptions `18`
+
+performance threshold는 변경하지 않았다.
+
+상세는 `VOLUME_LIVE_AMMO_LAZY_RANK_CHECKPOINT_20260906.md` 참고.
 
 ## 5. current phase
 
@@ -166,6 +198,8 @@ public frontier:
 6. roster-static false B1 remover reachability proof
 7. exact generic harmful multi-stack decrement
 8. Maid Mast reachable stack-3 stun/removal/cadence/burst lifecycle
+9. exact same-event live max-ammo → 100% refill transaction
+10. exact lazy `LOWEST_ATK_BURST3:1` caster-based charge-speed cadence delivery
 
 여전히 broad fail-closed:
 
@@ -175,33 +209,36 @@ public frontier:
 - broad multi-stack / on-attack / hit-count remover families
 - unsupported weapon replacement families
 - unrelated HP/heal chronology
+- generic live max-ammo refill family
+- generic dynamic rank cadence family
 
 raw coverage expansion이나 optimizer production integration으로 돌아가지 않는다.
 
 ## 6. 다음 단일 checkpoint
 
-**`레이드_볼륨` certification attempt**
+**Little Mermaid producer/mutator/sequential-damage 결합 lifecycle**
 
-두 root cause를 하나씩 Moris로 검증한다.
+원칙:
 
-1. `홍련 : 흑영 / 화무십일홍 · 수라 2 / ammo_charge_pct`
-2. `리버렐리오 / 차분한 수심 4 / rank_target_timing`
+- 먼저 Moris에서 producer → mutator → sequential damage dependency 전체를 trace
+- isolated effect만 보고 blocker를 제거하지 않음
+- scorer/runtime/dispatcher가 공유할 compile-time ownership proof를 먼저 정의
+- neighboring generic family는 fail closed 유지
+- focused + negative regression 후에만 public frontier 재계산
 
-규칙:
+그 다음 후보:
 
-- 두 의미론을 각각 독립 trace/audit
-- 한 mechanic을 다른 mechanic 편법으로 열지 않음
-- 둘 다 안전하게 닫힌 뒤에만 세 번째 certified membership 여부 판단
-
-그 다음:
-
-1. Little Mermaid producer/mutator/sequential-damage 결합 lifecycle
-2. Crown `로얄 에타이어 4` normal/skill shared recipient/lifetime semantics
-3. frontier pressure 재계산 후 다음 단일 checkpoint 선정
+1. Crown `로얄 에타이어 4` normal/skill shared recipient/lifetime semantics
+2. frontier pressure 재계산 후 다음 checkpoint 선정
 
 ## 7. cleanup / final canonical gate
 
-이번 Maid Mast checkpoint의 temporary probe/workflow는 clean promotion commit에서 전부 제거한다.
+Volume checkpoint의 temporary probe는 최종 promotion에서 모두 제거한다.
+
+제거 대상:
+
+- `.github/workflows/tmp-volume-probe.yml`
+- `.github/tmp_volume_patch.py`
 
 최종 `.github/workflows`는 반드시:
 
@@ -210,4 +247,4 @@ raw coverage expansion이나 optimizer production integration으로 돌아가지
 
 두 파일만 남긴다.
 
-이 handoff 작성 시점에는 semantic/focused/frontier 검증까지 완료됐다. clean HEAD canonical `ci.yml` 전체 gate는 cleanup/docs promotion 후 확인하고, 다음 재개 시 그 clean HEAD/run을 기준으로 사용한다.
+이 handoff commit 뒤 clean HEAD canonical `ci.yml` 전체 gate를 한 번 더 확인한다. 최종 run ID를 다시 문서에 쓰는 doc-only commit loop는 만들지 않는다. 재개 시 branch HEAD와 최신 successful canonical run을 먼저 확인한다.
