@@ -19,7 +19,7 @@ jobs:
           python-version: '3.13'
       - name: Apply production patch
         run: python .github/tmp_volume_patch.py
-      - name: Focused regressions
+      - name: Focused regressions after stale expectation update
         run: >-
           python -m unittest -v
           fast_engine.tests.test_damage_volume_cadence_rank
