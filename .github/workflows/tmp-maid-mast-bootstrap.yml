@@ -59,6 +59,14 @@ jobs:
 
           exec(compile(script, '<maid-mast-patch>', 'exec'), {'__name__': '__main__'})
 
+          dispatcher_path = Path('fast_engine/engine/dispatcher.py')
+          dispatcher = dispatcher_path.read_text(encoding='utf-8')
+          old = '''            elif stat == "remove_named_buff" and self._self_stack_remove_runtime_supported(effect):\n                name = str(effect.parameters.get("target_effect") or "")\n'''
+          new = '''            elif stat == "remove_named_buff" and effect.effect_id in self._control_remover_ids:\n                name = str(effect.parameters.get("target_effect") or "")\n                if tuple(targets) != (effect.actor,):\n                    return False\n                removed = self.effects.remove_named_state(effect.actor, name, now=now)\n                if removed and name in self._self_stack_dependency_names:\n                    self._sync_self_stack_conditional_passives(now=now)\n                if removed and name in self._self_state_dependency_names:\n                    self._sync_self_state_conditional_passives(now=now)\n            elif stat == "remove_named_buff" and self._self_stack_remove_runtime_supported(effect):\n                name = str(effect.parameters.get("target_effect") or "")\n'''
+          if dispatcher.count(old) != 1:
+              raise SystemExit(f'proof-owned remover insert target count={dispatcher.count(old)}')
+          dispatcher_path.write_text(dispatcher.replace(old, new, 1), encoding='utf-8')
+
           path = Path('fast_engine/tests/test_damage_maid_mast_hangover_lifecycle.py')
           tests = path.read_text(encoding='utf-8')
           old = '''                policy = compile_burst_policy(\n                    moris, compiled, {'duration': 40.0, 'first_burst_time': 3.0}\n                )\n                runtime = BurstRuntime(\n                    compiled, policy, EnemyStaticProfile(duration=40.0, core_px=0.0)\n                )\n                result = runtime.run(duration=40.0)\n                row = certified_stack3_self_stun_remove_lifecycles(compiled)[0]\n                start = result.full_burst_ends[2]\n                end = runtime.dispatcher.control_block_until(row.actor, start + 1e-6)\n'''
