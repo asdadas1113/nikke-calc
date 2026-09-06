@@ -23,7 +23,9 @@ jobs:
       - name: Inspect Moran compiled lifecycle
         run: python .github/tmp_moran_probe.py
       - name: Apply Moran lifecycle patch
-        run: python .github/tmp_moran_apply.py
+        run: |
+          python .github/tmp_moran_apply.py
+          python .github/tmp_moran_fix.py
       - name: Focused Moran regression
         run: |
           python -m unittest fast_engine.tests.test_damage_moran_weapon_change_lifecycle
