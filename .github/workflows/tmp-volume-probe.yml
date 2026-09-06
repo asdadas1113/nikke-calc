@@ -12,27 +12,60 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect Moris ammo and lazy-rank code
+      - name: Trace raid volume Moris oracle
         run: |
           python - <<'PY'
-          import inspect
-          import calculator.buff_manager as bm
+          from context import snapshot, spec
+          import calculator.buff_manager as bm_mod
           import calculator.timeline as tl
 
-          for mod in (bm, tl):
-              print('=== MODULE', mod.__name__, '===')
-              for name, obj in inspect.getmembers(mod):
-                  candidates=[]
-                  if inspect.isfunction(obj):
-                      candidates=[obj]
-                  elif inspect.isclass(obj):
-                      candidates=[fn for _, fn in inspect.getmembers(obj, inspect.isfunction)]
-                  for fn in candidates:
-                      try:
-                          src=inspect.getsource(fn)
-                      except Exception:
-                          continue
-                      if any(key in src for key in ('ammo_charge_pct','_resolve_lazy','target_chars is None','allies_lowest_atk_burst3','charge_speed_caster_based_pct')):
-                          print('---', fn.__qualname__, '---')
-                          print(src)
+          members = list(snapshot.SQUADS['레이드_볼륨']['members'])
+          squad = spec.build_squad(members)
+          print('MEMBERS', members)
+          for c in squad:
+              print('CHAR', c['name'], 'burst=', c.get('burst_stage'), 'atk=', c.get('atk'), 'weapon=', c.get('weapon_type'), 'max_ammo=', c.get('max_ammo'), 'charge_time=', c.get('charge_time'), 'control=', c.get('control'))
+
+          orig_lazy = bm_mod.BuffManager._resolve_lazy
+          def traced_lazy(self, ab):
+              if ab.effect.get('name') == '차분한 수심 4' and ab.target_chars is None:
+                  b3 = [n for n in self.squad_names if tl._NIKKE.get(n, {}).get('burst_stage') == '3']
+                  print('LAZY_BEFORE', ab.activated_at, [(n, self._effective_atk(n)) for n in b3])
+                  out = orig_lazy(self, ab)
+                  print('LAZY_AFTER', ab.activated_at, out)
+                  return out
+              return orig_lazy(self, ab)
+          bm_mod.BuffManager._resolve_lazy = traced_lazy
+
+          current = {'name': None, 't': None}
+          orig_dispatch = bm_mod.BuffManager._dispatch_instant
+          def traced_dispatch(self, eff, caster, t, *args, **kwargs):
+              prev = dict(current)
+              current['name'] = eff.get('name')
+              current['t'] = t
+              try:
+                  return orig_dispatch(self, eff, caster, t, *args, **kwargs)
+              finally:
+                  current.update(prev)
+          bm_mod.BuffManager._dispatch_instant = traced_dispatch
+
+          orig_full = tl.CharState._full_ammo
+          def traced_full(self, bm, t):
+              full = orig_full(self, bm, t)
+              if self.name == '홍련 : 흑영' and current.get('name') == '화무십일홍 · 수라 2':
+                  print('AMMO_CHARGE_INPUT', t, 'ammo_before=', self.ammo, 'effective_full=', full, 'phase_reload_until=', self.reloading_until)
+              return full
+          tl.CharState._full_ammo = traced_full
+
+          result = tl.simulate(
+              squad,
+              config={'duration': 75.0, 'first_burst_time': 3.0, 'rng_mode': 'expected'},
+              seed=42,
+              verbose=True,
+          )
+          log = result.log
+          print('BURSTS', [(round(x.t,9), x.event, x.caster) for x in log.burst_log])
+          print('LIBERALIO_BUFF_EVENTS', [(round(x.t,9), x.kind, x.name, x.target, x.value, x.expires_at) for x in log.buff_events if x.caster=='리버렐리오' and x.name.startswith('차분한 수심')])
+          print('SCARLET_BUFF_EVENTS', [(round(x.t,9), x.kind, x.name, x.target, x.value, x.expires_at) for x in log.buff_events if x.caster=='홍련 : 흑영' and x.name.startswith('화무십일홍 · 수라')])
+          print('SCARLET_INSTANTS', [(round(x.t,9), x.name, x.stat, x.value) for x in log.instant_events if x.caster=='홍련 : 흑영' and x.name.startswith('화무십일홍 · 수라')])
+          print('SCARLET_AMMO_NEAR_FB', [(round(x.t,9), x.ammo) for x in log.ammo_log if x.caster=='홍련 : 흑영' and any(abs(x.t-b.t)<0.05 for b in log.burst_log if b.event=='full_burst 시작')])
           PY
