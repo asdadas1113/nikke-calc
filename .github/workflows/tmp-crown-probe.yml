@@ -3,7 +3,7 @@ on:
   push:
     branches: [fast-engine-phase2-20260901]
     paths:
-      - '.github/tmp_crown_probe.py'
+      - '.github/tmp_crown_patch.py'
       - '.github/workflows/tmp-crown-probe.yml'
 permissions:
   contents: read
@@ -15,6 +15,41 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Crown ownership probe
-        run: python .github/tmp_crown_probe.py
-# trigger
+      - name: Apply staged Crown patch
+        run: |
+          python .github/tmp_crown_patch.py
+          git diff --check
+      - name: Focused Crown semantic contract
+        run: |
+          python -m unittest -v \
+            fast_engine.tests.test_damage_crown_royal_attire_lifecycle \
+            fast_engine.tests.test_damage_state_end_named_stack \
+            fast_engine.tests.test_conditional_passive_self_stack \
+            fast_engine.tests.test_performance_contract
+      - name: Patched frontier audit
+        run: |
+          python - <<'PY'
+          from collections import Counter
+          from context import snapshot,spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+          source=[]
+          for label,row in snapshot.SQUADS.items():
+              if str(label).startswith('지그_'): continue
+              members=tuple(row.get('members') or ())
+              if len(members)!=5 or any(str(x).startswith('test_') for x in members): continue
+              source.append((label,members))
+          seen=set(); unique=[]
+          for label,members in source:
+              if members in seen: continue
+              seen.add(members); unique.append((label,members))
+          certified=[]; cats=Counter()
+          for label,members in unique:
+              rows=static_score_blockers(compile_moris_squad(spec.build_squad(list(members))))
+              if not rows: certified.append(label)
+              for row in rows: cats[row.split(':',1)[0]]+=1
+          print('SOURCE',len(source),'UNIQUE',len(unique),'CERTIFIED',certified,'GAPS',len(unique)-len(certified))
+          print('CATEGORIES',dict(sorted(cats.items())))
+          target=compile_moris_squad(spec.build_squad(list(snapshot.SQUADS['레이드_아스카루드밀라']['members'])))
+          print('TARGET_BLOCKERS',static_score_blockers(target))
+          PY
