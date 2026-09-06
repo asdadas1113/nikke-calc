@@ -31,7 +31,7 @@ def traced_notify(self, event, t, caster):
     return result
 
 
-def traced_activate(self, eff, caster, t):
+def traced_activate(self, eff, caster, t, *args, **kwargs):
     if caster == "목단" and eff.get("name") in {"정정당당 승부다!", "다 덤벼! 2"}:
         print(
             "TRACE_ACTIVATE",
@@ -39,8 +39,9 @@ def traced_activate(self, eff, caster, t):
             f"name={eff.get('name')!r}",
             f"hit_count={self._event_counts.get(caster, {}).get('hit_count', 0)}",
             f"wc={self.weapon_change_name(caster)!r}",
+            f"kwargs={kwargs!r}",
         )
-    return orig_activate(self, eff, caster, t)
+    return orig_activate(self, eff, caster, t, *args, **kwargs)
 
 BuffManager._notify = traced_notify
 BuffManager._activate = traced_activate
