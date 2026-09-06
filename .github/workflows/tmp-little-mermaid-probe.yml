@@ -1,0 +1,53 @@
+name: tmp-little-mermaid-probe
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+    paths:
+      - .github/workflows/tmp-little-mermaid-probe.yml
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Little Mermaid graph and frontier probe
+        run: |
+          python - <<'PY'
+          from context import snapshot, spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
+
+          public=[]; seen=set()
+          for label,row in snapshot.SQUADS.items():
+              if label.startswith('지그_'):
+                  continue
+              members=tuple(row.get('members') or ())
+              if len(members)!=5 or any(str(m).startswith('test_') for m in members):
+                  continue
+              if '리틀 머메이드' not in members or members in seen:
+                  continue
+              seen.add(members); public.append((label,members))
+          print('PUBLIC_LM_TEAMS', len(public))
+          for label,members in public:
+              squad=compile_moris_squad(spec.build_squad(list(members)))
+              print('\nTEAM',label,members)
+              print('BLOCKERS')
+              for row in static_score_blockers(squad):
+                  print(' ',row)
+              actor=next(i for i,m in enumerate(squad.members) if m.name=='리틀 머메이드')
+              sink=SimpleDamageScoreSink(squad, __import__('fast_engine.engine.model',fromlist=['EnemyStaticProfile']).EnemyStaticProfile())
+              print('LM_ACTOR',actor,'weapon',dict(squad.members[actor].weapon))
+              for e in squad.members[actor].effects:
+                  print(' EFFECT',e.effect_id,e.actor_effect_index,repr(e.name),'type=',e.effect_type,'stat=',e.stat,'value=',e.value,'duration=',e.duration,'max_stack=',e.max_stack,'target=',e.target,'polarity=',e.polarity)
+                  print('   params=',dict(e.parameters))
+                  print('   triggers=',[(r.raw,r.mode.value,r.event_key,r.threshold,r.interval,r.trigger_count_reducible) for r in e.triggers])
+                  print('   conditions=',[(r.mode.value,r.key,r.value) for r in e.condition_rules])
+                  print('   capability=',e.capability.disposition.value,list(e.capability.blockers))
+                  print('   runtime_exec=',TriggerDispatcher.is_executable_effect(e),'damage_unsupported=',e.effect_id in sink.unsupported_effect_ids)
+          PY
