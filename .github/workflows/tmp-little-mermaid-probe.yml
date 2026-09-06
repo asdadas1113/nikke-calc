@@ -14,40 +14,72 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Little Mermaid graph and frontier probe
+      - name: Moris Little Mermaid lifecycle trace
         run: |
           python - <<'PY'
+          from unittest.mock import patch
           from context import snapshot, spec
-          from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.score import static_score_blockers
-          from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
+          from calculator.timeline import simulate
+          from calculator.buff_manager import BuffManager
 
-          public=[]; seen=set()
-          for label,row in snapshot.SQUADS.items():
-              if label.startswith('지그_'):
-                  continue
-              members=tuple(row.get('members') or ())
-              if len(members)!=5 or any(str(m).startswith('test_') for m in members):
-                  continue
-              if '리틀 머메이드' not in members or members in seen:
-                  continue
-              seen.add(members); public.append((label,members))
-          print('PUBLIC_LM_TEAMS', len(public))
-          for label,members in public:
-              squad=compile_moris_squad(spec.build_squad(list(members)))
-              print('\nTEAM',label,members)
-              print('BLOCKERS')
-              for row in static_score_blockers(squad):
-                  print(' ',row)
-              actor=next(i for i,m in enumerate(squad.members) if m.name=='리틀 머메이드')
-              sink=SimpleDamageScoreSink(squad, __import__('fast_engine.engine.model',fromlist=['EnemyStaticProfile']).EnemyStaticProfile())
-              print('LM_ACTOR',actor,'weapon',dict(squad.members[actor].weapon))
-              for e in squad.members[actor].effects:
-                  print(' EFFECT',e.effect_id,e.actor_effect_index,repr(e.name),'type=',e.effect_type,'stat=',e.stat,'value=',e.value,'duration=',e.duration,'max_stack=',e.max_stack,'target=',e.target,'polarity=',e.polarity)
-                  print('   params=',dict(e.parameters))
-                  print('   triggers=',[(r.raw,r.mode.value,r.event_key,r.threshold,r.interval,r.trigger_count_reducible) for r in e.triggers])
-                  print('   conditions=',[(r.mode.value,r.key,r.value) for r in e.condition_rules])
-                  print('   capability=',e.capability.disposition.value,list(e.capability.blockers))
-                  print('   runtime_exec=',TriggerDispatcher.is_executable_effect(e),'damage_unsupported=',e.effect_id in sink.unsupported_effect_ids)
+          for team in ('레이드_델타','스쿼드1'):
+              squad=spec.build_squad(list(snapshot.SQUADS[team]['members']))
+              events=[]
+              squad_ammo=0
+              lm_hits=0
+              crossings=[]
+              orig_notify=BuffManager.notify
+              orig_instant=BuffManager._dispatch_instant
+
+              def traced_notify(self,event,t,caster,**ctx):
+                  global squad_ammo, lm_hits
+                  if event=='squad_ammo_consume':
+                      squad_ammo += 1
+                      if squad_ammo in (498,499,500,501,998,999,1000,1001):
+                          crossings.append(('squad_ammo',squad_ammo,float(t),caster))
+                  if event=='hit_count' and caster=='리틀 머메이드':
+                      lm_hits += 1
+                      if lm_hits in (48,49,50,51,98,99,100,101):
+                          crossings.append(('lm_hit',lm_hits,float(t),caster))
+                  return orig_notify(self,event,t,caster,**ctx)
+
+              def traced_instant(self,eff,caster,t):
+                  if eff.get('stat')=='remove_named_buff' and eff.get('target_effect')=='거품':
+                      before=[(ab.effect.get('name'),ab.caster,list(ab.target_chars or [])) for ab in self._active if ab.effect.get('name') in {'거품','터진 거품','터진 거품 2'}]
+                      events.append(('remove_before',float(t),eff.get('name'),before))
+                      out=orig_instant(self,eff,caster,t)
+                      after=[(ab.effect.get('name'),ab.caster,list(ab.target_chars or [])) for ab in self._active if ab.effect.get('name') in {'거품','터진 거품','터진 거품 2'}]
+                      events.append(('remove_after',float(t),eff.get('name'),after))
+                      return out
+                  return orig_instant(self,eff,caster,t)
+
+              with patch.object(BuffManager,'notify',new=traced_notify), patch.object(BuffManager,'_dispatch_instant',new=traced_instant):
+                  result=simulate(squad,config={'duration':60.0,'rng_mode':'expected'},verbose=True)
+
+              print('\n===',team,'===')
+              print('MEMBERS',snapshot.SQUADS[team]['members'])
+              print('COUNTS squad_ammo',squad_ammo,'lm_hits',lm_hits)
+              for row in crossings:
+                  print('CROSS',row)
+              for row in result.log.buff_events:
+                  if row.name in {'거품','터진 거품','터진 거품 2'}:
+                      print('BUFF',row.kind,row.name,'t',repr(float(row.t)),'target',row.target,'expires',row.expires_at,'stat',row.stat,'value',row.value)
+              for row in result.log.instant_events:
+                  if row.name in {'터진 거품 3','버블 오더 4'}:
+                      print('INSTANT',row.name,'t',repr(float(row.t)),'caster',row.caster,'target',row.target,'stat',row.stat,'value',row.value)
+              for row in events:
+                  print('STATE',row)
+              skill_hits=[h for h in result.hits if h.caster=='리틀 머메이드' and h.skill_name in {'거품 난사','버블 웨이브'}]
+              by_skill={}
+              for h in skill_hits:
+                  by_skill.setdefault(h.skill_name,[]).append(h)
+              for skill, rows in by_skill.items():
+                  print('SKILL',skill,'count',len(rows),'total',sum(r.damage for r in rows))
+                  groups=[]
+                  for r in rows:
+                      if not groups or abs(groups[-1][0]-r.t)>1e-9:
+                          groups.append([float(r.t),1,r.damage])
+                      else:
+                          groups[-1][1]+=1; groups[-1][2]+=r.damage
+                  for g in groups[:12]: print(' HITGROUP',skill,g)
           PY
