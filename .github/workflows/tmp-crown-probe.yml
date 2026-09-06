@@ -1,81 +1,84 @@
 name: tmp-crown-probe
 on:
   push:
-    branches: [fast-engine-phase2-20260901]
+    branches:
+      - fast-engine-phase2-20260901
     paths:
-      - '.github/tmp_crown_patch.py'
-      - '.github/tmp_crown_fix.py'
-      - '.github/tmp_crown_test_refresh.py'
-      - '.github/workflows/tmp-crown-probe.yml'
+      - .github/workflows/tmp-crown-probe.yml
 permissions:
-  contents: write
+  contents: read
 jobs:
-  probe:
+  audit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Apply staged Crown patch
-        run: |
-          python .github/tmp_crown_patch.py
-          python .github/tmp_crown_fix.py
-          python .github/tmp_crown_test_refresh.py
-          git diff --check
-      - name: Focused Crown semantic contract
+      - name: Production Crown frontier and 180s score audit
         run: |
           python -m unittest -v \
             fast_engine.tests.test_damage_crown_royal_attire_lifecycle \
-            fast_engine.tests.test_damage_state_end_named_stack \
-            fast_engine.tests.test_conditional_passive_self_stack \
-            fast_engine.tests.test_damage_dynamic_ammo_charge \
-            fast_engine.tests.test_damage_shield_runtime \
-            fast_engine.tests.test_stack_heal_received_runtime \
-            fast_engine.tests.test_performance_contract
-      - name: Full Fast discovery
-        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
-      - name: Patched frontier audit
-        run: |
+            fast_engine.tests.test_stack_heal_received_runtime
           python - <<'PY'
           from collections import Counter
-          from context import snapshot,spec
+          from context import snapshot, spec
+          from fast_engine.engine.burst import compile_burst_policy
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.score import static_score_blockers
+          from fast_engine.engine.model import EnemyStaticProfile
+          from fast_engine.engine.score import score_static_squad, static_score_blockers
+
           source=[]
           for label,row in snapshot.SQUADS.items():
-              if str(label).startswith('지그_'): continue
+              if str(label).startswith('지그_'):
+                  continue
               members=tuple(row.get('members') or ())
-              if len(members)!=5 or any(str(x).startswith('test_') for x in members): continue
+              if len(members)!=5 or any(str(member).startswith('test_') for member in members):
+                  continue
               source.append((label,members))
-          seen=set(); unique=[]
+          unique=[]; seen=set()
           for label,members in source:
-              if members in seen: continue
+              if members in seen:
+                  continue
               seen.add(members); unique.append((label,members))
-          certified=[]; cats=Counter()
+          cats=Counter(); certified=[]
           for label,members in unique:
-              rows=static_score_blockers(compile_moris_squad(spec.build_squad(list(members))))
-              if not rows: certified.append(label)
-              for row in rows: cats[row.split(':',1)[0]]+=1
-          print('SOURCE',len(source),'UNIQUE',len(unique),'CERTIFIED',certified,'GAPS',len(unique)-len(certified))
-          print('CATEGORIES',dict(sorted(cats.items())))
-          target=compile_moris_squad(spec.build_squad(list(snapshot.SQUADS['레이드_아스카루드밀라']['members'])))
-          print('TARGET_BLOCKERS',static_score_blockers(target))
+              compiled=compile_moris_squad(spec.build_squad(list(members)))
+              blockers=tuple(static_score_blockers(compiled))
+              if not blockers:
+                  certified.append(label)
+              for blocker in blockers:
+                  cats[blocker.split(':',1)[0]] += 1
+          print('SOURCE_CASES',len(source))
+          print('UNIQUE_MEMBERSHIPS',len(unique))
+          print('CERTIFIED',len(certified),certified)
+          print('GAPS',len(unique)-len(certified))
+          print('CATEGORY_COUNTS',dict(sorted(cats.items())))
+          assert len(source)==24
+          assert len(unique)==23
+          assert certified==[
+              '레이드_레드후드퀀시',
+              '레이드_아스카루드밀라',
+              '레이드_델타',
+              '레이드_볼륨',
+              '컨트롤_미란다미하라',
+          ]
+          assert dict(sorted(cats.items()))=={
+              'cadence':57,'control':4,'normal_delivery':46,'normal_state':16,
+              'periodic_grid':1,'skill_damage':25,'skill_state_delivery':48,'weapon_change':12,
+          }
+
+          moris=spec.build_squad(list(snapshot.SQUADS['레이드_아스카루드밀라']['members']))
+          compiled=compile_moris_squad(moris)
+          assert static_score_blockers(compiled) == ()
+          policy=compile_burst_policy(moris,compiled,{'duration':180.0,'rng_mode':'expected'})
+          result=score_static_squad(
+              compiled,
+              policy,
+              EnemyStaticProfile(duration=180.0,core_px=0.0),
+              duration=180.0,
+          )
+          print('CROWN_FAST_SCORE',result.squad_total,result.char_total,result.events_processed,result.unsupported)
+          assert result.squad_total > 0
+          assert result.unsupported == ()
           PY
-      - name: Promote semantic checkpoint
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            fast_engine/engine/dispatcher.py \
-            fast_engine/engine/burst_runtime.py \
-            fast_engine/tests/test_damage_crown_royal_attire_lifecycle.py \
-            fast_engine/tests/test_damage_dynamic_ammo_charge.py \
-            fast_engine/tests/test_damage_full_charge_bullet_lifetime.py \
-            fast_engine/tests/test_damage_full_charge_hit_charge_speed.py \
-            fast_engine/tests/test_damage_shield_runtime.py \
-            fast_engine/tests/test_damage_stat_applied_charge_speed.py \
-            fast_engine/tests/test_stack_heal_received_runtime.py
-          git diff --cached --check
-          git commit -m "Fast: own Crown heal-received lifetime and zero-core guard"
-          git push origin HEAD:fast-engine-phase2-20260901
