@@ -20,82 +20,89 @@ Fast Engine의 목적은 Moris 복제품이 아니라 optimizer용 고속 sparse
 가장 먼저 읽을 문서:
 
 1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260906.md`
-2. `fast_engine/research/VOLUME_LIVE_AMMO_LAZY_RANK_CHECKPOINT_20260906.md`
-3. `fast_engine/research/MAID_MAST_HANGOVER_LIFECYCLE_CHECKPOINT_20260906.md`
-4. `fast_engine/research/MAID_MAST_GENERIC_STACK_DECREMENT_CHECKPOINT_20260906.md`
-5. `fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md`
-6. `fast_engine/research/FINITE_REFERENCE_STACK_CAPTURE_CHECKPOINT_20260906.md`
-7. `fast_engine/research/SPARSE_SAME_TIMESTAMP_ACTOR_TRANSACTION_CHECKPOINT_20260906.md`
+2. `fast_engine/research/LITTLE_MERMAID_REPLACEMENT_SQUAD_AMMO_CHECKPOINT_20260906.md`
+3. `fast_engine/research/VOLUME_LIVE_AMMO_LAZY_RANK_CHECKPOINT_20260906.md`
+4. `fast_engine/research/MAID_MAST_HANGOVER_LIFECYCLE_CHECKPOINT_20260906.md`
+5. `fast_engine/research/MAID_MAST_GENERIC_STACK_DECREMENT_CHECKPOINT_20260906.md`
+6. `fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md`
+7. `fast_engine/research/FINITE_REFERENCE_STACK_CAPTURE_CHECKPOINT_20260906.md`
+8. `fast_engine/research/SPARSE_SAME_TIMESTAMP_ACTOR_TRANSACTION_CHECKPOINT_20260906.md`
 
 ## 1. latest completed semantic checkpoint
 
-**`레이드_볼륨` live-ammo refill + lazy B3 rank-target certification 완료.**
+**Little Mermaid enemy replacement + global squad-ammo sequential-damage lifecycle 완료.**
 
 semantic production commit:
 
-- `6bc7cbd0350da24dcb1bd5136dbdf0e5941f4103` — `Fast: own Volume live-ammo and lazy-rank cadence`
+- `ab3243ac3a83b3b0e7526b3a5f3b2d51e0c7c019` — `Fast: own Little Mermaid replacement and squad-ammo lifecycle`
 
-public target:
+public certification target:
 
-- `레이드_볼륨`
+- `레이드_델타`
 
-마지막 두 blocker:
+기존 마지막 두 blocker:
 
-- `cadence:홍련 : 흑영:화무십일홍 · 수라 2:ammo_charge_pct`
-- `normal_state:리버렐리오:차분한 수심 4:rank_target_timing`
+- `normal_state:리틀 머메이드:터진 거품 3:remove_named_buff`
+- `skill_damage:리틀 머메이드:거품 난사:sequential_damage:10`
 
-둘 다 Moris oracle로 독립 검증 후 제거했다.
+둘 다 제거됐다.
 
-### owned live-ammo transaction
+### enemy replacement ownership
 
-Moris는 `ammo_charge_pct` activation 순간의 live effective max ammo를 기준으로 refill한다.
+Moris trace에서 Little Mermaid 50번째 hit는 `2.05s`다.
 
-public first full burst에서:
+같은 timestamp에서:
 
-- 홍련 base magazine `16`
-- same-event 선행 `max_ammo_pct +60%` 반영 effective max `26`
-- 이어지는 `ammo_charge_pct=100` refill 후 ammo `26`
+1. `터진 거품` received-damage replacement 생성
+2. finite enemy stun sibling 생성
+3. 원본 `거품` 제거
 
-Fast는 기존 `_full_ammo()`와 ammo sink를 그대로 사용한다. 새 지원은 exact same-actor `full_burst_start`, single positive finite self max-ammo provider가 refill보다 먼저 오는 100% self refill transaction에서만 열린다.
+Fast는 source/replacement/control/remover의 exact actor-order graph, 동일 hit gate, 동일 target-state dependency, 외부 observer 부재를 compile-time에서 증명할 때만 remover를 실행한다. generic stun/remove family는 열지 않았다.
 
-### owned lazy rank cadence
+### global squad-ammo ownership
 
-`리버렐리오 / 차분한 수심 4`는:
+Moris `레이드_델타` crossings:
 
-- `LOWEST_ATK_BURST3:1`
-- finite positive `charge_speed_caster_based_pct`
-- `full_burst_start`
+- 500발 `4.133333333333324s`
+- 1000발 `6.033333333333317s`
+- 1500발 `7.93333333333331s`
 
-Moris는 same-timestamp ATK transaction이 정착된 뒤 first target read에서 lazy resolve한다. public trace recipient는 관찰한 모든 full-burst start에서 `홍련 : 흑영`이었다.
+각 crossing에서 `거품 난사`는 exact 10 hit이며, `ammo 감소 → squad_ammo signal/skill damage → crossing normal shot damage` 순서다.
 
-Fast는 기존 lazy target primitive를 재사용하고, 가능한 static B3 후보 전원이 charge cadence-safe일 때만 scorer가 ownership을 인정한다.
+Fast는 전원 certified non-clip rapid인 squad에서만 다음 global modulo crossing 하나를 sparse하게 예측한다. 모든 shot을 scheduler event로 만들지 않는다.
 
-캐릭터명 runtime hack은 없다.
+### rapid nominal-deadline correction
+
+첫 staged path는 24/s SMG 50번째 hit를 `2.041666...s`로 냈다. Moris는 명목 `next_fire_time`을 누적하고 실제 발사는 첫 60Hz 관찰 tick에서 하므로 `2.05s`다.
+
+Fast는 이 exact squad-ammo slice에만 nominal `fire_deadline`을 보존하고 기존 `moris_observed_tick()`으로 의미 있는 boundary만 snap한다. global 60Hz loop는 추가하지 않았다.
 
 ## 2. fail-closed safety
 
-이번 checkpoint에서도 broad family는 열지 않았다.
+Little Mermaid replacement proof는 다음에서 철회된다.
 
-live-ammo proof는 다음에서 철회된다.
+- source/replacement value 또는 polarity 불일치
+- source/replacement/control/remover actor order 변경
+- 서로 다른 hit-count threshold
+- source named-state gate 불일치
+- remover target name ambiguity
+- 외부 named-state mutator/observer
+- `target_stunned` consumer
+- 관련 state-end consumer
 
-- refill이 100%가 아님
-- self가 아닌 target
-- 다른 event/condition/parameter
-- competing live max-ammo provider
-- provider가 refill 뒤에 오는 order
-- wider flat/infinite max-ammo combination
-- recipient weapon cadence unsafe
+`squad_ammo_consume` proof는 다음에서 철회된다.
 
-lazy rank cadence proof는 다음에서 철회된다.
+- squad actor 중 하나라도 certified rapid runtime 밖
+- clip/charge/unsupported fire mode 혼합
+- weapon control 존재
+- infinite ammo 가능성
+- non-NOP squad-ammo consumer가 둘 이상
+- exact fixed `sequential_damage:N` / 단일 modulo trigger가 아님
+- trigger-count reduction 개입
 
-- `LOWEST_ATK_BURST3:1` 외 selector/count
-- `charge_speed_caster_based_pct` 외 cadence stat
-- non-finite/negative/bullet lifetime shape
-- named-state/event consumer collision
-- 가능한 B3 후보 중 하나라도 charge unsafe
-- 다른 actor의 burst-stage mutation 가능성
+따라서 `레이드_일레그`의 `squad_ammo_consume:100` family는 계속 fail closed다.
 
-기존 broad generic stun/remove/live-reference/multi-stack/weapon-replacement family도 계속 fail closed다.
+기존 broad generic stun/remove/reference-stack/weapon-replacement/live-rank/live-ammo family도 계속 fail closed다.
 
 ## 3. current public frontier
 
@@ -106,73 +113,59 @@ canonical filter:
 - `test_*` fixture member 제외
 - exact ordered membership dedupe
 
-fresh production audit 결과:
+fresh production audit:
 
 - source cases `24`
 - unique memberships `23`
-- certified **3**
-- gaps **20**
+- certified **4**
+- gaps **19**
 
 certified:
 
 - `레이드_레드후드퀀시`
+- `레이드_델타`
 - `레이드_볼륨`
 - `컨트롤_미란다미하라`
 
 blocker families:
 
 - normal delivery `47`
-- normal state `22`
-- skill damage `27`
+- normal state `16`
+- skill damage `25`
 - skill-state delivery `49`
 - weapon change `12`
 - cadence `57`
 - control `4`
 - periodic grid `1`
 
-직전 Maid Mast lifecycle checkpoint 대비:
+직전 Volume checkpoint 대비:
 
-- certified `2 → 3`
-- gaps `21 → 20`
-- cadence `59 → 57`
-- normal state `25 → 22`
+- certified `3 → 4`
+- gaps `20 → 19`
+- normal state `22 → 16`
+- skill damage `27 → 25`
 - 나머지 unchanged
-
-same exact generic shape coverage audit:
-
-lazy B3 charge-speed:
-
-- `스쿼드4`
-- `레이드_네온벨벳`
-- `레이드_볼륨`
-
-live max-ammo → 100% refill:
-
-- `스쿼드4`
-- `레이드_볼륨`
-
-따라서 frontier 감소가 Volume 한 membership에만 국한되지 않는 것은 의도된 generic-shape coverage다.
 
 ## 4. validation completed
 
-focused promotion:
+신규 Little Mermaid contract 6개를 포함한 focused promotion:
 
-- Volume/new cadence contract + existing refill/Maid regressions `33/33` success
+- `26/26` success
 
-production frontier + 180초 score audit:
+staged full Fast:
 
-- frontier `24 source / 23 unique / 3 certified / 20 gaps`
-- `레이드_볼륨 score_static_squad()` 180초 완주
-- `unsupported=()`
-- Fast events `1653`
+- `330/330` success
+- performance median `132.59ms`, events `539`
+- RAPI parity unchanged
 
 pre-cleanup canonical CI:
 
-- run `34016205089`
+- run `34020420109`
+- job `101451859865`
 - result: success
-- Fast damage `215/215`
-- Fast complete discovery `324/324`
-- structural performance median `186.61ms`, events `539`
+- Fast damage `221/221`
+- Fast complete discovery `330/330`
+- structural performance median `167.08ms`, events `539`
 - calculator `137/137` (`1` skip)
 - optimizer `374/374`
 - bridge `31/31` (`1` skip)
@@ -182,7 +175,7 @@ pre-cleanup canonical CI:
 
 performance threshold는 변경하지 않았다.
 
-상세는 `VOLUME_LIVE_AMMO_LAZY_RANK_CHECKPOINT_20260906.md` 참고.
+상세는 `LITTLE_MERMAID_REPLACEMENT_SQUAD_AMMO_CHECKPOINT_20260906.md` 참고.
 
 ## 5. current phase
 
@@ -200,45 +193,30 @@ performance threshold는 변경하지 않았다.
 8. Maid Mast reachable stack-3 stun/removal/cadence/burst lifecycle
 9. exact same-event live max-ammo → 100% refill transaction
 10. exact lazy `LOWEST_ATK_BURST3:1` caster-based charge-speed cadence delivery
-
-여전히 broad fail-closed:
-
-- generic stun/control family
-- generic named removers
-- permanent/live reference-stack generic semantics
-- broad multi-stack / on-attack / hit-count remover families
-- unsupported weapon replacement families
-- unrelated HP/heal chronology
-- generic live max-ammo refill family
-- generic dynamic rank cadence family
+11. exact enemy received-damage replacement/remover lifecycle
+12. all-certified-rapid global ammo modulo → sequential-damage pre-shot lifecycle
+13. rapid nominal fire-deadline → sparse Moris tick observation for that exact slice
 
 raw coverage expansion이나 optimizer production integration으로 돌아가지 않는다.
 
 ## 6. 다음 단일 checkpoint
 
-**Little Mermaid producer/mutator/sequential-damage 결합 lifecycle**
+**Crown `로얄 에타이어 4` normal/skill shared recipient/lifetime semantics**
 
-원칙:
+재개 순서:
 
-- 먼저 Moris에서 producer → mutator → sequential damage dependency 전체를 trace
-- isolated effect만 보고 blocker를 제거하지 않음
-- scorer/runtime/dispatcher가 공유할 compile-time ownership proof를 먼저 정의
-- neighboring generic family는 fail closed 유지
-- focused + negative regression 후에만 public frontier 재계산
+1. Crown public memberships와 exact blocker 전수 수집
+2. Moris에서 `로얄 에타이어 4` recipient 선택 시각과 lifetime을 trace
+3. normal attack과 skill damage가 같은 recipient/lifetime state를 실제로 공유하는지 확인
+4. scorer/runtime/dispatcher 공용 compile-time ownership proof 정의
+5. neighboring target/lifetime family fail-closed negative regression
+6. focused gate → full Fast discovery → canonical CI → frontier
 
-그 다음 후보:
-
-1. Crown `로얄 에타이어 4` normal/skill shared recipient/lifetime semantics
-2. frontier pressure 재계산 후 다음 checkpoint 선정
+Little Mermaid나 다른 coverage를 동시에 넓히지 않는다.
 
 ## 7. cleanup / final canonical gate
 
-Volume checkpoint의 temporary probe는 최종 promotion에서 모두 제거한다.
-
-제거 대상:
-
-- `.github/workflows/tmp-volume-probe.yml`
-- `.github/tmp_volume_patch.py`
+Little Mermaid 임시 probe/helper/trigger는 이 handoff와 함께 모두 제거한다.
 
 최종 `.github/workflows`는 반드시:
 
@@ -247,4 +225,4 @@ Volume checkpoint의 temporary probe는 최종 promotion에서 모두 제거한�
 
 두 파일만 남긴다.
 
-이 handoff commit 뒤 clean HEAD canonical `ci.yml` 전체 gate를 한 번 더 확인한다. 최종 run ID를 다시 문서에 쓰는 doc-only commit loop는 만들지 않는다. 재개 시 branch HEAD와 최신 successful canonical run을 먼저 확인한다.
+이 cleanup/docs commit 뒤 clean HEAD canonical `ci.yml` 전체 gate를 한 번 더 확인한다. 최종 run ID를 다시 문서에 쓰는 doc-only commit loop는 만들지 않는다. 재개 시 branch HEAD와 최신 successful canonical run을 먼저 확인한다.
