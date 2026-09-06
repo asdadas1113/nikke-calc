@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+# Temporary trigger/probe retained only until the Moran checkpoint clean gate.
 from collections import Counter
 from pathlib import Path
 import signal
