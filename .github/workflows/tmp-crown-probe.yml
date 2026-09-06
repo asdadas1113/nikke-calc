@@ -4,6 +4,7 @@ on:
     branches: [fast-engine-phase2-20260901]
     paths:
       - '.github/tmp_crown_patch.py'
+      - '.github/tmp_crown_fix.py'
       - '.github/workflows/tmp-crown-probe.yml'
 permissions:
   contents: read
@@ -18,6 +19,7 @@ jobs:
       - name: Apply staged Crown patch
         run: |
           python .github/tmp_crown_patch.py
+          python .github/tmp_crown_fix.py
           git diff --check
       - name: Focused Crown semantic contract
         run: |
