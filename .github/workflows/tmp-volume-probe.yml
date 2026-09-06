@@ -61,7 +61,12 @@ jobs:
           moris=spec.build_squad(list(snapshot.SQUADS['레이드_볼륨']['members']))
           compiled=compile_moris_squad(moris)
           policy=compile_burst_policy(moris,compiled,{'duration':180.0,'rng_mode':'expected'})
-          result=score_static_squad(compiled,policy,EnemyStaticProfile(duration=180.0),duration=180.0)
+          result=score_static_squad(
+              compiled,
+              policy,
+              EnemyStaticProfile(duration=180.0,core_px=0.0),
+              duration=180.0,
+          )
           print('VOLUME_FAST_SCORE',result.squad_total,result.char_total,result.events_processed,result.unsupported)
           assert result.squad_total > 0
           assert result.unsupported == ()
