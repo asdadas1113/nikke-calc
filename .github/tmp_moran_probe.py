@@ -1,60 +1,28 @@
 from __future__ import annotations
 
-from pathlib import Path
-import sys
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from calculator.buff_manager import BuffManager
-from calculator.timeline import simulate
 from context import snapshot, spec
-
-orig_notify = BuffManager._notify
-orig_activate = BuffManager._activate
-
-
-def traced_notify(self, event, t, caster):
-    if caster == "목단" and event == "hit_count" and 2.6 <= t <= 3.6:
-        before = self._event_counts.get(caster, {}).get(event, 0)
-        print(
-            "TRACE_HIT_BEFORE",
-            f"t={t:.15f}",
-            f"count={before}",
-            f"wc={self.weapon_change_name(caster)!r}",
-        )
-    result = orig_notify(self, event, t, caster)
-    if caster == "목단" and event == "hit_count" and 2.6 <= t <= 3.6:
-        after = self._event_counts.get(caster, {}).get(event, 0)
-        print("TRACE_HIT_AFTER", f"t={t:.15f}", f"count={after}")
-    return result
-
-
-def traced_activate(self, eff, caster, t, *args, **kwargs):
-    if caster == "목단" and eff.get("name") in {"정정당당 승부다!", "다 덤벼! 2"}:
-        print(
-            "TRACE_ACTIVATE",
-            f"t={t:.15f}",
-            f"name={eff.get('name')!r}",
-            f"hit_count={self._event_counts.get(caster, {}).get('hit_count', 0)}",
-            f"wc={self.weapon_change_name(caster)!r}",
-            f"kwargs={kwargs!r}",
-        )
-    return orig_activate(self, eff, caster, t, *args, **kwargs)
-
-BuffManager._notify = traced_notify
-BuffManager._activate = traced_activate
+from fast_engine.engine.compiler import compile_moris_squad
+from fast_engine.engine.score import static_score_blockers
 
 row = snapshot.SQUADS["스쿼드4"]
 squad = spec.build_squad(list(row["members"]))
-result = simulate(
-    squad,
-    config={"duration": 4.0, "rng_mode": "expected", **row.get("config", {})},
-    verbose=True,
-)
-print("TOTAL", result.total_dmg)
-for ev in result.log.events:
-    text = str(ev)
-    if "목단" in text and ("normal" in text or "다 덤벼! 2" in text or "정정당당 승부다!" in text):
-        print("EVENT", text)
+compiled = compile_moris_squad(squad)
+actor = next(i for i, member in enumerate(compiled.members) if member.name == "목단")
+print("MORAN_ACTOR", actor, compiled.members[actor].weapon)
+for effect in compiled.members[actor].effects:
+    if effect.name not in {"정정당당 승부다!", "다 덤벼! 2"}:
+        continue
+    print("EFFECT", effect.effect_id, effect.name)
+    print(" type", effect.effect_type, "stat", effect.stat, "target", effect.target_spec)
+    print(" value", effect.value, "duration", effect.duration, "max_stack", effect.max_stack)
+    print(" params", dict(effect.parameters))
+    print(" capability", effect.capability.disposition.value, tuple(effect.capability.blockers))
+    print(" conditions", [
+        (rule.mode.value, rule.key, rule.value, rule.raw)
+        for rule in effect.condition_rules
+    ])
+    print(" triggers", [
+        (rule.mode.value, rule.event_key, rule.threshold, rule.trigger_count_reducible, rule.raw)
+        for rule in effect.triggers
+    ])
+print("BLOCKERS", static_score_blockers(compiled))
