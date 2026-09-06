@@ -5,33 +5,64 @@ on:
       - fast-engine-phase2-20260901
     paths:
       - .github/workflows/tmp-volume-probe.yml
-permissions:
-  contents: write
 jobs:
-  promote:
+  audit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Apply production patch
-        run: python .github/tmp_volume_patch.py
-      - name: Focused regressions after stale expectation update
-        run: >-
-          python -m unittest -v
-          fast_engine.tests.test_damage_volume_cadence_rank
-          fast_engine.tests.test_damage_charge_reload_cancel_control
-          fast_engine.tests.test_damage_ammo_pct_named_event
-          fast_engine.tests.test_damage_maid_mast_hangover_contract
-          fast_engine.tests.test_damage_maid_mast_hangover_lifecycle
-          fast_engine.tests.test_damage_maid_mast_stack_mutation
-      - name: Commit production checkpoint
+      - name: Production frontier and Volume score audit
         run: |
-          git config user.name "asdadas1113"
-          git config user.email "crony06@gmail.com"
-          git add fast_engine/engine/dispatcher.py fast_engine/engine/score.py
-          git commit -m "Fast: own Volume live-ammo and lazy-rank cadence"
-          git push origin HEAD:fast-engine-phase2-20260901
+          python -m unittest -v fast_engine.tests.test_damage_volume_cadence_rank fast_engine.tests.test_damage_charge_reload_cancel_control
+          python - <<'PY'
+          from collections import Counter
+          from context import snapshot, spec
+          from fast_engine.engine.burst import compile_burst_policy
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.model import EnemyStaticProfile
+          from fast_engine.engine.score import score_static_squad, static_score_blockers
+
+          source=[]
+          for label,row in snapshot.SQUADS.items():
+              if str(label).startswith('지그_'):
+                  continue
+              members=tuple(row.get('members') or ())
+              if len(members)!=5 or any(str(member).startswith('test_') for member in members):
+                  continue
+              source.append((label,members))
+          unique=[]; seen=set()
+          for label,members in source:
+              if members in seen:
+                  continue
+              seen.add(members); unique.append((label,members))
+          cats=Counter(); certified=[]
+          for label,members in unique:
+              compiled=compile_moris_squad(spec.build_squad(list(members)))
+              blockers=tuple(static_score_blockers(compiled))
+              if not blockers:
+                  certified.append(label)
+              for blocker in blockers:
+                  cats[blocker.split(':',1)[0]] += 1
+          print('SOURCE_CASES',len(source))
+          print('UNIQUE_MEMBERSHIPS',len(unique))
+          print('CERTIFIED',len(certified),certified)
+          print('GAPS',len(unique)-len(certified))
+          print('CATEGORY_COUNTS',dict(sorted(cats.items())))
+          assert len(source)==24
+          assert len(unique)==23
+          assert certified==['레이드_레드후드퀀시','레이드_볼륨','컨트롤_미란다미하라']
+          assert dict(sorted(cats.items()))=={
+              'cadence':57,'control':4,'normal_delivery':47,'normal_state':22,
+              'periodic_grid':1,'skill_damage':27,'skill_state_delivery':49,'weapon_change':12,
+          }
+
+          moris=spec.build_squad(list(snapshot.SQUADS['레이드_볼륨']['members']))
+          compiled=compile_moris_squad(moris)
+          policy=compile_burst_policy(moris,compiled,{'duration':180.0,'rng_mode':'expected'})
+          result=score_static_squad(compiled,policy,EnemyStaticProfile(duration=180.0),duration=180.0)
+          print('VOLUME_FAST_SCORE',result.squad_total,result.char_total,result.events_processed,result.unsupported)
+          assert result.squad_total > 0
+          assert result.unsupported == ()
+          PY
