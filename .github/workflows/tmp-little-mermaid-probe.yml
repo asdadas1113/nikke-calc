@@ -14,57 +14,41 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Little Mermaid ownership surface audit
+      - name: Apply staged Little Mermaid patch
+        run: |
+          python .github/tmp_little_mermaid_patch.py
+          git diff --check
+      - name: Focused semantic contract
+        run: |
+          python -m unittest -v \
+            fast_engine.tests.test_damage_little_mermaid_lifecycle \
+            fast_engine.tests.test_damage_charge_reload_cancel_control \
+            fast_engine.tests.test_damage_maid_mast_hangover_lifecycle \
+            fast_engine.tests.test_dispatch_burst_runtime \
+            fast_engine.tests.test_performance_contract
+      - name: Patched frontier audit
         run: |
           python - <<'PY'
-          from context import snapshot, spec
+          from collections import Counter
+          from context import snapshot,spec
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.score import (
-              static_score_blockers,
-              _dynamic_charge_score_actors,
-              _dynamic_rapid_reload_score_actors,
-              _charge_actor_score_safe,
-              _rapid_actor_score_safe,
-          )
-          from fast_engine.engine.dispatcher import TriggerDispatcher
-
-          delta=compile_moris_squad(spec.build_squad(list(snapshot.SQUADS['레이드_델타']['members'])))
-          print('DELTA MEMBERS')
-          for i,m in enumerate(delta.members):
-              mode=str(m.weapon.get('fire_mode') or '')
-              safe=_charge_actor_score_safe(delta,i) if mode=='charge' else _rapid_actor_score_safe(delta,i)
-              print(i,m.name,'mode',mode,'type',m.weapon.get('weapon_type'),'ammo',m.weapon.get('max_ammo'),'reload',m.weapon.get('reload_time'),'clip',m.weapon.get('is_clip'),'control',m.weapon.get('control'),'safe',safe)
-          print('DYNAMIC_CHARGE',_dynamic_charge_score_actors(delta))
-          print('DYNAMIC_RAPID',_dynamic_rapid_reload_score_actors(delta))
-          print('BLOCKERS',static_score_blockers(delta))
-
-          print('\nALL SQUAD_AMMO EFFECTS IN PUBLIC FRONTIER')
-          seen=set()
+          from fast_engine.engine.score import static_score_blockers
+          source=[]
           for label,row in snapshot.SQUADS.items():
               if str(label).startswith('지그_'): continue
               members=tuple(row.get('members') or ())
-              if len(members)!=5 or any(str(x).startswith('test_') for x in members) or members in seen: continue
-              seen.add(members)
-              squad=compile_moris_squad(spec.build_squad(list(members)))
-              for e in squad.effects:
-                  for r in e.triggers:
-                      if r.event_key=='squad_ammo_consume':
-                          print(label,squad.members[e.actor].name,repr(e.name),e.effect_type,e.stat,e.value,'target',e.target,'rule',r.raw,r.mode.value,r.threshold,'exec',TriggerDispatcher.is_executable_effect(e),'conds',e.conditions)
-
-          print('\nLM RELATED STATE OBSERVERS / MUTATORS')
-          names={'거품','터진 거품','터진 거품 2'}
-          for label,row in snapshot.SQUADS.items():
-              if str(label).startswith('지그_') or '리틀 머메이드' not in row.get('members',()): continue
-              squad=compile_moris_squad(spec.build_squad(list(row['members'])))
-              print('TEAM',label)
-              for e in squad.effects:
-                  touches=[]
-                  if e.name in names: touches.append('name')
-                  if e.parameters.get('target_effect') in names: touches.append('target_effect')
-                  if any(rule.key in names for rule in e.condition_rules): touches.append('condition')
-                  if any((r.event_key or '').startswith('event:state_end:') and (r.event_key or '').split(':',2)[-1] in names for r in e.triggers): touches.append('state_end')
-                  raw=' '.join(e.conditions)
-                  if 'stun' in raw or '기절' in raw: touches.append('stun_condition')
-                  if touches:
-                      print(' ',squad.members[e.actor].name,e.effect_id,e.actor_effect_index,repr(e.name),e.effect_type,e.stat,'touch',touches,'target',e.target,'conds',e.conditions,'trig',[r.raw for r in e.triggers])
+              if len(members)!=5 or any(str(x).startswith('test_') for x in members): continue
+              source.append((label,members))
+          seen=set(); unique=[]
+          for label,members in source:
+              if members in seen: continue
+              seen.add(members); unique.append((label,members))
+          certified=[]; cats=Counter()
+          for label,members in unique:
+              rows=static_score_blockers(compile_moris_squad(spec.build_squad(list(members))))
+              if not rows: certified.append(label)
+              for row in rows: cats[row.split(':',1)[0]]+=1
+          print('SOURCE',len(source),'UNIQUE',len(unique),'CERTIFIED',certified,'GAPS',len(unique)-len(certified))
+          print('CATEGORIES',dict(sorted(cats.items())))
+          print('DELTA_BLOCKERS',static_score_blockers(compile_moris_squad(spec.build_squad(list(snapshot.SQUADS['레이드_델타']['members'])))))
           PY
