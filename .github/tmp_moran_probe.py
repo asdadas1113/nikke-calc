@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import dataclasses
 from pathlib import Path
 import sys
 
@@ -8,135 +7,75 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from calculator.timeline import simulate
-from context import snapshot, spec
-from fast_engine.engine.compiler import compile_moris_squad
-from fast_engine.engine.score import static_score_blockers
 
-TEAMS = [
-    "스쿼드4",
-    "레이드_이브레이븐",
-    "레이드_아니스서머메이든",
-    "레이드_브리드디젤",
-    "레이드_트리나홍련",
-]
-
-
-def dump_obj(obj):
-    if dataclasses.is_dataclass(obj):
-        try:
-            return dataclasses.asdict(obj)
-        except Exception:
-            return repr(obj)
-    return repr(obj)
-
-
-def grep_context(path: str, tokens: tuple[str, ...], pad: int = 3):
-    p = Path(path)
-    if not p.exists():
-        return
-    lines = p.read_text(encoding="utf-8").splitlines()
-    hits = []
+def show(path: str, needles: tuple[str, ...], pad: int = 10) -> None:
+    lines = (ROOT / path).read_text(encoding="utf-8").splitlines()
+    print(f"\n===== {path} =====")
+    ranges = []
     for i, line in enumerate(lines):
-        if any(tok in line for tok in tokens):
-            hits.append(i)
-    seen = set()
-    print(f"\n=== GREP {path} tokens={tokens} hits={len(hits)} ===")
-    for i in hits:
-        lo = max(0, i - pad)
-        hi = min(len(lines), i + pad + 1)
-        key = (lo, hi)
-        if key in seen:
-            continue
-        seen.add(key)
+        if any(n in line for n in needles):
+            ranges.append((max(0, i-pad), min(len(lines), i+pad+1)))
+    merged = []
+    for lo, hi in ranges:
+        if not merged or lo > merged[-1][1]:
+            merged.append([lo, hi])
+        else:
+            merged[-1][1] = max(merged[-1][1], hi)
+    for lo, hi in merged:
         for j in range(lo, hi):
             print(f"{j+1:5d}: {lines[j]}")
-        print("---")
+        print("-----")
 
-
-print("=== PUBLIC MORAN TEAMS ===")
-for team in TEAMS:
-    row = snapshot.SQUADS[team]
-    moris = spec.build_squad(list(row["members"]))
-    squad = compile_moris_squad(moris)
-    moran_idx = next(i for i, m in enumerate(squad.members) if m.name == "목단")
-    print(f"\n### {team}")
-    print("members", [m.name for m in squad.members])
-    print("moran_index", moran_idx)
-    print("moran_weapon", dump_obj(squad.members[moran_idx].weapon))
-    blockers = static_score_blockers(squad)
-    print("all_blockers", blockers)
-    print("moran_blockers", tuple(x for x in blockers if ":목단:" in x))
-    print("moran_relevant_effects")
-    for e in squad.members[moran_idx].effects:
-        if e.name not in {"정정당당 승부다!", "다 덤벼! 2"}:
-            continue
-        print({
-            "id": e.effect_id,
-            "name": e.name,
-            "type": e.effect_type,
-            "stat": e.stat,
-            "value": e.value,
-            "duration": e.duration,
-            "max_stack": e.max_stack,
-            "max_trigger": e.max_trigger,
-            "tick_interval": e.tick_interval,
-            "target": e.target,
-            "target_spec": dump_obj(e.target_spec),
-            "polarity": e.polarity,
-            "parameters": dict(e.parameters),
-            "conditions": [dump_obj(x) for x in e.condition_rules],
-            "triggers": [dump_obj(x) for x in e.triggers],
-            "capability": dump_obj(e.capability),
-        })
-
-print("\n=== MORIS 25s TRACE: 스쿼드4 ===")
-row = snapshot.SQUADS["스쿼드4"]
-moris = spec.build_squad(list(row["members"]))
-result = simulate(moris, config={"duration": 25.0, "rng_mode": "expected", **row.get("config", {})}, verbose=True)
-print("sim_result_type", type(result).__name__)
-print("sim_result_fields", getattr(result, "__dict__", {}))
-print("log_type", type(result.log).__name__)
-print("log_fields", tuple(getattr(result.log, "__dict__", {}).keys()))
-for attr in tuple(getattr(result.log, "__dict__", {}).keys()):
-    seq = getattr(result.log, attr, None)
-    if not isinstance(seq, (list, tuple)):
-        continue
-    matches = []
-    for item in seq:
-        text = repr(item)
-        if "목단" in text or "정정당당" in text or "다 덤벼! 2" in text:
-            matches.append(text)
-    if matches:
-        print(f"\nLOG {attr} count={len(seq)} matches={len(matches)}")
-        for text in matches[:180]:
-            print(text)
-        if len(matches) > 180:
-            print("... truncated ...")
-
-for path in (
-    "calculator/buff_manager.py",
-    "calculator/timeline.py",
-    "calculator/damage.py",
-    "fast_engine/engine/compiler.py",
-    "fast_engine/engine/dispatcher.py",
-    "fast_engine/engine/score.py",
-    "fast_engine/engine/weapon.py",
-    "fast_engine/engine/weapon_runtime.py",
-    "fast_engine/engine/normal_runtime.py",
-    "fast_engine/engine/damage_runtime.py",
-):
-    grep_context(
-        path,
-        (
-            "weapon_change",
-            "weapon_override",
-            "dynamic_weapon",
-            "current_weapon",
-            "self_state",
-            "additional_damage",
-            "bonus_damage",
-            "hit_count",
-        ),
-        pad=3,
-    )
+show("calculator/buff_manager.py", (
+    "weapon_change",
+    "_weapon_overrides",
+    "_hit_count[",
+    "def process_hit",
+    "def notify(",
+), pad=8)
+show("calculator/timeline.py", (
+    "def _runtime_weapon",
+    "def _current_weapon",
+    "last_weapon_state",
+    "weapon_state !=",
+    "ammo == -1",
+    "state.hit_count",
+    "duration_from_fire_rate",
+), pad=12)
+show("fast_engine/engine/compiler.py", (
+    "weapon_change",
+    "Weapon",
+    "parameters",
+), pad=8)
+show("fast_engine/engine/score.py", (
+    "weapon_change",
+    "weapon_change_score",
+    "dynamic_weapon",
+    "hit_count",
+    "self_state",
+), pad=10)
+show("fast_engine/engine/dispatcher.py", (
+    "weapon_change",
+    "hit_count",
+    "self_state",
+    "dynamic_weapon",
+), pad=10)
+show("fast_engine/engine/weapon_runtime.py", (
+    "weapon",
+    "reload",
+    "next_fire",
+    "hit_count",
+    "ammo",
+), pad=8)
+show("fast_engine/engine/normal_runtime.py", (
+    "weapon",
+    "next_fire",
+    "hit_count",
+    "ammo",
+    "on_shot",
+), pad=8)
+show("fast_engine/engine/damage_runtime.py", (
+    "bonus_damage",
+    "hit_count",
+    "self_state",
+), pad=8)
