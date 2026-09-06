@@ -1,0 +1,19 @@
+name: tmp-crown-probe
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+    paths:
+      - '.github/tmp_crown_probe.py'
+      - '.github/workflows/tmp-crown-probe.yml'
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Crown ownership probe
+        run: python .github/tmp_crown_probe.py
