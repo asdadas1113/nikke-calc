@@ -39,6 +39,14 @@ class MaidMastHangoverContractTests(unittest.TestCase):
             members.append(replace(member, effects=effects))
         return replace(compiled, members=tuple(members))
 
+    @staticmethod
+    def _dispatcher(compiled):
+        state = StateStore.from_compiled_squad(compiled)
+        scheduler = EventScheduler()
+        enemy = EnemyStaticProfile(duration=30.0, core_px=0.0)
+        burst = BurstMachine(compiled, BurstPolicy(duration=30.0))
+        return TriggerDispatcher(compiled, state, enemy, burst, scheduler)
+
     def test_public_moris_oracle_timestamps_and_fast_lifecycle_boundary(self):
         expected_starts = {
             '레이드_루주': 39.4,
@@ -179,17 +187,22 @@ class MaidMastHangoverContractTests(unittest.TestCase):
         runtime.advance_to(0.999, inclusive=True)
         st = runtime._states[actor]
         ammo_before = st.ammo
-        warmup_before = st.warmup
         shots_before = sum(count for _a, count, _t in scored)
-        self.assertGreater(warmup_before, 1.0)
+
+        # Prime a nontrivial warmup value so the assertion tests cooldown across
+        # the blocked interval rather than depending on startup cadence details.
+        st.warmup = 10.0
+        warmup_before = st.warmup
 
         runtime.advance_to(2.999999, inclusive=True)
         self.assertEqual(st.ammo, ammo_before)
         self.assertEqual(sum(count for _a, count, _t in scored), shots_before)
+        self.assertEqual(st.warmup, warmup_before)
 
         runtime.advance_to(3.0, inclusive=True)
         self.assertEqual(st.ammo, ammo_before - 1)
         self.assertEqual(sum(count for _a, count, _t in scored), shots_before + 1)
+        self.assertLess(st.warmup, warmup_before)
         self.assertLessEqual(st.warmup, 1.000001)
 
     def test_all_controlled_candidates_wait_for_earliest_unblock(self):
@@ -225,7 +238,7 @@ class MaidMastHangoverContractTests(unittest.TestCase):
         )
         guarded = self._replace_effect(compiled, control.effect_id, ambiguous_target)
         self.assertFalse(certified_stack3_self_stun_remove_lifecycles(guarded))
-        guarded_dispatcher = TriggerDispatcher(guarded)
+        guarded_dispatcher = self._dispatcher(guarded)
         self.assertFalse(guarded_dispatcher.is_runtime_executable_effect(ambiguous_target))
 
         ambiguous_condition = replace(
@@ -235,19 +248,19 @@ class MaidMastHangoverContractTests(unittest.TestCase):
         )
         guarded = self._replace_effect(compiled, control.effect_id, ambiguous_condition)
         self.assertFalse(certified_stack3_self_stun_remove_lifecycles(guarded))
-        guarded_dispatcher = TriggerDispatcher(guarded)
+        guarded_dispatcher = self._dispatcher(guarded)
         self.assertFalse(guarded_dispatcher.is_runtime_executable_effect(ambiguous_condition))
 
         standalone_stun = replace(control, name='synthetic standalone stun')
         guarded = self._replace_effect(compiled, control.effect_id, standalone_stun)
         self.assertFalse(certified_stack3_self_stun_remove_lifecycles(guarded))
-        guarded_dispatcher = TriggerDispatcher(guarded)
+        guarded_dispatcher = self._dispatcher(guarded)
         self.assertFalse(guarded_dispatcher.is_runtime_executable_effect(standalone_stun))
 
         standalone_remove = replace(remover, name='synthetic standalone remove')
         guarded = self._replace_effect(compiled, remover.effect_id, standalone_remove)
         self.assertFalse(certified_stack3_self_stun_remove_lifecycles(guarded))
-        guarded_dispatcher = TriggerDispatcher(guarded)
+        guarded_dispatcher = self._dispatcher(guarded)
         self.assertFalse(guarded_dispatcher.is_runtime_executable_effect(standalone_remove))
 
 
