@@ -47,5 +47,11 @@ if new_timing not in text:
     if old_timing not in text:
         raise RuntimeError("Moran timing assertion anchor missing")
     text = text.replace(old_timing, new_timing, 1)
+old_ammo = '''        self.assertEqual(st.ammo, int(compiled.members[actor].weapon["max_ammo"]))\n'''
+new_ammo = '''        # Finite mode exit is a reload-complete restore in Moris: refill to\n        # the live effective base-weapon maximum, including active max-ammo buffs.\n        self.assertEqual(st.ammo, rapid._full_ammo(actor, 13.05))\n'''
+if new_ammo not in text:
+    if old_ammo not in text:
+        raise RuntimeError("Moran restore ammo assertion anchor missing")
+    text = text.replace(old_ammo, new_ammo, 1)
 t.write_text(text, encoding="utf-8")
-print("Moran provenance, nominal deadline, score-delivery, and lattice tests staged")
+print("Moran provenance, nominal deadline, score-delivery, lattice, and restore tests staged")
