@@ -25,4 +25,4 @@ for team in ("스쿼드2", "레이드_아니스서머메이든", "레이드_라�
             print(" polarity", effect.polarity, "parameters", effect.parameters, flush=True)
             print(" conditions", [(r.mode.value, r.key, r.value, r.raw) for r in effect.condition_rules], flush=True)
             print(" triggers", [(r.mode.value, r.event_key, r.threshold, r.trigger_count_reducible, r.raw) for r in effect.triggers], flush=True)
-            print(" capability", effect.capability.disposition.value, effect.capability.reasons, flush=True)
+            print(" capability", effect.capability.disposition.value, flush=True)
