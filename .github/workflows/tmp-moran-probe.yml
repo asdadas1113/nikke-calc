@@ -20,6 +20,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - name: Inspect Moran compiled lifecycle
+        run: python .github/tmp_moran_probe.py
       - name: Apply Moran lifecycle patch
         run: python .github/tmp_moran_apply.py
       - name: Focused Moran regression
