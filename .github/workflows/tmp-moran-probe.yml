@@ -6,6 +6,10 @@ on:
       - fast-engine-phase2-20260901
   workflow_dispatch:
 
+concurrency:
+  group: temp-moran-production-audit
+  cancel-in-progress: true
+
 jobs:
   audit:
     if: github.actor != 'github-actions[bot]'
