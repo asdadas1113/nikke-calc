@@ -63,11 +63,12 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
     likewise gated elsewhere.
     """
 
-    __slots__ = ("_cover_until",)
+    __slots__ = ("_cover_until", "_weapon_block_until")
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._cover_until: dict[int, float] = {}
+        self._weapon_block_until: Callable[[int, float], float | None] | None = None
 
     def attach_score_sink(
         self,
@@ -83,12 +84,26 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
     def _cover_end(self, actor: int) -> float:
         return float(self._cover_until.get(actor, -1.0))
 
+    def attach_weapon_block_until(
+        self, callback: Callable[[int, float], float | None]
+    ) -> None:
+        self._weapon_block_until = callback
+
+    def _weapon_block_end(self, actor: int, now: float) -> float:
+        until = self._cover_end(actor)
+        if self._weapon_block_until is not None:
+            control_end = self._weapon_block_until(actor, now)
+            if control_end is not None:
+                until = max(until, float(control_end))
+        return until
+
     def _signature(self, actor: int, now: float) -> tuple:
-        # A bullet-lifetime activation/removal changes whether every shot must be
-        # materialized. Include its generation/remaining state so ordinary
-        # weapon sync invalidates any stale compressed boundary immediately.
-        return super()._signature(actor, now) + self.effects.dynamic_bullet_signature(
-            actor, now=now
+        # Bullet lifetime and weapon-block activation/removal both invalidate a
+        # stale compressed boundary without materializing individual shots.
+        return (
+            super()._signature(actor, now)
+            + self.effects.dynamic_bullet_signature(actor, now=now)
+            + (self._weapon_block_end(actor, now),)
         )
 
     def _shot_is_boundary(self, st: _RapidActorState) -> bool:
@@ -103,12 +118,11 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
             return ()
         return self.effects.consume_dynamic_bullet(actor, now=now, count=1)
 
-    def _postpone_firing_for_cover(self, st: _RapidActorState) -> bool:
-        until = self._cover_end(st.actor)
+    def _postpone_firing_for_block(self, st: _RapidActorState) -> bool:
+        until = self._weapon_block_end(st.actor, st.phase_end)
         if st.phase == "firing" and st.phase_end < until - _EPS:
-            # Moris exits cover at the anchor frame and then may fire on that
-            # same frame. Therefore equality is not covered; only times strictly
-            # before ``until`` are postponed.
+            # Control intervals are half-open. Equality is therefore available:
+            # the first real shot may occur exactly at the unblock timestamp.
             st.phase_end = until
             return True
         return False
@@ -167,7 +181,7 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
         score_count = 0
         score_time = 0.0
         while self._due(st.phase_end, t, inclusive=inclusive):
-            if self._postpone_firing_for_cover(st):
+            if self._postpone_firing_for_block(st):
                 continue
             when = st.phase_end
             if when > self.duration + _EPS:
@@ -194,7 +208,7 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
 
         probe = replace(st)
         while probe.phase_end <= self.duration + _EPS:
-            if self._postpone_firing_for_cover(probe):
+            if self._postpone_firing_for_block(probe):
                 continue
             when = probe.phase_end
             if probe.phase == "firing":

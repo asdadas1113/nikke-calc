@@ -8,6 +8,7 @@ from context import snapshot, spec
 from fast_engine.engine.burst import compile_burst_policy
 from fast_engine.engine.burst_runtime import BurstRuntime
 from fast_engine.engine.compiler import compile_moris_squad
+from fast_engine.engine.control_lifecycle import certified_stack3_self_stun_remove_lifecycles
 from fast_engine.engine.dispatcher import TriggerDispatcher
 from fast_engine.engine.model import EnemyStaticProfile
 from fast_engine.engine.score import (
@@ -92,7 +93,7 @@ class MaidMastStackMutationTests(unittest.TestCase):
                     blockers,
                 )
 
-    def test_no_anchor_reachable_remover_stays_fail_closed(self):
+    def test_no_anchor_reachable_remover_is_owned_only_as_full_lifecycle(self):
         for label in self.NO_ANCHOR_PUBLIC:
             with self.subTest(label=label):
                 _moris, compiled = self._compiled(label)
@@ -102,7 +103,10 @@ class MaidMastStackMutationTests(unittest.TestCase):
                         compiled, remover
                     )
                 )
-                self.assertIn(
+                owned = certified_stack3_self_stun_remove_lifecycles(compiled)
+                self.assertEqual(len(owned), 1)
+                self.assertEqual(owned[0].remover_effect_id, remover.effect_id)
+                self.assertNotIn(
                     'normal_state:마스트 : 로망틱 메이드:파이레츠 스피릿 3:remove_named_buff',
                     set(static_score_blockers(compiled)),
                 )

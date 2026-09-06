@@ -180,6 +180,11 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
     ) -> None:
         self._rapid_reload.attach_score_sink(actors, sink)
 
+    def attach_weapon_block_until(
+        self, callback: Callable[[int, float], float | None]
+    ) -> None:
+        self._rapid_reload.attach_weapon_block_until(callback)
+
     def _charge_shot_release_time(self, actor: int, ready_time: float) -> float:
         release = float(self._charge_hold_release.get(actor, -1.0))
         return release if ready_time < release - 1e-9 else float(ready_time)

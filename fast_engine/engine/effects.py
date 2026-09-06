@@ -750,6 +750,32 @@ class ActiveEffectStore:
             self.state.touch(target, StateDomain.EFFECT)
         return tuple(changed)
 
+    def active_control_until(
+        self,
+        target: int,
+        effect_ids,
+        *,
+        now: float,
+    ) -> float | None:
+        """Return the latest end of any owned active control on ``target``.
+
+        The caller supplies compile-time-certified effect ids. ActiveEffect's
+        half-open lifetime makes equality at the returned end immediately
+        available without a frame loop.
+        """
+
+        selected = frozenset(int(effect_id) for effect_id in effect_ids)
+        if not selected:
+            return None
+        ends = [
+            active.expires_at
+            for active in self._active.values()
+            if active.target == int(target)
+            and active.effect_id in selected
+            and active.active(now)
+        ]
+        return max(ends) if ends else None
+
     def has_stat(self, target: int, stat: str, *, now: float) -> bool:
         self._materialize_pending_stat(stat, now)
         return bool(self._active_keys(self._by_target_stat, target, stat, now))

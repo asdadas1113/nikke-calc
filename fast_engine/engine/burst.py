@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from math import inf
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from context.spec import build_config
 
@@ -171,6 +171,7 @@ class BurstMachine:
         "squad", "policy", "phase", "cycle_count", "ready_at", "gauge_ready_at",
         "stage_override", "reenter_stage", "casted", "full_burst_end_at",
         "full_burst_caster", "cd_applied_at_cast", "_generation", "_waiting_candidates", "_waiting_stage",
+        "_candidate_available", "_candidate_unblock_time",
     )
 
     def __init__(self, squad: CompiledSquad, policy: BurstPolicy) -> None:
@@ -189,6 +190,30 @@ class BurstMachine:
         self._generation = 0
         self._waiting_candidates: tuple[int, ...] = ()
         self._waiting_stage: str | None = None
+        self._candidate_available: Callable[[int, float], bool] | None = None
+        self._candidate_unblock_time: Callable[[int, float], float | None] | None = None
+
+    def attach_candidate_availability(
+        self,
+        available: Callable[[int, float], bool],
+        unblock_time: Callable[[int, float], float | None],
+    ) -> None:
+        self._candidate_available = available
+        self._candidate_unblock_time = unblock_time
+
+    def _candidate_is_available(self, actor: int, now: float) -> bool:
+        return self._candidate_available is None or bool(self._candidate_available(actor, now))
+
+    def _candidate_ready_time(self, actor: int, now: float) -> float:
+        ready = float(self.ready_at[actor])
+        if self._candidate_is_available(actor, now):
+            return ready
+        if self._candidate_unblock_time is None:
+            return inf
+        unblock = self._candidate_unblock_time(actor, now)
+        if unblock is None:
+            return inf
+        return max(ready, float(unblock))
 
     def start(self, scheduler: EventScheduler) -> None:
         self._schedule(scheduler, max(self.gauge_ready_at), EventKind.BURST_READY)
@@ -240,9 +265,12 @@ class BurstMachine:
             return
         self.ready_at[actor] = max(now, self.ready_at[actor] - float(reduction))
         if actor in self._waiting_candidates and self._waiting_stage is not None:
-            earliest = min(self.ready_at[a] for a in self._waiting_candidates)
-            self._schedule(scheduler, max(now, earliest), EventKind.BURST_ACTIVATE,
-                           stage=self._waiting_stage)
+            earliest = min(
+                self._candidate_ready_time(a, now) for a in self._waiting_candidates
+            )
+            if earliest < inf:
+                self._schedule(scheduler, max(now, earliest), EventKind.BURST_ACTIVATE,
+                               stage=self._waiting_stage)
 
     def reduce_cooldown(self, actor: int, seconds: float, now: float, scheduler: EventScheduler) -> None:
         if seconds > 0:
@@ -306,17 +334,21 @@ class BurstMachine:
             self.phase = f"stage:{stage}"
             return []
 
-        actor = next((a for a in candidates if now >= self.ready_at[a] - _EPS), None)
+        actor = next((
+            a for a in candidates
+            if now >= self.ready_at[a] - _EPS and self._candidate_is_available(a, now)
+        ), None)
         if actor is None:
-            earliest = min(self.ready_at[a] for a in candidates)
+            earliest = min(self._candidate_ready_time(a, now) for a in candidates)
             self._waiting_candidates = candidates
             self._waiting_stage = stage
             self.phase = f"reenter:{stage}" if reenter else f"stage:{stage}"
-            self._schedule(
-                scheduler, max(now, earliest),
-                EventKind.BURST_REENTER if reenter else EventKind.BURST_ACTIVATE,
-                stage=stage,
-            )
+            if earliest < inf:
+                self._schedule(
+                    scheduler, max(now, earliest),
+                    EventKind.BURST_REENTER if reenter else EventKind.BURST_ACTIVATE,
+                    stage=stage,
+                )
             return []
 
         self.casted[actor] = True

@@ -6,6 +6,7 @@ from typing import Callable, TYPE_CHECKING
 
 from .capabilities import CapabilityDisposition
 from .conditions import ConditionEvaluator, ConditionMode, SignalContext
+from .control_lifecycle import certified_stack3_self_stun_remove_lifecycles
 from .damage_policy import (
     DIRECT_DAMAGE_STATE_STATS,
     full_burst_conditional_permanent_passive_shape,
@@ -47,7 +48,8 @@ class TriggerDispatcher:
         "_self_stack_dependency_names", "_self_state_passive_ids",
         "_self_state_dependency_names", "_full_burst_passive_ids", "_gauge_maxima",
         "_unsafe_gauge_families", "_strict_score_delivery", "_ammo_charge_sink",
-        "_force_reload_sink", "_named_event_names_needed",
+        "_force_reload_sink", "_named_event_names_needed", "_control_lifecycles",
+        "_control_effect_ids", "_control_remover_ids",
     )
 
     _AUXILIARY_STATS = frozenset({
@@ -130,6 +132,13 @@ class TriggerDispatcher:
         self.effects.attach_lazy_target_resolver(self._resolve_lazy_rank_targets)
         self.conditions = ConditionEvaluator(squad, state, self.effects, enemy, burst)
         self._effect_table = tuple(squad.effects)
+        self._control_lifecycles = certified_stack3_self_stun_remove_lifecycles(squad)
+        self._control_effect_ids = frozenset(
+            row.control_effect_id for row in self._control_lifecycles
+        )
+        self._control_remover_ids = frozenset(
+            row.remover_effect_id for row in self._control_lifecycles
+        )
         self.effects.enable_finite_reference_stack_capture(
             effect.effect_id
             for effect in self._effect_table
@@ -220,6 +229,14 @@ class TriggerDispatcher:
         sink: Callable[[tuple[int, ...], float], bool],
     ) -> None:
         self._force_reload_sink = sink
+
+    def control_block_until(self, actor: int, now: float) -> float | None:
+        ids = tuple(
+            row.control_effect_id
+            for row in self._control_lifecycles
+            if row.actor == actor
+        )
+        return self.effects.active_control_until(actor, ids, now=now)
 
     @classmethod
     def _gauge_family(cls, effect: "CompiledEffect") -> tuple[int, str] | None:
@@ -1483,6 +1500,8 @@ class TriggerDispatcher:
         return True
 
     def is_runtime_executable_effect(self, effect: "CompiledEffect") -> bool:
+        if effect.effect_id in self._control_effect_ids or effect.effect_id in self._control_remover_ids:
+            return True
         if self._temporary_self_charge_weapon_change_runtime_supported(effect):
             return True
         if self._trigger_count_reduce_runtime_supported(effect):
@@ -1855,6 +1874,15 @@ class TriggerDispatcher:
                 if changed_names & self._self_stack_dependency_names:
                     self._sync_self_stack_conditional_passives(now=now)
                 if changed_names & self._self_state_dependency_names:
+                    self._sync_self_state_conditional_passives(now=now)
+            elif stat == "remove_named_buff" and effect.effect_id in self._control_remover_ids:
+                name = str(effect.parameters.get("target_effect") or "")
+                if tuple(targets) != (effect.actor,):
+                    return False
+                removed = self.effects.remove_named_state(effect.actor, name, now=now)
+                if removed and name in self._self_stack_dependency_names:
+                    self._sync_self_stack_conditional_passives(now=now)
+                if removed and name in self._self_state_dependency_names:
                     self._sync_self_state_conditional_passives(now=now)
             elif stat == "remove_named_buff" and self._self_stack_remove_runtime_supported(effect):
                 name = str(effect.parameters.get("target_effect") or "")

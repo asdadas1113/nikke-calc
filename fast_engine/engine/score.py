@@ -4,6 +4,7 @@ from math import inf, nextafter
 from typing import TYPE_CHECKING
 
 from .conditions import ConditionMode
+from .control_lifecycle import certified_stack3_self_stun_remove_lifecycles
 from .core_events import is_static_expected_core_count_rule
 from .damage_policy import (
     DIRECT_DAMAGE_STATE_STATS,
@@ -667,6 +668,11 @@ def _dynamic_rapid_reload_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
     actors.update(_dynamic_mg_warmup_score_actors(squad))
     actors.update(_dynamic_force_reload_score_actors(squad))
     actors.update(a for a in _dynamic_max_ammo_score_actors(squad) if str(squad.members[a].weapon.get("fire_mode") or "") in {"auto", "auto_warmup"})
+    actors.update(
+        row.actor
+        for row in certified_stack3_self_stun_remove_lifecycles(squad)
+        if _rapid_actor_score_safe(squad, row.actor)
+    )
     return tuple(sorted(actors))
 
 
@@ -1093,6 +1099,12 @@ def _unsupported_remove_named_buff_changes_scored_state(
         return False
     if _full_burst_end_stack_condition_unreachable_after_owned_decrement(
         squad, effect
+    ):
+        return False
+    if any(
+        row.remover_effect_id == effect.effect_id
+        and _rapid_actor_score_safe(squad, row.actor)
+        for row in certified_stack3_self_stun_remove_lifecycles(squad)
     ):
         return False
     if TriggerDispatcher._full_burst_end_self_direct_remove_dependency_supported(

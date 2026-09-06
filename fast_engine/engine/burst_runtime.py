@@ -112,6 +112,11 @@ class BurstRuntime:
             duration=policy.duration,
             effect_filter=self.dispatcher.is_runtime_executable_effect,
         )
+        self.weapons.attach_weapon_block_until(self.dispatcher.control_block_until)
+        self.machine.attach_candidate_availability(
+            lambda actor, now: self.dispatcher.control_block_until(actor, now) is None,
+            self.dispatcher.control_block_until,
+        )
         if self.damage_sink is not None:
             self.damage_sink.attach(self)
 
