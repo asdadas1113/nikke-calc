@@ -43,15 +43,15 @@ jobs:
                           crossings.append(('lm_hit',lm_hits,float(t),caster))
                   return orig_notify(self,event,t,caster,**ctx)
 
-              def traced_instant(self,eff,caster,t):
+              def traced_instant(self,eff,caster,t,*args,**kwargs):
                   if eff.get('stat')=='remove_named_buff' and eff.get('target_effect')=='거품':
                       before=[(ab.effect.get('name'),ab.caster,list(ab.target_chars or [])) for ab in self._active if ab.effect.get('name') in {'거품','터진 거품','터진 거품 2'}]
                       events.append(('remove_before',float(t),eff.get('name'),before))
-                      out=orig_instant(self,eff,caster,t)
+                      out=orig_instant(self,eff,caster,t,*args,**kwargs)
                       after=[(ab.effect.get('name'),ab.caster,list(ab.target_chars or [])) for ab in self._active if ab.effect.get('name') in {'거품','터진 거품','터진 거품 2'}]
                       events.append(('remove_after',float(t),eff.get('name'),after))
                       return out
-                  return orig_instant(self,eff,caster,t)
+                  return orig_instant(self,eff,caster,t,*args,**kwargs)
 
               with patch.object(BuffManager,'notify',new=traced_notify), patch.object(BuffManager,'_dispatch_instant',new=traced_instant):
                   result=simulate(squad,config={'duration':60.0,'rng_mode':'expected'},verbose=True)
