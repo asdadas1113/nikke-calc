@@ -1,0 +1,17 @@
+name: tmp-maid-mast-contract-debug
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Focused Maid Mast contract
+        run: python -m unittest -v fast_engine.tests.test_damage_maid_mast_hangover_contract
