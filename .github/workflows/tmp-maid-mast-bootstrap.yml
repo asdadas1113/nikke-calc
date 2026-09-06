@@ -1,0 +1,60 @@
+name: tmp-maid-mast-bootstrap
+
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+    paths:
+      - .github/workflows/tmp-maid-mast-bootstrap.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fast-engine-phase2-20260901
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply embedded patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path('.github/workflows/tmp-maid-mast-patch.yml').read_text(encoding='utf-8')
+          marker = "          python - <<'PY'\n"
+          start = source.index(marker) + len(marker)
+          end = source.index("\n          PY\n", start)
+          block = source[start:end]
+          out = []
+          in_raw_file = False
+          for line in block.splitlines():
+              if in_raw_file:
+                  if "''', encoding='utf-8')" in line:
+                      out.append(line[10:] if line.startswith('          ') else line)
+                      in_raw_file = False
+                  else:
+                      out.append(line)
+                  continue
+              normalized = line[10:] if line.startswith('          ') else line
+              out.append(normalized)
+              if "write_text(r'''" in normalized and "''', encoding='utf-8')" not in normalized:
+                  in_raw_file = True
+          script = '\n'.join(out) + '\n'
+          exec(compile(script, '<maid-mast-patch>', 'exec'), {'__name__': '__main__'})
+          PY
+      - name: Focused Maid Mast tests
+        run: |
+          python -m unittest \
+            fast_engine.tests.test_damage_maid_mast_stack_mutation \
+            fast_engine.tests.test_damage_maid_mast_hangover_lifecycle
+      - name: Commit production checkpoint
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fast_engine/engine fast_engine/tests
+          git commit -m "Fast: own Maid Mast hangover lifecycle"
+          git push origin HEAD:fast-engine-phase2-20260901
