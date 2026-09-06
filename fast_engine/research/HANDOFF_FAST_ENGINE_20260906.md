@@ -1,4 +1,4 @@
-# Fast Engine 작업 인계 — 2026-09-06
+# Fast Engine 작업 인계 — 2026-09-06 / 09-07 갱신
 
 ## 0. 재개 지점
 
@@ -8,11 +8,11 @@
 
 **`master`는 수정하거나 병합하지 않는다. `calculator/`는 Moris oracle로만 사용한다.**
 
-Fast Engine의 목적은 Moris 복제품이 아니라 optimizer용 고속 sparse-event ranking engine이다.
+Fast Engine은 Moris 복제품이 아니라 optimizer용 고속 sparse-event ranking engine이다.
 
 금지 원칙:
 
-- 60Hz global loop 추가 금지
+- global 60Hz loop 추가 금지
 - 캐릭터명 기반 runtime 분기 금지
 - unsupported comparison-critical mechanic silent zero 금지
 - 한 번에 하나의 semantic checkpoint만 완결
@@ -20,109 +20,100 @@ Fast Engine의 목적은 Moris 복제품이 아니라 optimizer용 고속 sparse
 가장 먼저 읽을 문서:
 
 1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260906.md`
-2. `fast_engine/research/CROWN_HEAL_RECEIVED_SHARED_LIFETIME_CHECKPOINT_20260906.md`
-3. `fast_engine/research/LITTLE_MERMAID_REPLACEMENT_SQUAD_AMMO_CHECKPOINT_20260906.md`
-4. `fast_engine/research/VOLUME_LIVE_AMMO_LAZY_RANK_CHECKPOINT_20260906.md`
-5. `fast_engine/research/MAID_MAST_HANGOVER_LIFECYCLE_CHECKPOINT_20260906.md`
-6. `fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md`
+2. `fast_engine/research/MORAN_RAPID_WEAPON_CHANGE_LIFECYCLE_CHECKPOINT_20260907.md`
+3. `fast_engine/research/CROWN_HEAL_RECEIVED_SHARED_LIFETIME_CHECKPOINT_20260906.md`
+4. `fast_engine/research/LITTLE_MERMAID_REPLACEMENT_SQUAD_AMMO_CHECKPOINT_20260906.md`
+5. `fast_engine/research/VOLUME_LIVE_AMMO_LAZY_RANK_CHECKPOINT_20260906.md`
+6. `fast_engine/research/MAID_MAST_HANGOVER_LIFECYCLE_CHECKPOINT_20260906.md`
+7. `fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md`
 
 ## 1. latest completed semantic checkpoint
 
-**Crown `로얄 에타이어 4` heal-received recipient/lifetime semantics 완료.**
+**목단 `정정당당 승부다!` finite rapid weapon-change lifecycle 완료.**
 
-semantic production commit:
+semantic commits:
 
-- `be702b01f8230e985fc7301ebc9decc43a6d3e40` — `Fast: own Crown heal-received lifetime and zero-core guard`
+- `a8e0b51cb122a0e424404ed2a49e485a09d6ebd4` — `Fast: own finite rapid weapon-change lifecycle`
+- `f769473f19e1f269027feb69e2c8566582211062` — `Fast: keep rapid weapon-change off baseline hot path`
+- `abbc8c4616b2bca724e70634fd166668185e8d6a` — `Fast: scope rapid weapon view to changed actors`
 
-public certification target:
+Moris oracle:
 
-- `레이드_아스카루드밀라`
+- base 목단: AR / auto / 12/s / max ammo 60 / coeff 14.71
+- `정정당당 승부다!`: self, 10s, `burst_cast`
+- changed weapon: SMG / auto / 24/s / infinite ammo / coeff 14.7
+- dependent `다 덤벼! 2`: `bonus_damage 47.18`, `self_state:정정당당 승부다!`, reducible `hit_count:5`
+- hit count는 weapon-change session별이 아니라 whole-combat phase
+- 24/s nominal deadline과 Moris 60Hz observed tick을 분리
+- mode 종료 시 literal 60이 아니라 active modifiers를 반영한 live effective full ammo로 restore
 
-기존 target blocker:
+Fast ownership은 exact finite self rapid weapon-change + dependent hit-count graph에만 열린다. generic weapon-change는 계속 fail closed다.
 
-- `normal_delivery:크라운:로얄 에타이어 4:atk_dmg_pct`
-- `skill_state_delivery:크라운:로얄 에타이어 4:atk_dmg_pct`
+상세는 `MORAN_RAPID_WEAPON_CHANGE_LIFECYCLE_CHECKPOINT_20260907.md` 참고.
 
-둘 다 제거됐다.
+## 2. Moran에서 발견한 performance safety
 
-### Moris oracle
+semantic correctness 뒤 두 개의 sparse-performance 문제가 드러났다.
 
-`로얄 에타이어 4`는 all-allies `atk_dmg_pct +20.99%`, 7초, `heal_received` trigger다.
+### 2.1 whole-squad live weapon callback
 
-Crown의 기존 self stack-heal chain은 reachable provider다. 추가로 나가 `우정의 서포트 2`가 `allies_lowest_hp:2` heal provider로 보이지만, patternless full-HP tie에서 Moris actual target resolver는 항상:
+20초 profiling run `34055659461` / job `101546969726`:
 
-- `리틀 머메이드`
-- `나가`
+- `sync()` 206회에 약 2.395s
+- Maid Mast `_weapon`: **271,449회**, 약 1.774s
+- Moran `_weapon`: **3,357회**, 약 0.031s
 
-를 선택한다. Crown은 first two 밖이므로 이 exact roster에서는 나가 heal이 Crown에게 도달하지 않는다.
+실제 weapon-change actor가 목단 하나인데 unrelated rapid actors까지 dynamic weapon lookup을 수행하고 있었다.
 
-### compile-time ownership
+수정:
 
-Fast는 full-HP rank tie가 변하지 않는다고 명시적으로 증명할 수 있을 때만 exact `LOWEST_HP:N` provider edge를 unreachable로 제외한다.
+- effective weapon callback을 executable rapid weapon-change actor set에만 attach
+- 나머지 rapid actors는 base-weapon hot path 유지
 
-HP/heal/life 관련 unknown stat, current/max HP mutation, wider target count, external all-allies heal 등은 proof를 철회한다. unreachable provider를 제외한 뒤에도 모든 reachable provider가 기존 owned self stack-heal chain이어야 한다.
+### 2.2 boundaryless horizon rescan
 
-따라서 generic external heal/lifesteal family는 열지 않았다.
+actor-scoping 후에도 180초 audit가 timeout됐다.
 
-### normal / skill shared lifetime
+원인:
 
-기존 timed effect store 하나가 all-allies `atk_dmg_pct` lifetime을 보유하고 `DamageTermResolver`의 normal/skill 두 path가 같은 state를 읽는다.
+- local observable boundary가 없는 rapid actor가 `_predict_next_boundary()`에서 매 invalidation마다 horizon 끝까지 모든 physical shot을 재시뮬레이션
 
-synthetic refresh contract:
+수정:
 
-- t=1 activation
-- t=2 refresh
-- t=8.5 active
-- t=9.0 expired
-- normal / skill 둘 다 base 대비 `1.2099x`
+- `_has_local_boundary_interest()` 추가
+- last-bullet / hit threshold / pellet threshold / active dynamic bullet lifetime이 없으면 predictor 즉시 `None`
+- ordinary shots는 기존 `advance_to()` block compression으로 global event / score horizon까지 전진
+- squad-ammo pre-shot planner는 별도 경로 유지
 
-### zero-core hidden gate
+이 최적화는 의미론 완화가 아니라 기존 sparse architecture 복구다.
 
-Crown blocker 제거 후 루드밀라 : 윈터 오너의 dynamic weapon + `core_hit_count` guard가 zero-core profile에서도 먼저 발동하는 hidden gate가 드러났다.
+## 3. production audit / current frontier
 
-explicit `core_px <= 0` 또는 core uptime/effective core rate 0에서는 core-hit event가 구조적으로 unreachable이므로 조기 종료한다. nonzero core에서는 기존 fail-closed guard를 그대로 유지한다.
+post-fix 180초 `스쿼드4` audit:
 
-상세는 `CROWN_HEAL_RECEIVED_SHARED_LIFETIME_CHECKPOINT_20260906.md` 참고.
+- run `34055907810` / job `101547646303`
+- elapsed `1.5432331279999971s`
+- events `2459`
+- squad total `2106138999.9456573`
+- unsupported `()`
 
-## 2. fail-closed safety
-
-Crown 신규 proof는 다음에서 철회된다.
-
-- `LOWEST_HP` count가 owner까지 넓어짐
-- current/max HP 또는 unknown HP-rank mutation 존재
-- provider parameters/conditions/tick/max-trigger 등 exact shape 이탈
-- external all-allies heal
-- generic lifesteal/reachable external heal
-- nonzero core dynamic `core_hit_count`
-
-따라서 Crown `로얄 에타이어 4` blocker는 현재도 다음 public membership에서 남는다.
-
-- `스쿼드1`
-- `스쿼드5`
-- `레이드_일레그`
-
-이 셋은 `레이드_아스카루드밀라`와 동일한 unreachable-provider proof로 제거할 수 없는 실제 reachable provider/dependency가 있으므로 의도적인 fail closed다.
-
-기존 broad generic weapon-change, stun/remove, live-rank/live-ammo, squad-ammo family도 계속 fail closed다.
-
-## 3. current public frontier
-
-canonical filter:
+canonical public filter:
 
 - `지그_*` source 제외
 - 5인 squad
 - `test_*` fixture member 제외
 - exact ordered membership dedupe
 
-fresh production audit:
+fresh frontier:
 
 - source cases `24`
 - unique memberships `23`
-- certified **5**
-- gaps **18**
+- certified **6**
+- gaps **17**
 
 certified:
 
+- `스쿼드4`
 - `레이드_레드후드퀀시`
 - `레이드_아스카루드밀라`
 - `레이드_델타`
@@ -135,53 +126,47 @@ blocker families:
 - normal state `16`
 - skill damage `25`
 - skill-state delivery `48`
-- weapon change `12`
-- cadence `57`
+- weapon change `7`
+- cadence `53`
 - control `4`
 - periodic grid `1`
 
-직전 Little Mermaid checkpoint 대비:
+직전 Crown checkpoint 대비:
 
-- certified `4 → 5`
-- gaps `19 → 18`
-- normal delivery `47 → 46`
-- skill-state delivery `49 → 48`
+- certified `5 → 6`
+- gaps `18 → 17`
+- weapon change `12 → 7`
+- cadence `57 → 53`
 - 나머지 unchanged
-
-production 180초 `레이드_아스카루드밀라` audit:
-
-- run `34024061683` / job `101461785941`
-- squad total `2294472196.185189`
-- events processed `4736`
-- unsupported `()`
 
 ## 4. validation completed
 
-Crown 관련 focused staged gate:
+Moran focused contracts:
 
-- `30/30` success
-
-staged full Fast:
-
-- `338/338` success
-- RAPI parity unchanged
+- `test_damage_moran_weapon_change_lifecycle.py`: 6 tests
+- `test_damage_dynamic_reload_scoring.py`: 12 tests
+- neighboring dynamic weapon-change / performance tests green
 
 pre-cleanup canonical CI:
 
-- run `34024177621`
-- job `101462096683`
-- result: success
-- Fast damage `229/229`
-- Fast complete discovery `338/338`
-- structural performance median `189.93ms`, events `539`
-- full-discovery structural median `188.93ms`, events `539`
+- run `34056008391`
+- job `101547955891`
+- HEAD `0c91cde7b9d45260c59667b1140d678650d54f76`
+- result: **success**
+
+exact gates:
+
+- doclint characters `199`, implementation keys `309`, exceptions `18`
+- Fast damage `236/236`
+- Fast complete discovery `345/345`
+- structural performance median `197.62ms`, events `539`
+- full-discovery structural median `196.60ms`, events `539`
 - RAPI parity reference `236373847.0`, Fast `236465053.42473748`, relative error `0.0003858566668650809`
 - calculator `137/137` (`1` skip)
 - optimizer `374/374`
 - bridge `31/31` (`1` skip)
 - site `385/385`
 - golden `29/29`
-- doclint characters `199`, implementation keys `309`, exceptions `18`
 
 performance threshold는 변경하지 않았다.
 
@@ -189,55 +174,54 @@ performance threshold는 변경하지 않았다.
 
 계속 **false-supported safety closure → semantics restoration** 단계다.
 
-완료된 주요 restoration:
+완료된 주요 restoration에 다음을 추가한다.
 
-1. sparse same-timestamp actor transaction
-2. lazy dynamic-rank first-read resolution
-3. finite named reference-stack capture
-4. full-burst conditional permanent passive
-5. full-burst-end named self removal dependency first slice
-6. roster-static false B1 remover reachability proof
-7. exact generic harmful multi-stack decrement
-8. Maid Mast reachable stack-3 stun/removal/cadence/burst lifecycle
-9. exact same-event live max-ammo → 100% refill transaction
-10. exact lazy `LOWEST_ATK_BURST3:1` caster-based charge-speed cadence delivery
-11. exact enemy received-damage replacement/remover lifecycle
-12. all-certified-rapid global ammo modulo → sequential-damage pre-shot lifecycle
-13. rapid nominal fire-deadline → sparse Moris tick observation for that exact slice
-14. immutable full-HP tie 아래 exact unreachable `LOWEST_HP:N` heal-provider edge proof
-15. `heal_received` all-allies timed damage state의 normal/skill shared lifetime ownership
-16. zero-core profile에서 structurally unreachable `core_hit_count` early-return
+17. finite self rapid weapon-change + whole-combat hit-count conditioned damage lifecycle
+18. rapid nominal fire deadline과 sparse Moris 60Hz observation 유지
+19. rapid live effective weapon view를 실제 changed actor에만 한정
+20. boundaryless rapid planner의 horizon rescan 제거 / sparse fast-return
 
 raw coverage expansion이나 optimizer production integration으로 돌아가지 않는다.
 
-## 6. post-Crown frontier pressure / 다음 단일 checkpoint
+## 6. fresh pressure / 다음 단일 checkpoint
 
-fresh pressure audit에서 가장 많이 반복되는 **단일 exact blocker**는:
+post-Moran pressure run:
 
-- `weapon_change:목단:정정당당 승부다!` — **5 public memberships**
+- `34056292716` / job `101548691790`
 
-이다.
+최다 exact blocker는 4회 동률:
 
-Snow White : Heavy Arms는 actor 단위로 28 blockers가 남지만 여러 cadence/delivery/removal/sequential-damage family의 합계이므로 하나의 primitive로 취급하지 않는다.
+- `skill_damage:리틀 머메이드:거품 난사:sequential_damage:10`
+- `cadence:프리바티:EX 매거진 2:reload_speed_pct`
+- `cadence:프리바티:EX 매거진 3:max_ammo_pct`
+
+Little Mermaid `거품 난사`는 이미 `레이드_델타`에서 exact all-certified-rapid squad-ammo pre-shot lifecycle을 소유한다. 남은 4 roster를 열려면 mixed/unsupported squad-ammo family를 넓혀야 해서 다음 checkpoint로는 상대적으로 넓다.
+
+Privaty는 네 membership에서 두 cadence blocker가 항상 함께 나타나고 compiled shape도 동일하다.
+
+- `EX 매거진`: all-allies `atk_pct +23.61`, 10s, full-burst start
+- `EX 매거진 2`: all-allies `reload_speed_pct +51.16`, 10s, full-burst start
+- `EX 매거진 3`: all-allies `max_ammo_pct -50.66`, harmful, 10s, full-burst start
+- `EX 매거진 4`: all-allies `atk_dmg_pct +20.16`, 10s, full-burst start
 
 다음 단일 checkpoint:
 
-**목단 `정정당당 승부다!` weapon-change lifecycle**
+**Privaty `EX 매거진 2 + 3` all-allies reload-speed / negative max-ammo coupled cadence lifecycle**
 
 재개 순서:
 
-1. `정정당당 승부다!` blocker가 있는 public membership 5개 전수 수집
-2. Moris에서 weapon-change start/end와 변경 무기 cadence를 trace
-3. 해당 state를 보는 normal 5-hit additional damage/self-state dependency가 있으면 한 lifecycle graph로 같이 추적
-4. scorer/runtime/dispatcher-shared compile-time ownership proof 정의
-5. neighboring generic weapon-change family fail-closed negative regression
-6. focused gate → full Fast discovery → canonical CI → frontier 재계산
+1. 네 public membership의 recipient weapon/cadence를 전수 수집
+2. Moris에서 full-burst-start same-timestamp transaction trace
+3. negative max-ammo activation 시 current ammo 즉시 clamp 여부 확인
+4. buff 활성 중 reload start/completion과 live full-ammo 확인
+5. 10초 expiry 시 max-ammo/current-ammo 복구 semantics 확인
+6. reload-speed와 negative max-ammo를 따로 열지 말고 one lifecycle graph로 ownership proof 정의
+7. broader all-allies negative max-ammo / reload family fail-closed negative regression
+8. focused gate → full Fast → canonical CI → frontier 재계산
 
-캐릭터명 runtime 분기를 만들지 않고 generic weapon-change를 넓게 열지 않는다.
+## 7. cleanup / final clean gate
 
-## 7. cleanup / final canonical gate
-
-Crown checkpoint 종료 시 모든 임시 probe/helper/trigger를 제거한다.
+Moran checkpoint 종료 시 모든 temporary Moran helper/probe/workflow를 제거한다.
 
 최종 `.github/workflows`는 반드시:
 
@@ -246,4 +230,6 @@ Crown checkpoint 종료 시 모든 임시 probe/helper/trigger를 제거한다.
 
 두 파일만 남긴다.
 
-cleanup/docs 뒤 **clean HEAD canonical `ci.yml` 전체 gate를 한 번 더 성공 확인**하고 종료한다. 최종 run ID를 기록하기 위한 추가 doc-only commit은 만들지 않는다. 다음 재개 시 branch HEAD, `master`, 최신 successful clean canonical run을 먼저 확인한다.
+cleanup/docs 뒤 **clean HEAD canonical `ci.yml` 전체 gate를 한 번 더 성공 확인**하고 종료한다.
+
+최종 clean run ID를 기록하기 위한 추가 doc-only commit은 만들지 않는다. 다음 재개 시 branch HEAD, `master`, latest successful clean canonical run부터 확인한다.
