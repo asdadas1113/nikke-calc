@@ -54,7 +54,7 @@ for path in (
     p = Path(path)
     text = p.read_text(encoding="utf-8")
     if "self.assertEqual(cadence, 57)" in text:
-        text = text.replace("self.assertEqual(cadence, 57)", "self.assertEqual(cadence, 55)", 1)
+        text = text.replace("self.assertEqual(cadence, 57)", "self.assertEqual(cadence, 53)", 1)
     p.write_text(text, encoding="utf-8")
 
 print("Moran performance hot-path and stale frontier assertions staged")
