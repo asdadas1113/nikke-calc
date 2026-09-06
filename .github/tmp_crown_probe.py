@@ -8,47 +8,36 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from context import snapshot, spec
-from fast_engine.engine.compiler import compile_moris_squad
-from fast_engine.engine.dispatcher import TriggerDispatcher
-from fast_engine.engine.target_scope import possible_ally_targets
+from calculator.timeline import simulate
 
+team='레이드_아스카루드밀라'
+row=snapshot.SQUADS[team]
+moris=spec.build_squad(list(row['members']))
+result=simulate(moris, config={'duration':60.0,'rng_mode':'expected'}, verbose=True)
+print('TEAM', team, row['members'])
+print('INSTANT HEALS')
+for x in result.log.instant_events:
+    if x.name in {'우정의 서포트 2','로얄 에타이어 3'}:
+        print(vars(x))
+print('ROYAL 4 ACTIVATIONS')
+for x in result.log.buff_events:
+    if x.name=='로얄 에타이어 4' and x.kind=='activate':
+        print(vars(x))
 
-def describe(effect, squad):
-    return {
-        'id': effect.effect_id,
-        'actor': squad.members[effect.actor].name,
-        'name': effect.name,
-        'stat': effect.stat,
-        'type': effect.effect_type,
-        'value': effect.value,
-        'target': effect.target,
-        'targets': tuple(squad.members[i].name for i in possible_ally_targets(squad, effect)),
-        'duration': effect.duration,
-        'max_stack': effect.max_stack,
-        'parameters': dict(effect.parameters),
-        'conditions': tuple(repr(x) for x in effect.condition_rules),
-        'triggers': tuple(repr(x) for x in effect.triggers),
-        'self_stack_owned': TriggerDispatcher._self_stack_heal_chain_shape_supported(squad, effect) if (effect.stat or '') == 'heal_hp_pct' else False,
-        'runtime_exec': TriggerDispatcher.is_executable_effect(effect),
-    }
-
-for label, row in snapshot.SQUADS.items():
-    if str(label).startswith('지그_'):
+patterns=('lowest_hp','LOWEST_HP','allies_lowest_hp','hp_ratio','current_hp')
+for path in ('calculator/effects.py','calculator/targets.py','calculator/timeline.py','calculator/state.py','fast_engine/engine/targets.py','fast_engine/engine/target_scope.py'):
+    p=ROOT/path
+    if not p.exists():
         continue
-    members = tuple(row.get('members') or ())
-    if len(members) != 5 or '크라운' not in members:
+    lines=p.read_text(encoding='utf-8').splitlines()
+    hits=[i for i,line in enumerate(lines,1) if any(q in line for q in patterns)]
+    if not hits:
         continue
-    squad = compile_moris_squad(spec.build_squad(list(members)))
-    crown = next(i for i,m in enumerate(squad.members) if m.name == '크라운')
-    consumer = next(e for e in squad.members[crown].effects if e.name == '로얄 에타이어 4')
-    providers = tuple(
-        e for e in squad.effects
-        if e.effect_id != consumer.effect_id
-        and (e.stat or '') in {'heal_hp_pct','lifesteal_pct'}
-        and crown in possible_ally_targets(squad, e)
-    )
-    print('\n===', label, '===')
-    print('HEAL_DEP_SAFE', TriggerDispatcher.heal_received_dependency_score_safe(squad, consumer))
-    print('PROVIDER_COUNT', len(providers))
-    for p in providers:
-        print('PROVIDER', describe(p, squad))
+    print('\nFILE',path,'HITS',hits)
+    shown=set()
+    for h in hits:
+        a=max(1,h-15); b=min(len(lines),h+25)
+        if any(a>=x and b<=y for x,y in shown): continue
+        shown.add((a,b))
+        print('---',a,b,'---')
+        for n in range(a,b+1): print(f'{n:04d}: {lines[n-1]}')
