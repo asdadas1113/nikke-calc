@@ -44,6 +44,19 @@ jobs:
               if "write_text(r'''" in normalized and "''', encoding='utf-8')" not in normalized:
                   in_raw_file = True
           script = '\n'.join(out) + '\n'
+
+          old = '''        passives = tuple(\n            row for row in squad.members[actor].effects\n            if any(\n                rule.mode is ConditionMode.SELF_STATE and rule.key == provider.name\n                for rule in row.condition_rules\n            )\n        )\n        if len(passives) != 2 or not all(\n            _passive_shape(row, actor=actor, provider_name=provider.name)\n            for row in passives\n        ):\n            continue\n'''
+          new = '''        passives = tuple(\n            row for row in squad.members[actor].effects\n            if _passive_shape(row, actor=actor, provider_name=provider.name)\n        )\n        if len(passives) != 2:\n            continue\n'''
+          if old not in script:
+              raise SystemExit('passive proof transform target not found')
+          script = script.replace(old, new, 1)
+
+          old = '''        allowed_condition_ids = {\n            control.effect_id,\n            remover.effect_id,\n            *(row.effect_id for row in passives),\n        }\n        if any(\n            row.effect_id not in allowed_condition_ids\n            and any(rule.key == provider.name for rule in row.condition_rules)\n            for row in effects\n        ):\n            continue\n'''
+          new = '''        allowed_condition_ids = {\n            control.effect_id,\n            remover.effect_id,\n            *(row.effect_id for row in passives),\n        }\n        if any(\n            row.effect_id not in allowed_condition_ids\n            and not (\n                row.actor == actor\n                and row.parameters.get("scaling_ref") == provider.name\n                and finite_reference_stack_capture_shape(row)\n            )\n            and any(rule.key == provider.name for rule in row.condition_rules)\n            for row in effects\n        ):\n            continue\n'''
+          if old not in script:
+              raise SystemExit('condition proof transform target not found')
+          script = script.replace(old, new, 1)
+
           exec(compile(script, '<maid-mast-patch>', 'exec'), {'__name__': '__main__'})
           PY
       - name: Focused Maid Mast tests
