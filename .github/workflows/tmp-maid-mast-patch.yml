@@ -1,0 +1,693 @@
+name: tmp-maid-mast-patch
+
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+    paths:
+      - .github/workflows/tmp-maid-mast-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fast-engine-phase2-20260901
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply Maid Mast lifecycle patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one replacement, found {count}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          Path('fast_engine/engine/control_lifecycle.py').write_text(r'''from __future__ import annotations
+
+from dataclasses import dataclass
+
+from .conditions import ConditionMode
+from .model import CompiledSquad
+from .reference_stack import finite_reference_stack_capture_shape
+from .target_scope import possible_ally_targets
+from .targets import TargetMode
+from .triggers import TriggerMode
+
+_EPS = 1e-9
+_STACK_MUTATOR_STATS = frozenset({
+    "remove_named_buff",
+    "buff_stack_add",
+    "buff_stack_remove",
+    "buff_stack_init",
+    "debuff_stack_add",
+    "debuff_stack_remove",
+})
+
+
+@dataclass(frozen=True, slots=True)
+class OwnedControlLifecycle:
+    """Compile-time ownership proof for one exact self-control transaction."""
+
+    actor: int
+    stack_effect_id: int
+    control_effect_id: int
+    remover_effect_id: int
+    passive_effect_ids: tuple[int, ...]
+
+
+def _one_event(effect, key: str) -> bool:
+    return (
+        len(effect.triggers) == 1
+        and effect.triggers[0].mode is TriggerMode.EVENT
+        and effect.triggers[0].event_key == key
+    )
+
+
+def _stack3_condition(effect, name: str) -> bool:
+    return (
+        len(effect.condition_rules) == 1
+        and effect.condition_rules[0].mode is ConditionMode.SELF_STACK_AT_LEAST
+        and effect.condition_rules[0].key == name
+        and abs(float(effect.condition_rules[0].value or 0.0) - 3.0) <= _EPS
+    )
+
+
+def _passive_shape(effect, *, actor: int, provider_name: str) -> bool:
+    if effect.name not in {"파이레츠 하트", "파이레츠 하트 2"}:
+        return False
+    if not (
+        effect.actor == actor
+        and effect.effect_type == "buff"
+        and effect.target_spec.mode is TargetMode.ALL_ALLIES
+        and effect.target_spec.runtime_supported
+        and effect.duration in (None, -1, -1.0)
+        and effect.max_stack in (None, 1, 1.0)
+        and effect.max_trigger is None
+        and effect.tick_interval is None
+        and not effect.parameters
+        and len(effect.condition_rules) == 1
+        and effect.condition_rules[0].mode is ConditionMode.SELF_STATE
+        and effect.condition_rules[0].key == provider_name
+        and len(effect.triggers) == 1
+        and effect.triggers[0].mode is TriggerMode.EVENT
+        and effect.triggers[0].event_key == "battle_start"
+        and effect.triggers[0].raw == "passive"
+    ):
+        return False
+    return (effect.stat or "") in {"crit_rate", "atk_caster_based_pct"}
+
+
+def _weapon_shape_supported(squad: CompiledSquad, actor: int) -> bool:
+    member = squad.members[actor]
+    weapon = member.weapon
+    return (
+        str(member.weapon_type) == "MG"
+        and str(weapon.get("fire_mode") or "") == "auto_warmup"
+        and not weapon.get("is_clip")
+        and not weapon.get("cover_during_delay")
+        and not weapon.get("control")
+    )
+
+
+def certified_stack3_self_stun_remove_lifecycles(
+    squad: CompiledSquad,
+) -> tuple[OwnedControlLifecycle, ...]:
+    """Own only the exact Maid-Mast stack-3 hangover/removal dependency graph.
+
+    Character names never participate. The proof is deliberately shape- and
+    state-name-specific so generic stun/remove families remain fail-closed.
+    """
+
+    out: list[OwnedControlLifecycle] = []
+    effects = tuple(squad.effects)
+    for provider in effects:
+        if not (
+            provider.name == "취기"
+            and provider.effect_type == "buff"
+            and (provider.stat or "") == "accuracy_pct"
+            and provider.polarity == "harmful"
+            and provider.target_spec.mode is TargetMode.SELF
+            and provider.target_spec.runtime_supported
+            and provider.value is not None
+            and abs(float(provider.value) + 20.0) <= _EPS
+            and provider.duration in (None, -1, -1.0)
+            and abs(float(provider.max_stack or 0.0) - 3.0) <= _EPS
+            and provider.max_trigger is None
+            and provider.tick_interval is None
+            and not provider.parameters
+            and not provider.condition_rules
+            and _one_event(provider, "burst_enter:1")
+        ):
+            continue
+        actor = provider.actor
+        if tuple(possible_ally_targets(squad, provider)) != (actor,):
+            continue
+        if sum(1 for row in effects if row.name == provider.name) != 1:
+            continue
+        if not _weapon_shape_supported(squad, actor):
+            continue
+        if any(
+            row.effect_type == "weapon_change"
+            and actor in possible_ally_targets(squad, row)
+            for row in effects
+        ):
+            continue
+
+        controls = tuple(
+            row for row in squad.members[actor].effects
+            if row.name == "숙취"
+            and row.effect_type == "buff"
+            and (row.stat or "") == "stun"
+            and row.polarity == "harmful"
+            and row.target_spec.mode is TargetMode.SELF
+            and row.target_spec.runtime_supported
+            and row.value is None
+            and row.duration is not None
+            and abs(float(row.duration) - 10.0) <= _EPS
+            and row.max_stack in (None, 1, 1.0)
+            and row.max_trigger is None
+            and row.tick_interval is None
+            and not row.parameters
+            and _stack3_condition(row, provider.name)
+            and _one_event(row, "full_burst_end")
+        )
+        removers = tuple(
+            row for row in squad.members[actor].effects
+            if row.name == "파이레츠 스피릿 3"
+            and row.effect_type == "instant"
+            and (row.stat or "") == "remove_named_buff"
+            and row.target_spec.mode is TargetMode.SELF
+            and row.target_spec.runtime_supported
+            and row.value is None
+            and row.duration is None
+            and row.max_stack is None
+            and row.max_trigger is None
+            and row.tick_interval is None
+            and set(row.parameters) == {"target_effect"}
+            and row.parameters.get("target_effect") == provider.name
+            and _stack3_condition(row, provider.name)
+            and _one_event(row, "full_burst_end")
+        )
+        if len(controls) != 1 or len(removers) != 1:
+            continue
+        control, remover = controls[0], removers[0]
+        actor_rows = squad.members[actor].effects
+        control_pos = actor_rows.index(control)
+        remover_pos = actor_rows.index(remover)
+        if remover_pos != control_pos + 1:
+            continue
+
+        # No competing control/immunity may affect this actor.
+        conflict = False
+        for row in effects:
+            targets = set(possible_ally_targets(squad, row))
+            if row.effect_id != control.effect_id and (row.stat or "") == "stun" and actor in targets:
+                conflict = True
+                break
+            if (row.stat or "") == "stun_immune" and actor in targets:
+                conflict = True
+                break
+        if conflict:
+            continue
+
+        passives = tuple(
+            row for row in squad.members[actor].effects
+            if any(
+                rule.mode is ConditionMode.SELF_STATE and rule.key == provider.name
+                for rule in row.condition_rules
+            )
+        )
+        if len(passives) != 2 or not all(
+            _passive_shape(row, actor=actor, provider_name=provider.name)
+            for row in passives
+        ):
+            continue
+        if {row.name for row in passives} != {"파이레츠 하트", "파이레츠 하트 2"}:
+            continue
+
+        allowed_condition_ids = {
+            control.effect_id,
+            remover.effect_id,
+            *(row.effect_id for row in passives),
+        }
+        if any(
+            row.effect_id not in allowed_condition_ids
+            and any(rule.key == provider.name for rule in row.condition_rules)
+            for row in effects
+        ):
+            continue
+
+        # Captured finite scaling_ref consumers are already independently owned;
+        # they are intentionally allowed to outlive removal of the source state.
+        bad_reference = False
+        for row in effects:
+            if row.parameters.get("scaling_ref") != provider.name:
+                continue
+            if row.actor != actor or not finite_reference_stack_capture_shape(row):
+                bad_reference = True
+                break
+        if bad_reference:
+            continue
+
+        # The paired remover is the only direct named mutator. Target-less stack
+        # mutators are also rejected if their ally cohort could touch this actor.
+        bad_mutator = False
+        for row in effects:
+            stat = row.stat or ""
+            if row.effect_id == remover.effect_id:
+                continue
+            if row.parameters.get("target_effect") == provider.name:
+                bad_mutator = True
+                break
+            if stat in _STACK_MUTATOR_STATS and not row.parameters.get("target_effect"):
+                if actor in possible_ally_targets(squad, row):
+                    bad_mutator = True
+                    break
+        if bad_mutator:
+            continue
+
+        state_end_key = f"event:state_end:{provider.name}"
+        named_event_key = f"event:{provider.name}"
+        if any(
+            row.effect_id not in {control.effect_id, remover.effect_id}
+            and any((rule.event_key or "") in {state_end_key, named_event_key} for rule in row.triggers)
+            for row in effects
+        ):
+            continue
+
+        out.append(
+            OwnedControlLifecycle(
+                actor=actor,
+                stack_effect_id=provider.effect_id,
+                control_effect_id=control.effect_id,
+                remover_effect_id=remover.effect_id,
+                passive_effect_ids=tuple(sorted(row.effect_id for row in passives)),
+            )
+        )
+    return tuple(out)
+''', encoding='utf-8')
+
+          replace_once(
+              'fast_engine/engine/effects.py',
+              '''    def has_stat(self, target: int, stat: str, *, now: float) -> bool:\n        self._materialize_pending_stat(stat, now)\n        return bool(self._active_keys(self._by_target_stat, target, stat, now))\n''',
+              '''    def active_control_until(\n        self,\n        target: int,\n        effect_ids,\n        *,\n        now: float,\n    ) -> float | None:\n        \"\"\"Return the latest end of any owned active control on ``target``.\n\n        The caller supplies compile-time-certified effect ids. ActiveEffect's\n        half-open lifetime makes equality at the returned end immediately\n        available without a frame loop.\n        \"\"\"\n\n        selected = frozenset(int(effect_id) for effect_id in effect_ids)\n        if not selected:\n            return None\n        ends = [\n            active.expires_at\n            for active in self._active.values()\n            if active.target == int(target)\n            and active.effect_id in selected\n            and active.active(now)\n        ]\n        return max(ends) if ends else None\n\n    def has_stat(self, target: int, stat: str, *, now: float) -> bool:\n        self._materialize_pending_stat(stat, now)\n        return bool(self._active_keys(self._by_target_stat, target, stat, now))\n'''
+          )
+
+          replace_once(
+              'fast_engine/engine/dispatcher.py',
+              'from .conditions import ConditionEvaluator, ConditionMode, SignalContext\n',
+              'from .conditions import ConditionEvaluator, ConditionMode, SignalContext\nfrom .control_lifecycle import certified_stack3_self_stun_remove_lifecycles\n'
+          )
+          replace_once(
+              'fast_engine/engine/dispatcher.py',
+              '        "_force_reload_sink", "_named_event_names_needed",\n',
+              '        "_force_reload_sink", "_named_event_names_needed", "_control_lifecycles",\n        "_control_effect_ids", "_control_remover_ids",\n'
+          )
+          replace_once(
+              'fast_engine/engine/dispatcher.py',
+              '        self._effect_table = tuple(squad.effects)\n        self.effects.enable_finite_reference_stack_capture(\n',
+              '        self._effect_table = tuple(squad.effects)\n        self._control_lifecycles = certified_stack3_self_stun_remove_lifecycles(squad)\n        self._control_effect_ids = frozenset(\n            row.control_effect_id for row in self._control_lifecycles\n        )\n        self._control_remover_ids = frozenset(\n            row.remover_effect_id for row in self._control_lifecycles\n        )\n        self.effects.enable_finite_reference_stack_capture(\n'
+          )
+          replace_once(
+              'fast_engine/engine/dispatcher.py',
+              '''    def attach_force_reload_sink(\n        self,\n        sink: Callable[[tuple[int, ...], float], bool],\n    ) -> None:\n        self._force_reload_sink = sink\n\n''',
+              '''    def attach_force_reload_sink(\n        self,\n        sink: Callable[[tuple[int, ...], float], bool],\n    ) -> None:\n        self._force_reload_sink = sink\n\n    def control_block_until(self, actor: int, now: float) -> float | None:\n        ids = tuple(\n            row.control_effect_id\n            for row in self._control_lifecycles\n            if row.actor == actor\n        )\n        return self.effects.active_control_until(actor, ids, now=now)\n\n'''
+          )
+          replace_once(
+              'fast_engine/engine/dispatcher.py',
+              '''    def is_runtime_executable_effect(self, effect: "CompiledEffect") -> bool:\n        if self._temporary_self_charge_weapon_change_runtime_supported(effect):\n''',
+              '''    def is_runtime_executable_effect(self, effect: "CompiledEffect") -> bool:\n        if effect.effect_id in self._control_effect_ids or effect.effect_id in self._control_remover_ids:\n            return True\n        if self._temporary_self_charge_weapon_change_runtime_supported(effect):\n'''
+          )
+
+          replace_once(
+              'fast_engine/engine/dynamic_rapid.py',
+              '    __slots__ = ("_cover_until",)\n',
+              '    __slots__ = ("_cover_until", "_weapon_block_until")\n'
+          )
+          replace_once(
+              'fast_engine/engine/dynamic_rapid.py',
+              '''        super().__init__(*args, **kwargs)\n        self._cover_until: dict[int, float] = {}\n''',
+              '''        super().__init__(*args, **kwargs)\n        self._cover_until: dict[int, float] = {}\n        self._weapon_block_until: Callable[[int, float], float | None] | None = None\n'''
+          )
+          replace_once(
+              'fast_engine/engine/dynamic_rapid.py',
+              '''    def _cover_end(self, actor: int) -> float:\n        return float(self._cover_until.get(actor, -1.0))\n\n    def _signature(self, actor: int, now: float) -> tuple:\n        # A bullet-lifetime activation/removal changes whether every shot must be\n        # materialized. Include its generation/remaining state so ordinary\n        # weapon sync invalidates any stale compressed boundary immediately.\n        return super()._signature(actor, now) + self.effects.dynamic_bullet_signature(\n            actor, now=now\n        )\n''',
+              '''    def _cover_end(self, actor: int) -> float:\n        return float(self._cover_until.get(actor, -1.0))\n\n    def attach_weapon_block_until(\n        self, callback: Callable[[int, float], float | None]\n    ) -> None:\n        self._weapon_block_until = callback\n\n    def _weapon_block_end(self, actor: int, now: float) -> float:\n        until = self._cover_end(actor)\n        if self._weapon_block_until is not None:\n            control_end = self._weapon_block_until(actor, now)\n            if control_end is not None:\n                until = max(until, float(control_end))\n        return until\n\n    def _signature(self, actor: int, now: float) -> tuple:\n        # Bullet lifetime and weapon-block activation/removal both invalidate a\n        # stale compressed boundary without materializing individual shots.\n        return (\n            super()._signature(actor, now)\n            + self.effects.dynamic_bullet_signature(actor, now=now)\n            + (self._weapon_block_end(actor, now),)\n        )\n'''
+          )
+          replace_once(
+              'fast_engine/engine/dynamic_rapid.py',
+              '''    def _postpone_firing_for_cover(self, st: _RapidActorState) -> bool:\n        until = self._cover_end(st.actor)\n        if st.phase == "firing" and st.phase_end < until - _EPS:\n            # Moris exits cover at the anchor frame and then may fire on that\n            # same frame. Therefore equality is not covered; only times strictly\n            # before ``until`` are postponed.\n            st.phase_end = until\n            return True\n        return False\n''',
+              '''    def _postpone_firing_for_block(self, st: _RapidActorState) -> bool:\n        until = self._weapon_block_end(st.actor, st.phase_end)\n        if st.phase == "firing" and st.phase_end < until - _EPS:\n            # Control intervals are half-open. Equality is therefore available:\n            # the first real shot may occur exactly at the unblock timestamp.\n            st.phase_end = until\n            return True\n        return False\n'''
+          )
+          p = Path('fast_engine/engine/dynamic_rapid.py')
+          text = p.read_text(encoding='utf-8')
+          if text.count('self._postpone_firing_for_cover(') != 2:
+              raise SystemExit('dynamic_rapid: unexpected cover call count')
+          p.write_text(text.replace('self._postpone_firing_for_cover(', 'self._postpone_firing_for_block('), encoding='utf-8')
+
+          replace_once(
+              'fast_engine/engine/dynamic_weapon.py',
+              '''    def attach_score_block_sink(\n        self,\n        actors: tuple[int, ...] | frozenset[int],\n        sink: Callable[[int, int, float], None],\n    ) -> None:\n        self._rapid_reload.attach_score_sink(actors, sink)\n\n''',
+              '''    def attach_score_block_sink(\n        self,\n        actors: tuple[int, ...] | frozenset[int],\n        sink: Callable[[int, int, float], None],\n    ) -> None:\n        self._rapid_reload.attach_score_sink(actors, sink)\n\n    def attach_weapon_block_until(\n        self, callback: Callable[[int, float], float | None]\n    ) -> None:\n        self._rapid_reload.attach_weapon_block_until(callback)\n\n'''
+          )
+
+          replace_once(
+              'fast_engine/engine/burst.py',
+              'from typing import Any, Mapping\n',
+              'from typing import Any, Callable, Mapping\n'
+          )
+          replace_once(
+              'fast_engine/engine/burst.py',
+              '        "full_burst_caster", "cd_applied_at_cast", "_generation", "_waiting_candidates", "_waiting_stage",\n',
+              '        "full_burst_caster", "cd_applied_at_cast", "_generation", "_waiting_candidates", "_waiting_stage",\n        "_candidate_available", "_candidate_unblock_time",\n'
+          )
+          replace_once(
+              'fast_engine/engine/burst.py',
+              '''        self._waiting_candidates: tuple[int, ...] = ()\n        self._waiting_stage: str | None = None\n\n    def start(self, scheduler: EventScheduler) -> None:\n''',
+              '''        self._waiting_candidates: tuple[int, ...] = ()\n        self._waiting_stage: str | None = None\n        self._candidate_available: Callable[[int, float], bool] | None = None\n        self._candidate_unblock_time: Callable[[int, float], float | None] | None = None\n\n    def attach_candidate_availability(\n        self,\n        available: Callable[[int, float], bool],\n        unblock_time: Callable[[int, float], float | None],\n    ) -> None:\n        self._candidate_available = available\n        self._candidate_unblock_time = unblock_time\n\n    def _candidate_is_available(self, actor: int, now: float) -> bool:\n        return self._candidate_available is None or bool(self._candidate_available(actor, now))\n\n    def _candidate_ready_time(self, actor: int, now: float) -> float:\n        ready = float(self.ready_at[actor])\n        if self._candidate_is_available(actor, now):\n            return ready\n        if self._candidate_unblock_time is None:\n            return inf\n        unblock = self._candidate_unblock_time(actor, now)\n        if unblock is None:\n            return inf\n        return max(ready, float(unblock))\n\n    def start(self, scheduler: EventScheduler) -> None:\n'''
+          )
+          replace_once(
+              'fast_engine/engine/burst.py',
+              '''        if actor in self._waiting_candidates and self._waiting_stage is not None:\n            earliest = min(self.ready_at[a] for a in self._waiting_candidates)\n            self._schedule(scheduler, max(now, earliest), EventKind.BURST_ACTIVATE,\n                           stage=self._waiting_stage)\n''',
+              '''        if actor in self._waiting_candidates and self._waiting_stage is not None:\n            earliest = min(\n                self._candidate_ready_time(a, now) for a in self._waiting_candidates\n            )\n            if earliest < inf:\n                self._schedule(scheduler, max(now, earliest), EventKind.BURST_ACTIVATE,\n                               stage=self._waiting_stage)\n'''
+          )
+          replace_once(
+              'fast_engine/engine/burst.py',
+              '''        actor = next((a for a in candidates if now >= self.ready_at[a] - _EPS), None)\n        if actor is None:\n            earliest = min(self.ready_at[a] for a in candidates)\n            self._waiting_candidates = candidates\n            self._waiting_stage = stage\n            self.phase = f"reenter:{stage}" if reenter else f"stage:{stage}"\n            self._schedule(\n                scheduler, max(now, earliest),\n                EventKind.BURST_REENTER if reenter else EventKind.BURST_ACTIVATE,\n                stage=stage,\n            )\n            return []\n''',
+              '''        actor = next((\n            a for a in candidates\n            if now >= self.ready_at[a] - _EPS and self._candidate_is_available(a, now)\n        ), None)\n        if actor is None:\n            earliest = min(self._candidate_ready_time(a, now) for a in candidates)\n            self._waiting_candidates = candidates\n            self._waiting_stage = stage\n            self.phase = f"reenter:{stage}" if reenter else f"stage:{stage}"\n            if earliest < inf:\n                self._schedule(\n                    scheduler, max(now, earliest),\n                    EventKind.BURST_REENTER if reenter else EventKind.BURST_ACTIVATE,\n                    stage=stage,\n                )\n            return []\n'''
+          )
+
+          replace_once(
+              'fast_engine/engine/burst_runtime.py',
+              '''        self.weapons = MultiSignalChargeCadenceRuntime(\n            squad,\n            self.dispatcher.effects,\n            self.state,\n            self.scheduler,\n            duration=policy.duration,\n            effect_filter=self.dispatcher.is_runtime_executable_effect,\n        )\n        if self.damage_sink is not None:\n''',
+              '''        self.weapons = MultiSignalChargeCadenceRuntime(\n            squad,\n            self.dispatcher.effects,\n            self.state,\n            self.scheduler,\n            duration=policy.duration,\n            effect_filter=self.dispatcher.is_runtime_executable_effect,\n        )\n        self.weapons.attach_weapon_block_until(self.dispatcher.control_block_until)\n        self.machine.attach_candidate_availability(\n            lambda actor, now: self.dispatcher.control_block_until(actor, now) is None,\n            self.dispatcher.control_block_until,\n        )\n        if self.damage_sink is not None:\n'''
+          )
+
+          replace_once(
+              'fast_engine/engine/score.py',
+              'from .conditions import ConditionMode\n',
+              'from .conditions import ConditionMode\nfrom .control_lifecycle import certified_stack3_self_stun_remove_lifecycles\n'
+          )
+          replace_once(
+              'fast_engine/engine/score.py',
+              '''    actors.update(a for a in _dynamic_max_ammo_score_actors(squad) if str(squad.members[a].weapon.get("fire_mode") or "") in {"auto", "auto_warmup"})\n    return tuple(sorted(actors))\n''',
+              '''    actors.update(a for a in _dynamic_max_ammo_score_actors(squad) if str(squad.members[a].weapon.get("fire_mode") or "") in {"auto", "auto_warmup"})\n    actors.update(\n        row.actor\n        for row in certified_stack3_self_stun_remove_lifecycles(squad)\n        if _rapid_actor_score_safe(squad, row.actor)\n    )\n    return tuple(sorted(actors))\n'''
+          )
+          replace_once(
+              'fast_engine/engine/score.py',
+              '''    if _full_burst_end_stack_condition_unreachable_after_owned_decrement(\n        squad, effect\n    ):\n        return False\n    if TriggerDispatcher._full_burst_end_self_direct_remove_dependency_supported(\n''',
+              '''    if _full_burst_end_stack_condition_unreachable_after_owned_decrement(\n        squad, effect\n    ):\n        return False\n    if any(\n        row.remover_effect_id == effect.effect_id\n        and _rapid_actor_score_safe(squad, row.actor)\n        for row in certified_stack3_self_stun_remove_lifecycles(squad)\n    ):\n        return False\n    if TriggerDispatcher._full_burst_end_self_direct_remove_dependency_supported(\n'''
+          )
+
+          # Flip the old public expectation: only the exact reachable lifecycle is opened.
+          replace_once(
+              'fast_engine/tests/test_damage_maid_mast_stack_mutation.py',
+              'from fast_engine.engine.compiler import compile_moris_squad\n',
+              'from fast_engine.engine.compiler import compile_moris_squad\nfrom fast_engine.engine.control_lifecycle import certified_stack3_self_stun_remove_lifecycles\n'
+          )
+          replace_once(
+              'fast_engine/tests/test_damage_maid_mast_stack_mutation.py',
+              '''    def test_no_anchor_reachable_remover_stays_fail_closed(self):\n        for label in self.NO_ANCHOR_PUBLIC:\n            with self.subTest(label=label):\n                _moris, compiled = self._compiled(label)\n                remover = self._effect(compiled, '마스트 : 로망틱 메이드', '파이레츠 스피릿 3')\n                self.assertFalse(\n                    _full_burst_end_stack_condition_unreachable_after_owned_decrement(\n                        compiled, remover\n                    )\n                )\n                self.assertIn(\n                    'normal_state:마스트 : 로망틱 메이드:파이레츠 스피릿 3:remove_named_buff',\n                    set(static_score_blockers(compiled)),\n                )\n''',
+              '''    def test_no_anchor_reachable_remover_is_owned_only_as_full_lifecycle(self):\n        for label in self.NO_ANCHOR_PUBLIC:\n            with self.subTest(label=label):\n                _moris, compiled = self._compiled(label)\n                remover = self._effect(compiled, '마스트 : 로망틱 메이드', '파이레츠 스피릿 3')\n                self.assertFalse(\n                    _full_burst_end_stack_condition_unreachable_after_owned_decrement(\n                        compiled, remover\n                    )\n                )\n                owned = certified_stack3_self_stun_remove_lifecycles(compiled)\n                self.assertEqual(len(owned), 1)\n                self.assertEqual(owned[0].remover_effect_id, remover.effect_id)\n                self.assertNotIn(\n                    'normal_state:마스트 : 로망틱 메이드:파이레츠 스피릿 3:remove_named_buff',\n                    set(static_score_blockers(compiled)),\n                )\n'''
+          )
+
+          Path('fast_engine/tests/test_damage_maid_mast_hangover_lifecycle.py').write_text(r'''from __future__ import annotations
+
+from dataclasses import replace
+from math import isclose
+import unittest
+
+from context import snapshot, spec
+from fast_engine.engine.burst import BurstMachine, BurstPolicy, compile_burst_policy
+from fast_engine.engine.burst_runtime import BurstRuntime
+from fast_engine.engine.compiler import compile_moris_squad
+from fast_engine.engine.control_lifecycle import certified_stack3_self_stun_remove_lifecycles
+from fast_engine.engine.dispatcher import TriggerDispatcher
+from fast_engine.engine.dynamic_rapid import DynamicRapidCadenceRuntime
+from fast_engine.engine.effects import ActiveEffectStore
+from fast_engine.engine.model import EnemyStaticProfile
+from fast_engine.engine.scheduler import EventScheduler
+from fast_engine.engine.score import _dynamic_rapid_reload_score_actors, static_score_blockers
+from fast_engine.engine.state import StateStore
+from fast_engine.engine.triggers import compile_trigger_rule
+
+
+class MaidMastHangoverLifecycleTests(unittest.TestCase):
+    PUBLIC = ('레이드_루주', '레이드_브리드디젤')
+    MAST = '마스트 : 로망틱 메이드'
+
+    @staticmethod
+    def _compiled(label='레이드_루주'):
+        members = list(snapshot.SQUADS[label]['members'])
+        moris = spec.build_squad(members)
+        return moris, compile_moris_squad(moris)
+
+    @staticmethod
+    def _effect(compiled, actor, name):
+        return next(row for row in compiled.members[actor].effects if row.name == name)
+
+    @staticmethod
+    def _append(compiled, actor, effect):
+        member = compiled.members[actor]
+        member = replace(member, effects=member.effects + (effect,))
+        return replace(
+            compiled,
+            members=tuple(member if i == actor else row for i, row in enumerate(compiled.members)),
+        )
+
+    def test_public_exact_lifecycle_is_the_only_owned_control_family(self):
+        for label in self.PUBLIC:
+            with self.subTest(label=label):
+                _moris, compiled = self._compiled(label)
+                owned = certified_stack3_self_stun_remove_lifecycles(compiled)
+                self.assertEqual(len(owned), 1)
+                row = owned[0]
+                self.assertEqual(compiled.members[row.actor].name, self.MAST)
+                control = compiled.effects[row.control_effect_id]
+                remover = compiled.effects[row.remover_effect_id]
+                self.assertEqual(control.name, '숙취')
+                self.assertEqual(control.duration, 10.0)
+                self.assertEqual(remover.name, '파이레츠 스피릿 3')
+                self.assertIn(row.actor, _dynamic_rapid_reload_score_actors(compiled))
+                self.assertNotIn(
+                    f'normal_state:{self.MAST}:파이레츠 스피릿 3:remove_named_buff',
+                    set(static_score_blockers(compiled)),
+                )
+
+    def test_runtime_activates_hangover_then_removes_only_drunk_state(self):
+        for label in self.PUBLIC:
+            with self.subTest(label=label):
+                moris, compiled = self._compiled(label)
+                policy = compile_burst_policy(
+                    moris, compiled, {'duration': 40.0, 'first_burst_time': 3.0}
+                )
+                runtime = BurstRuntime(
+                    compiled, policy, EnemyStaticProfile(duration=40.0, core_px=0.0)
+                )
+                result = runtime.run(duration=40.0)
+                row = certified_stack3_self_stun_remove_lifecycles(compiled)[0]
+                start = result.full_burst_ends[2]
+                end = runtime.dispatcher.control_block_until(row.actor, start + 1e-6)
+                self.assertIsNotNone(end)
+                self.assertAlmostEqual(end, start + 10.0, places=9)
+                self.assertIsNone(
+                    runtime.dispatcher.effects.active_control_until(
+                        row.actor, (row.control_effect_id,), now=start + 10.0
+                    )
+                )
+                self.assertEqual(
+                    runtime.dispatcher.effects.named_stack(row.actor, '취기', now=start + 1e-6),
+                    0.0,
+                )
+                self.assertTrue(
+                    runtime.dispatcher.effects.has_named_state(row.actor, '숙취', now=start + 1e-6)
+                )
+                for passive_id in row.passive_effect_ids:
+                    passive = compiled.effects[passive_id]
+                    self.assertFalse(any(
+                        active.effect_id == passive.effect_id and active.active(start + 1e-6)
+                        for active in runtime.dispatcher.effects._active.values()
+                    ))
+
+    def test_next_b1_restarts_drunk_and_passives_while_hangover_survives(self):
+        moris, compiled = self._compiled('레이드_루주')
+        policy = compile_burst_policy(moris, compiled, {'duration': 43.0, 'first_burst_time': 3.0})
+        runtime = BurstRuntime(compiled, policy, EnemyStaticProfile(duration=43.0, core_px=0.0))
+        result = runtime.run(duration=43.0)
+        row = certified_stack3_self_stun_remove_lifecycles(compiled)[0]
+        start = result.full_burst_ends[2]
+        self.assertTrue(runtime.dispatcher.effects.has_named_state(row.actor, '숙취', now=42.0))
+        self.assertEqual(runtime.dispatcher.effects.named_stack(row.actor, '취기', now=42.0), 1.0)
+        for passive_id in row.passive_effect_ids:
+            passive = compiled.effects[passive_id]
+            self.assertTrue(any(
+                active.effect_id == passive.effect_id and active.active(42.0)
+                for active in runtime.dispatcher.effects._active.values()
+            ))
+        self.assertAlmostEqual(
+            runtime.dispatcher.control_block_until(row.actor, 42.0),
+            start + 10.0,
+            places=9,
+        )
+
+    def test_generic_rapid_block_is_half_open_no_catchup_and_no_per_shot_events(self):
+        _moris, compiled = self._compiled('레이드_루주')
+        row = certified_stack3_self_stun_remove_lifecycles(compiled)[0]
+        state = StateStore.from_compiled_squad(compiled)
+        effects = ActiveEffectStore(compiled, state)
+        scheduler = EventScheduler()
+        runtime = DynamicRapidCadenceRuntime(
+            compiled, effects, state, scheduler, duration=20.0, effect_filter=lambda _e: False
+        )
+        scored = []
+        runtime.attach_score_sink((row.actor,), lambda actor, count, time: scored.append((actor, count, time)))
+        runtime.attach_weapon_block_until(
+            lambda actor, now: 10.0 if actor == row.actor and 2.0 <= now < 10.0 else None
+        )
+        runtime.start(0.0)
+        runtime.advance_to(1.999, inclusive=True)
+        before = sum(count for _actor, count, _time in scored)
+        queued_before = len(scheduler)
+        runtime.advance_to(9.999, inclusive=True)
+        self.assertEqual(sum(count for _actor, count, _time in scored), before)
+        runtime.advance_to(10.0, inclusive=True)
+        at_end = sum(count for _actor, count, _time in scored)
+        self.assertEqual(at_end, before + 1)
+        runtime.advance_to(10.2, inclusive=True)
+        after = sum(count for _actor, count, _time in scored)
+        self.assertLess(after - at_end, 20)
+        self.assertEqual(len(scheduler), queued_before)
+
+    def test_existing_reload_completion_is_not_stretched_by_weapon_block(self):
+        _moris, compiled = self._compiled('레이드_루주')
+        row = certified_stack3_self_stun_remove_lifecycles(compiled)[0]
+        state = StateStore.from_compiled_squad(compiled)
+        effects = ActiveEffectStore(compiled, state)
+        scheduler = EventScheduler()
+        runtime = DynamicRapidCadenceRuntime(
+            compiled, effects, state, scheduler, duration=20.0, effect_filter=lambda _e: False
+        )
+        runtime.attach_score_sink((row.actor,), lambda *_args: None)
+        runtime.attach_weapon_block_until(
+            lambda actor, now: 12.0 if actor == row.actor and 1.1 <= now < 12.0 else None
+        )
+        runtime.start(0.0)
+        runtime.advance_to(1.0, inclusive=False)
+        self.assertTrue(runtime.apply_force_reload((row.actor,), 1.0))
+        st = runtime._states[row.actor]
+        reload_end = st.phase_end
+        runtime.advance_to(reload_end, inclusive=True)
+        self.assertEqual(st.phase, 'firing')
+        self.assertAlmostEqual(st.phase_end, 12.0, places=9)
+        self.assertEqual(st.ammo, runtime._full_ammo(row.actor, reload_end))
+
+    def test_burst_candidate_skips_controlled_actor_or_waits_sparse_to_unblock(self):
+        _moris, compiled = self._compiled('레이드_루주')
+        row = certified_stack3_self_stun_remove_lifecycles(compiled)[0]
+        alternate = next(
+            actor for actor, member in enumerate(compiled.members)
+            if actor != row.actor and member.burst_stage == compiled.members[row.actor].burst_stage
+        )
+        stage = compiled.members[row.actor].burst_stage
+        policy = BurstPolicy(
+            duration=30.0,
+            sequence=({stage: (row.actor, alternate)},),
+        )
+        machine = BurstMachine(compiled, policy)
+        machine.attach_candidate_availability(
+            lambda actor, now: not (actor == row.actor and now < 15.0),
+            lambda actor, now: 15.0 if actor == row.actor and now < 15.0 else None,
+        )
+        scheduler = EventScheduler()
+        signals = machine._attempt_stage(stage, 5.0, scheduler)
+        self.assertTrue(any(sig.source_actor == alternate for sig in signals if sig.event_key == 'burst_cast'))
+
+        policy2 = BurstPolicy(duration=30.0, sequence=({stage: (row.actor,)},))
+        machine2 = BurstMachine(compiled, policy2)
+        machine2.attach_candidate_availability(
+            lambda actor, now: not (actor == row.actor and now < 15.0),
+            lambda actor, now: 15.0 if actor == row.actor and now < 15.0 else None,
+        )
+        scheduler2 = EventScheduler()
+        self.assertEqual(machine2._attempt_stage(stage, 5.0, scheduler2), [])
+        self.assertAlmostEqual(scheduler2.peek_time(), 15.0, places=9)
+
+    def test_extra_provider_mutator_stun_or_immunity_fail_closed(self):
+        _moris, compiled = self._compiled('레이드_루주')
+        row = certified_stack3_self_stun_remove_lifecycles(compiled)[0]
+        provider = compiled.effects[row.stack_effect_id]
+        control = compiled.effects[row.control_effect_id]
+        remover = compiled.effects[row.remover_effect_id]
+        next_id = max(effect.effect_id for effect in compiled.effects) + 1
+
+        duplicate = replace(provider, effect_id=next_id, actor=0)
+        self.assertFalse(certified_stack3_self_stun_remove_lifecycles(self._append(compiled, 0, duplicate)))
+
+        mutator = replace(
+            remover,
+            effect_id=next_id,
+            actor=0,
+            name='synthetic mutator',
+            stat='buff_stack_remove',
+            condition_rules=(),
+            triggers=(compile_trigger_rule('full_burst_end'),),
+        )
+        self.assertFalse(certified_stack3_self_stun_remove_lifecycles(self._append(compiled, 0, mutator)))
+
+        other_stun = replace(control, effect_id=next_id, name='synthetic stun')
+        self.assertFalse(certified_stack3_self_stun_remove_lifecycles(self._append(compiled, row.actor, other_stun)))
+
+        immunity = replace(control, effect_id=next_id, name='synthetic immunity', stat='stun_immune')
+        self.assertFalse(certified_stack3_self_stun_remove_lifecycles(self._append(compiled, row.actor, immunity)))
+
+    def test_state_end_consumer_and_weapon_control_shape_fail_closed(self):
+        _moris, compiled = self._compiled('레이드_루주')
+        row = certified_stack3_self_stun_remove_lifecycles(compiled)[0]
+        source = compiled.members[0].effects[0]
+        extra = replace(
+            source,
+            effect_id=max(effect.effect_id for effect in compiled.effects) + 1,
+            actor=0,
+            name='synthetic state end consumer',
+            triggers=(compile_trigger_rule('event:state_end:취기'),),
+        )
+        self.assertFalse(certified_stack3_self_stun_remove_lifecycles(self._append(compiled, 0, extra)))
+
+        member = compiled.members[row.actor]
+        weapon = dict(member.weapon)
+        weapon['control'] = {'unsupported': True}
+        member = replace(member, weapon=weapon)
+        guarded = replace(
+            compiled,
+            members=tuple(member if i == row.actor else other for i, other in enumerate(compiled.members)),
+        )
+        self.assertFalse(certified_stack3_self_stun_remove_lifecycles(guarded))
+
+
+if __name__ == '__main__':
+    unittest.main()
+''', encoding='utf-8')
+          PY
+
+      - name: Focused Maid Mast tests
+        run: |
+          python -m unittest \
+            fast_engine.tests.test_damage_maid_mast_stack_mutation \
+            fast_engine.tests.test_damage_maid_mast_hangover_lifecycle
+      - name: Commit production checkpoint
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fast_engine/engine fast_engine/tests
+          git commit -m "Fast: own Maid Mast hangover lifecycle"
+          git push origin HEAD:fast-engine-phase2-20260901
