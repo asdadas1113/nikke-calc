@@ -1394,19 +1394,41 @@ class TriggerDispatcher:
 
     @staticmethod
     def _lazy_rank_target_shape_supported(effect: "CompiledEffect") -> bool:
-        """Own simple Moris lazy ATK-rank direct buffs without bullet lifetimes."""
+        """Own simple Moris lazy ATK-rank states without bullet lifetimes.
+
+        Direct-damage buffs retain the existing generic slice. Cadence is much
+        narrower: one finite positive caster-based charge-speed buff delivered
+        to the lowest-ATK base B3 at full-burst start. Recipient weapon safety
+        is a squad-level score proof, not a runtime-shape assumption.
+        """
 
         max_stack = effect.max_stack if effect.max_stack is not None else 1.0
-        return (
+        common = (
             effect.effect_type == "buff"
             and effect.target_spec.mode in TriggerDispatcher._LAZY_ATK_RANK_MODES
-            and is_direct_damage_buff_runtime_supported(effect)
             and float(max_stack) == 1.0
             and effect.max_trigger is None
             and effect.tick_interval is None
             and effect.parameters.get("duration_bullets") is None
             and effect.parameters.get("event_scope") != "recipients"
             and not effect.condition_rules
+        )
+        if not common:
+            return False
+        if is_direct_damage_buff_runtime_supported(effect):
+            return True
+        return (
+            effect.target_spec.mode is TargetMode.LOWEST_ATK_BURST3
+            and int(effect.target_spec.count or 0) == 1
+            and (effect.stat or "") == "charge_speed_caster_based_pct"
+            and effect.value is not None
+            and float(effect.value) >= 0.0
+            and effect.duration is not None
+            and float(effect.duration) > 0.0
+            and not effect.parameters
+            and len(effect.triggers) == 1
+            and effect.triggers[0].mode is TriggerMode.EVENT
+            and effect.triggers[0].event_key == "full_burst_start"
         )
 
     def _lazy_rank_target_runtime_supported(self, effect: "CompiledEffect") -> bool:
