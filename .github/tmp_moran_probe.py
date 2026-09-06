@@ -67,8 +67,10 @@ for team in TEAMS:
     blockers = static_score_blockers(squad)
     print("all_blockers", blockers)
     print("moran_blockers", tuple(x for x in blockers if ":목단:" in x))
-    print("moran_effects")
+    print("moran_relevant_effects")
     for e in squad.members[moran_idx].effects:
+        if e.name not in {"정정당당 승부다!", "다 덤벼! 2"}:
+            continue
         print({
             "id": e.effect_id,
             "name": e.name,
@@ -92,21 +94,25 @@ print("\n=== MORIS 25s TRACE: 스쿼드4 ===")
 row = snapshot.SQUADS["스쿼드4"]
 moris = spec.build_squad(list(row["members"]))
 result = simulate(moris, config={"duration": 25.0, "rng_mode": "expected", **row.get("config", {})}, verbose=True)
-print("char_totals", result.char_damage)
-for attr in ("buff_events", "instant_events", "damage_events", "skill_events", "normal_events"):
+print("sim_result_type", type(result).__name__)
+print("sim_result_fields", getattr(result, "__dict__", {}))
+print("log_type", type(result.log).__name__)
+print("log_fields", tuple(getattr(result.log, "__dict__", {}).keys()))
+for attr in tuple(getattr(result.log, "__dict__", {}).keys()):
     seq = getattr(result.log, attr, None)
-    if seq is None:
+    if not isinstance(seq, (list, tuple)):
         continue
-    print(f"\nLOG {attr} count={len(seq)}")
-    shown = 0
+    matches = []
     for item in seq:
         text = repr(item)
-        if "목단" in text or "정정당당" in text:
+        if "목단" in text or "정정당당" in text or "다 덤벼! 2" in text:
+            matches.append(text)
+    if matches:
+        print(f"\nLOG {attr} count={len(seq)} matches={len(matches)}")
+        for text in matches[:180]:
             print(text)
-            shown += 1
-            if shown >= 120:
-                print("... truncated ...")
-                break
+        if len(matches) > 180:
+            print("... truncated ...")
 
 for path in (
     "calculator/buff_manager.py",
@@ -129,7 +135,8 @@ for path in (
             "current_weapon",
             "self_state",
             "additional_damage",
+            "bonus_damage",
             "hit_count",
         ),
-        pad=2,
+        pad=3,
     )
