@@ -28,6 +28,8 @@ jobs:
             fast_engine.tests.test_damage_state_end_named_stack \
             fast_engine.tests.test_conditional_passive_self_stack \
             fast_engine.tests.test_performance_contract
+      - name: Full Fast discovery
+        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
       - name: Patched frontier audit
         run: |
           python - <<'PY'
