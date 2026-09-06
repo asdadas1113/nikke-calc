@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
 from pprint import pformat
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from context import snapshot, spec
 from calculator.timeline import simulate
 from fast_engine.engine.compiler import compile_moris_squad
@@ -62,8 +69,6 @@ for label, members, row in source:
             for x in value:
                 text = repr(x)
                 name = getattr(x, 'name', None)
-                actor = getattr(x, 'actor', None)
-                source_name = getattr(x, 'source', None)
                 if (name and '로얄 에타이어' in str(name)) or '로얄 에타이어' in text:
                     matched.append(x)
             if matched:
