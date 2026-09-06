@@ -9,29 +9,28 @@ if str(ROOT) not in sys.path:
 
 from context import snapshot, spec
 from fast_engine.engine.compiler import compile_moris_squad
-from fast_engine.engine.score import static_score_blockers
+from fast_engine.engine.dispatcher import TriggerDispatcher
+from fast_engine.engine.target_scope import possible_ally_targets
 
 
-def excerpts(path: str, patterns: tuple[str, ...], radius: int = 14) -> None:
-    lines = (ROOT / path).read_text(encoding='utf-8').splitlines()
-    hit_lines = []
-    for i, line in enumerate(lines, start=1):
-        if any(p in line for p in patterns):
-            hit_lines.append(i)
-    ranges = []
-    for line_no in hit_lines:
-        start = max(1, line_no - radius)
-        end = min(len(lines), line_no + radius)
-        if ranges and start <= ranges[-1][1] + 1:
-            ranges[-1] = (ranges[-1][0], max(ranges[-1][1], end))
-        else:
-            ranges.append((start, end))
-    print(f'\n### {path} hits={hit_lines}')
-    for start, end in ranges:
-        print(f'--- {start}:{end} ---')
-        for n in range(start, end + 1):
-            print(f'{n:04d}: {lines[n-1]}')
-
+def describe(effect, squad):
+    return {
+        'id': effect.effect_id,
+        'actor': squad.members[effect.actor].name,
+        'name': effect.name,
+        'stat': effect.stat,
+        'type': effect.effect_type,
+        'value': effect.value,
+        'target': effect.target,
+        'targets': tuple(squad.members[i].name for i in possible_ally_targets(squad, effect)),
+        'duration': effect.duration,
+        'max_stack': effect.max_stack,
+        'parameters': dict(effect.parameters),
+        'conditions': tuple(repr(x) for x in effect.condition_rules),
+        'triggers': tuple(repr(x) for x in effect.triggers),
+        'self_stack_owned': TriggerDispatcher._self_stack_heal_chain_shape_supported(squad, effect) if (effect.stat or '') == 'heal_hp_pct' else False,
+        'runtime_exec': TriggerDispatcher.is_executable_effect(effect),
+    }
 
 for label, row in snapshot.SQUADS.items():
     if str(label).startswith('지그_'):
@@ -40,11 +39,16 @@ for label, row in snapshot.SQUADS.items():
     if len(members) != 5 or '크라운' not in members:
         continue
     squad = compile_moris_squad(spec.build_squad(list(members)))
-    crown_rows = tuple(x for x in static_score_blockers(squad) if ':크라운:' in x)
-    print('TEAM', label, 'CROWN_BLOCKERS', crown_rows)
-    for i, member in enumerate(squad.members):
-        print(' MEMBER', i, member.name, 'weapon=', member.weapon_type, 'burst=', member.burst_stage)
-
-excerpts('fast_engine/engine/score.py', ('normal_delivery:', 'skill_state_delivery:', 'heal_received', 'recipient_score_safe', 'delivery_score_safe'), 20)
-excerpts('fast_engine/engine/dispatcher.py', ('heal_received', 'recipient', 'lifetime'), 14)
-excerpts('fast_engine/engine/damage_runtime.py', ('heal_received', 'recipient', 'lifetime'), 14)
+    crown = next(i for i,m in enumerate(squad.members) if m.name == '크라운')
+    consumer = next(e for e in squad.members[crown].effects if e.name == '로얄 에타이어 4')
+    providers = tuple(
+        e for e in squad.effects
+        if e.effect_id != consumer.effect_id
+        and (e.stat or '') in {'heal_hp_pct','lifesteal_pct'}
+        and crown in possible_ally_targets(squad, e)
+    )
+    print('\n===', label, '===')
+    print('HEAL_DEP_SAFE', TriggerDispatcher.heal_received_dependency_score_safe(squad, consumer))
+    print('PROVIDER_COUNT', len(providers))
+    for p in providers:
+        print('PROVIDER', describe(p, squad))
