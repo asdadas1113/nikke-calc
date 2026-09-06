@@ -10,6 +10,19 @@ if old in text:
     text = text.replace(old, new, 1)
 p.write_text(text, encoding="utf-8")
 
+# Moris keeps a nominal auto-fire deadline separate from the 60 Hz tick that
+# observes it. Feeding the observed shot timestamp back into the deadline drifts
+# 24/s cadence by a frame after the first non-grid deadline.
+p = Path("fast_engine/engine/dynamic_reload.py")
+text = p.read_text(encoding="utf-8")
+old = "st.fire_deadline = max(float(st.fire_deadline), float(shot_time)) + inter"
+new = "st.fire_deadline = float(st.fire_deadline) + inter"
+if old not in text and new not in text:
+    raise RuntimeError("Moran nominal deadline anchor missing")
+if old in text:
+    text = text.replace(old, new, 1)
+p.write_text(text, encoding="utf-8")
+
 # The direct lifecycle test must install the same damage delivery capability that
 # production score_static_squad installs; otherwise hit_count damage consumers
 # are deliberately absent from the runtime effect filter and no sparse boundary
@@ -29,4 +42,4 @@ if new_runtime not in text:
         raise RuntimeError("Moran test runtime anchor missing")
     text = text.replace(old_runtime, new_runtime, 1)
 t.write_text(text, encoding="utf-8")
-print("Moran provenance and direct score-delivery fixes staged")
+print("Moran provenance, nominal deadline, and direct score-delivery fixes staged")
