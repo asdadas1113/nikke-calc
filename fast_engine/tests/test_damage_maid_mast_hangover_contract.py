@@ -8,7 +8,7 @@ from context import snapshot, spec
 from fast_engine.engine.burst import BurstMachine, BurstPolicy, compile_burst_policy
 from fast_engine.engine.burst_runtime import BurstRuntime
 from fast_engine.engine.compiler import compile_moris_squad
-from fast_engine.engine.conditions import compile_condition_rule
+from fast_engine.engine.conditions import compile_condition
 from fast_engine.engine.control_lifecycle import certified_stack3_self_stun_remove_lifecycles
 from fast_engine.engine.dispatcher import TriggerDispatcher
 from fast_engine.engine.dynamic_rapid import DynamicRapidCadenceRuntime
@@ -231,7 +231,7 @@ class MaidMastHangoverContractTests(unittest.TestCase):
         ambiguous_condition = replace(
             control,
             conditions=control.conditions + ('during_full_burst',),
-            condition_rules=control.condition_rules + (compile_condition_rule('during_full_burst'),),
+            condition_rules=control.condition_rules + (compile_condition('during_full_burst'),),
         )
         guarded = self._replace_effect(compiled, control.effect_id, ambiguous_condition)
         self.assertFalse(certified_stack3_self_stun_remove_lifecycles(guarded))
