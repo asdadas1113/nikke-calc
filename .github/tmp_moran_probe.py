@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import Counter
 from pathlib import Path
 import sys
 
@@ -12,45 +11,18 @@ from context import snapshot, spec
 from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.score import static_score_blockers
 
-seen: set[tuple[str, ...]] = set()
-source_cases = 0
-certified: list[str] = []
-families: Counter[str] = Counter()
-exact: Counter[str] = Counter()
-gaps: list[tuple[str, tuple[str, ...]]] = []
-for name, case in snapshot.SQUADS.items():
-    if str(name).startswith("지그_"):
-        continue
-    members = tuple(case["members"])
-    if len(members) != 5 or any(str(member).startswith("test_") for member in members):
-        continue
-    source_cases += 1
-    if members in seen:
-        continue
-    seen.add(members)
-    compiled = compile_moris_squad(spec.build_squad(list(members)))
-    blockers = static_score_blockers(compiled)
-    if blockers:
-        gaps.append((str(name), blockers))
-    else:
-        certified.append(str(name))
-    for blocker in blockers:
-        exact[blocker] += 1
-        families[blocker.split(":", 1)[0]] += 1
-
-print("FRONTIER", source_cases, len(seen), len(certified), len(gaps), flush=True)
-print("CERTIFIED", tuple(certified), flush=True)
-print("FAMILIES", dict(sorted(families.items())), flush=True)
-print("TOP_EXACT", flush=True)
-for blocker, count in exact.most_common(30):
-    print(count, blocker, flush=True)
-print("GAPS", flush=True)
-for name, blockers in gaps:
-    print(name, len(blockers), blockers, flush=True)
-
-assert source_cases == 24
-assert len(seen) == 23
-assert len(certified) == 6
-assert len(gaps) == 17
-assert families["cadence"] == 53
-assert families["weapon_change"] == 7
+for team in ("스쿼드2", "레이드_아니스서머메이든", "레이드_라피앨리스", "레이드_트리나홍련"):
+    members = list(snapshot.SQUADS[team]["members"])
+    compiled = compile_moris_squad(spec.build_squad(members))
+    print("TEAM", team, tuple(m.name for m in compiled.members), flush=True)
+    print("BLOCKERS", tuple(b for b in static_score_blockers(compiled) if "프리바티:" in b), flush=True)
+    actor = next(i for i, m in enumerate(compiled.members) if m.name == "프리바티")
+    for effect in compiled.members[actor].effects:
+        if effect.name and effect.name.startswith("EX 매거진"):
+            print("EFFECT", effect.effect_id, effect.name, flush=True)
+            print(" type", effect.effect_type, "stat", effect.stat, "target", effect.target_spec, flush=True)
+            print(" value", effect.value, "duration", effect.duration, "max_stack", effect.max_stack, "max_trigger", effect.max_trigger, flush=True)
+            print(" polarity", effect.polarity, "parameters", effect.parameters, flush=True)
+            print(" conditions", [(r.mode.value, r.key, r.value, r.raw) for r in effect.condition_rules], flush=True)
+            print(" triggers", [(r.mode.value, r.event_key, r.threshold, r.trigger_count_reducible, r.raw) for r in effect.triggers], flush=True)
+            print(" capability", effect.capability.disposition.value, effect.capability.reasons, flush=True)
