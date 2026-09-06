@@ -139,7 +139,14 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
             duration=duration,
             effect_filter=effect_filter,
         )
-        self._rapid_reload.attach_effective_weapon(self.effective_weapon)
+        if any(
+            effect.effect_type == "weapon_change"
+            and effect_filter(effect)
+            and str(squad.members[effect.actor].weapon.get("fire_mode") or "")
+            in {"auto", "auto_warmup"}
+            for effect in squad.effects
+        ):
+            self._rapid_reload.attach_effective_weapon(self.effective_weapon)
 
         actors = set(self.actors)
         for actor in interesting:

@@ -119,7 +119,7 @@ class ChargeReloadCancelControlTests(unittest.TestCase):
         )
         blockers = static_score_blockers(squad4)
         self.assertNotIn('control:홍련 : 흑영', blockers)
-        self.assertIn('weapon_change:목단:정정당당 승부다!', blockers)
+        self.assertEqual(blockers, ())
         self.assertNotIn(
             'cadence:홍련 : 흑영:화무십일홍 · 수라 2:ammo_charge_pct',
             blockers,

@@ -156,7 +156,7 @@ class FullChargeHitBulletLifetimeTests(unittest.TestCase):
                     )
 
         self.assertEqual(len(seen), 23)
-        self.assertEqual(certified, 5)
+        self.assertEqual(certified, 6)
         self.assertNotIn(self.BLOCKER, blockers)
         self.assertEqual(
             matching_shapes,

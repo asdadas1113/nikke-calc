@@ -100,12 +100,9 @@ class FiniteReferenceStackCaptureTests(unittest.TestCase):
             "목단", "마스트 : 로망틱 메이드", "홍련 : 흑영", "리버렐리오", "앵커 : 이노센트 메이드"
         ]))
         blockers = static_score_blockers(squad)
-        # Reference capture is owned, and Anchor's third-full-burst generic
-        # harmful-stack decrement now proves the stack-3 remover unreachable in
-        # this roster. Independent cadence and rank-target gaps remain.
-        self.assertIn(
-            "cadence:마스트 : 로망틱 메이드:파이레츠 스피릿 2:reload_speed_pct", blockers
-        )
+        # Reference capture is owned, Anchor's stack-3 remover is unreachable,
+        # and the Moran rapid lifecycle now makes every reload recipient safe.
+        self.assertEqual(blockers, ())
         self.assertNotIn(
             "normal_delivery:마스트 : 로망틱 메이드:파이레츠 로망 3:atk_caster_based_pct", blockers
         )
