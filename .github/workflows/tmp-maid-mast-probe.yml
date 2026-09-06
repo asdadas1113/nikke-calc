@@ -1,0 +1,98 @@
+name: tmp-maid-mast-probe
+
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+    paths:
+      - .github/workflows/tmp-maid-mast-probe.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Moris Maid Mast lifecycle trace
+        run: |
+          python - <<'PY'
+          from context import snapshot, spec
+          from calculator.timeline import simulate
+          from fast_engine.engine.compiler import compile_moris_squad
+
+          LABELS = ('레이드_루주', '레이드_브리드디젤')
+          MAST = '마스트 : 로망틱 메이드'
+          NAMES = {'취기', '숙취', '파이레츠 스피릿 3', '파이레츠 하트', '파이레츠 하트 2'}
+
+          for label in LABELS:
+              print(f'=== {label} ===')
+              members = list(snapshot.SQUADS[label]['members'])
+              moris = spec.build_squad(members)
+              compiled = compile_moris_squad(moris)
+              actor = compiled.names.index(MAST)
+              print('members=', compiled.names)
+              for effect in compiled.members[actor].effects:
+                  if effect.name in NAMES or (effect.stat or '') in {'stun', 'stun_immune'}:
+                      print('COMPILED', {
+                          'id': effect.effect_id,
+                          'name': effect.name,
+                          'type': effect.effect_type,
+                          'stat': effect.stat,
+                          'polarity': effect.polarity,
+                          'target': effect.target_spec.mode.value,
+                          'value': effect.value,
+                          'duration': effect.duration,
+                          'max_stack': effect.max_stack,
+                          'conditions': [r.raw for r in effect.condition_rules],
+                          'triggers': [r.raw for r in effect.triggers],
+                          'parameters': dict(effect.parameters),
+                          'capability': effect.capability.disposition.value,
+                          'blockers': list(effect.capability.blockers),
+                      })
+
+              result = simulate(
+                  moris,
+                  config={'duration': 90.0, 'first_burst_time': 3.0, 'rng_mode': 'expected'},
+                  seed=42,
+                  verbose=True,
+              )
+              log = result.log
+              assert log is not None
+              print('BURSTS')
+              for row in log.burst_log:
+                  if row.event in {'full_burst 시작', 'full_burst 종료'} or MAST == row.caster:
+                      print(row)
+              print('BUFF_EVENTS')
+              for row in log.buff_events:
+                  if row.caster == MAST and row.name in NAMES:
+                      print(row)
+              print('INSTANT_EVENTS')
+              for row in log.instant_events:
+                  if row.caster == MAST and row.name in NAMES:
+                      print(row)
+
+              hangovers = [
+                  row for row in log.buff_events
+                  if row.caster == MAST and row.name == '숙취' and row.kind == 'activate'
+              ]
+              normal_hits = sorted(
+                  float(hit.t) for hit in result.hits
+                  if hit.caster == MAST and hit.skill_name == '기본 공격'
+              )
+              for h in hangovers[:2]:
+                  start = float(h.t)
+                  end = float(h.expires_at)
+                  inside = [t for t in normal_hits if start <= t < end]
+                  before = [t for t in normal_hits if t < start][-5:]
+                  after = [t for t in normal_hits if t >= end][:5]
+                  print('HANGOVER', {'start': start, 'end': end, 'inside_count': len(inside), 'before': before, 'after': after})
+                  print('RELOAD_AROUND')
+                  for row in log.reload_log:
+                      if row.caster == MAST and start - 2.0 <= float(row.t) <= end + 2.0:
+                          print(row)
+              print()
+          PY
