@@ -8,6 +8,8 @@ on:
       - .github/tmp_little_mermaid_patch.py
       - .github/tmp_little_mermaid_fix.py
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   probe:
     runs-on: ubuntu-latest
@@ -29,6 +31,8 @@ jobs:
             fast_engine.tests.test_damage_maid_mast_hangover_lifecycle \
             fast_engine.tests.test_dispatch_burst_runtime \
             fast_engine.tests.test_performance_contract
+      - name: Full Fast discovery
+        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
       - name: Patched frontier audit
         run: |
           python - <<'PY'
@@ -55,3 +59,21 @@ jobs:
           print('CATEGORIES',dict(sorted(cats.items())))
           print('DELTA_BLOCKERS',static_score_blockers(compile_moris_squad(spec.build_squad(list(snapshot.SQUADS['레이드_델타']['members'])))))
           PY
+      - name: Promote semantic checkpoint
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            fast_engine/engine/enemy_replacement.py \
+            fast_engine/engine/scheduler.py \
+            fast_engine/engine/dynamic_reload.py \
+            fast_engine/engine/dynamic_rapid.py \
+            fast_engine/engine/dynamic_weapon.py \
+            fast_engine/engine/dispatcher.py \
+            fast_engine/engine/damage_runtime.py \
+            fast_engine/engine/score.py \
+            fast_engine/engine/burst_runtime.py \
+            fast_engine/tests/test_damage_little_mermaid_lifecycle.py
+          git diff --cached --check
+          git commit -m "Fast: own Little Mermaid replacement and squad-ammo lifecycle"
+          git push origin HEAD:fast-engine-phase2-20260901
