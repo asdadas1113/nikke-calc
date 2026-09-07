@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import asdict, is_dataclass
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from unittest.mock import patch
 
 from calculator.buff_manager import BuffManager
@@ -17,13 +20,11 @@ print('MEMBERS', [m.name for m in compiled.members])
 print('BLOCKERS', static_score_blockers(compiled))
 
 miranda = next(i for i,m in enumerate(compiled.members) if m.name == '미란다')
-rank_effects = []
 for e in compiled.effects:
     mode = e.target_spec.mode.value
     if mode in {'top_atk','top_atk_excl_self','lowest_atk_burst3'} or (e.stat or '') in {
         'atk_pct','atk_flat','atk_caster_based_pct','atk_from_hp_pct','atk_copy','atk_buff_mag_pct'
     }:
-        rank_effects.append(e)
         print('EFFECT', {
             'id': e.effect_id,
             'actor': compiled.members[e.actor].name,
@@ -48,8 +49,6 @@ print('WAKE', {
     'parameters': dict(wake.parameters),
 })
 
-# Moris lazy rank target oracle. The resolver is called when the lazy buff is
-# actually consumed after same-frame buffs have been registered.
 resolutions = []
 activations = []
 orig_resolve = BuffManager._resolve_target
