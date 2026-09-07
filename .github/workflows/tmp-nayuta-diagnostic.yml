@@ -37,10 +37,5 @@ jobs:
               raise SystemExit('target proof anchor missing')
           p.write_text(s.replace(old,new,1),encoding='utf-8')
           PY
-      - name: Verify ownership proof
-        run: |
-          python -m unittest \
-            fast_engine.tests.test_damage_nayuta_cross_mode_weapon_change.NayutaCrossModeWeaponChangeTests.test_public_nayuta_weapon_change_blocker_is_owned_in_all_three_memberships \
-            fast_engine.tests.test_damage_nayuta_cross_mode_weapon_change.NayutaCrossModeWeaponChangeTests.test_public_owned_scope_is_exact \
-            fast_engine.tests.test_damage_nayuta_cross_mode_weapon_change.NayutaCrossModeWeaponChangeTests.test_wider_cross_mode_shapes_fail_closed \
-            fast_engine.tests.test_damage_nayuta_cross_mode_weapon_change.NayutaCrossModeWeaponChangeTests.test_consumer_graph_must_remain_exact
+      - name: Run full focused Nayuta gate
+        run: python -m unittest fast_engine.tests.test_damage_nayuta_cross_mode_weapon_change
