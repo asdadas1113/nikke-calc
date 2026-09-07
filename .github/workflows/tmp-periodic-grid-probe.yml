@@ -23,6 +23,7 @@ jobs:
         run: |
           python -u .github/tmp_periodic_grid_apply.py
           python -u .github/tmp_periodic_grid_fix1.py
+          python -u .github/tmp_periodic_grid_regression_fix.py
       - name: Validate staged scope
         run: |
           git diff --check
