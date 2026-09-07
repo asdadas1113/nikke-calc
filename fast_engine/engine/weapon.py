@@ -18,7 +18,7 @@ from .model import CompiledCharacter, CompiledSquad
 _EPS = 1e-9
 _FRAME_RATE_CAP = 60.0
 
-_CERTIFIED_AUTO_WEAPON_CHANGE_DEFAULTS = {
+_CERTIFIED_CROSS_TYPE_WEAPON_CHANGE_DEFAULTS = {
     "SMG": {
         "fire_mode": "auto",
         "fire_rate": 24.0,
@@ -38,6 +38,22 @@ _CERTIFIED_AUTO_WEAPON_CHANGE_DEFAULTS = {
         "core_acc_slope": 1.0,
         "core_model_n": 2.55,
         "control": {},
+    },
+    "SR": {
+        "fire_mode": "charge", "fire_rate": 1.0, "post_fire_delay": 0.215,
+        "post_reload_delay": 0.0, "reload_start_delay": 0.0,
+        "cover_during_delay": False, "pellets": 1, "muzzles": 1,
+        "is_clip": False, "normal_hit_coeff": 1.0,
+        "core_base_diameter": 10.0, "core_acc_slope": 0.0,
+        "core_model_n": 2.55, "control": {},
+    },
+    "RL": {
+        "fire_mode": "charge", "fire_rate": 1.0, "post_fire_delay": 0.215,
+        "post_reload_delay": 0.0, "reload_start_delay": 0.0,
+        "cover_during_delay": False, "pellets": 1, "muzzles": 1,
+        "is_clip": False, "normal_hit_coeff": 1.0,
+        "core_base_diameter": 10.0, "core_acc_slope": 0.0,
+        "core_model_n": 2.55, "control": {},
     },
 }
 
@@ -608,6 +624,7 @@ class DynamicChargeCadenceRuntime:
     __slots__ = (
         "squad", "effects", "state", "scheduler", "duration", "effect_filter",
         "actors", "emits_each_charge_hit", "_thresholds", "_states",
+        "_mode_only_actors",
     )
 
     def __init__(
@@ -658,6 +675,24 @@ class DynamicChargeCadenceRuntime:
         )
         self._thresholds = thresholds
         self._states: dict[int, _ChargeActorState] = {}
+        self._mode_only_actors: frozenset[int] = frozenset()
+
+    def attach_mode_only_charge_actors(
+        self, actors: tuple[int, ...] | frozenset[int]
+    ) -> None:
+        if self._states:
+            raise RuntimeError("Fast mode-only charge actors must be attached before weapon start")
+        selected=frozenset(int(actor) for actor in actors)
+        if any(actor < 0 or actor >= len(self.squad.members) for actor in selected):
+            raise IndexError("Fast mode-only charge actor out of range")
+        self._mode_only_actors=selected
+        self.actors=tuple(sorted(set(self.actors) | set(selected)))
+
+    def is_mode_only_charge_active(self, actor: int, now: float) -> bool:
+        return (
+            actor in self._mode_only_actors
+            and self._weapon_change_id(actor, now) is not None
+        )
 
     def _active_sum(self, actor: int, stat: str, now: float) -> float:
         return self.effects.sum_stat(actor, stat, now=now)
@@ -679,7 +714,7 @@ class DynamicChargeCadenceRuntime:
         weapon = dict(base)
         changed_type = str(params.get("weapon_type") or weapon.get("weapon_type") or "")
         base_type = str(base.get("weapon_type") or "")
-        defaults = _CERTIFIED_AUTO_WEAPON_CHANGE_DEFAULTS.get(changed_type)
+        defaults = _CERTIFIED_CROSS_TYPE_WEAPON_CHANGE_DEFAULTS.get(changed_type)
         if changed_type != base_type and defaults is not None:
             weapon.update(defaults)
             weapon["weapon_type"] = changed_type
@@ -962,6 +997,12 @@ class DynamicChargeCadenceRuntime:
 
     def start(self, now: float = 0.0) -> None:
         for actor in self.actors:
+            if actor in self._mode_only_actors:
+                self._states[actor] = _ChargeActorState(
+                    actor=actor, ammo=0, phase="dormant", phase_end=float("inf"),
+                    charge_start=float(now), weapon_change_id=None, signature=None,
+                )
+                continue
             full = self._full_ammo(actor, now)
             charge = self._effective_charge_time(actor, now)
             st = _ChargeActorState(
@@ -980,6 +1021,48 @@ class DynamicChargeCadenceRuntime:
     def sync(self, now: float) -> None:
         for actor in self.actors:
             st = self._states[actor]
+            if actor in self._mode_only_actors:
+                current_wc_id=self._weapon_change_id(actor,now)
+                was_active=st.weapon_change_id is not None
+                is_active=current_wc_id is not None
+                if not is_active:
+                    if was_active or st.phase != "dormant":
+                        st.weapon_change_id=None
+                        st.phase="dormant"
+                        st.phase_end=float("inf")
+                        st.charge_latched=False
+                        st.pending_weapon_change_refill=False
+                        st.signature=None
+                        self._invalidate(st)
+                    continue
+                if not was_active or current_wc_id != st.weapon_change_id:
+                    st.weapon_change_id=current_wc_id
+                    st.pending_weapon_change_refill=False
+                    st.ammo=self._full_ammo(actor,now)
+                    st.signature=self._signature(actor,now)
+                    self._invalidate(st)
+                    self._enter_charge(st,float(now),float(now))
+                    self._plan(actor,now)
+                    self.state.set_ammo(actor,st.ammo)
+                    continue
+                old_signature=st.signature
+                signature=self._signature(actor,now)
+                if signature != old_signature:
+                    st.signature=signature
+                    self._invalidate(st)
+                    if (
+                        st.phase == "charging" and not st.charge_latched
+                        and old_signature is not None
+                        and (signature[4],signature[5]) != (old_signature[4],old_signature[5])
+                    ):
+                        st.phase_end=self._observe_phase_boundary(
+                            st.charge_start + self._effective_charge_time(actor,now)
+                        )
+                if st.scheduled_time is None:
+                    self._plan(actor,now)
+                self.state.set_ammo(actor,st.ammo)
+                continue
+
             while st.phase != "charging" and st.phase_end <= now + _EPS:
                 self._finish_nonshot_phase(st, st.phase_end, now)
 

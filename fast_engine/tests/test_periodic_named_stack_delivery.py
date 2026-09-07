@@ -130,7 +130,7 @@ class PeriodicNamedStackDeliveryTests(unittest.TestCase):
         self.assertEqual(rows[30][1], 30)
         self.assertEqual(rows[30][2], rows[29][2])
 
-    def test_public_nayuta_delivery_opens_but_weapon_change_stays_closed(self):
+    def test_public_nayuta_delivery_and_exact_weapon_change_are_open(self):
         rosters = (
             ("츠바이", "나유타", "프리바티", "스노우 화이트 : 헤비암즈", "리틀 머메이드"),
             ("리틀 머메이드", "벨벳", "나유타", "네온 : 비전 아이", "리버렐리오"),
@@ -148,7 +148,7 @@ class PeriodicNamedStackDeliveryTests(unittest.TestCase):
                     or blocker.startswith("skill_state_delivery:나유타:")
                 )
                 self.assertEqual(nayuta_delivery, ())
-                self.assertIn("weapon_change:나유타:기억 연소", blockers)
+                self.assertNotIn("weapon_change:나유타:기억 연소", blockers)
 
     def test_live_periodic_accuracy_still_invalidates_static_core_count_plan(self):
         squad = self._compiled()
@@ -170,10 +170,34 @@ class PeriodicNamedStackDeliveryTests(unittest.TestCase):
             parameters={},
         )
         members = list(squad.members)
+        # Isolate the periodic/core-count safety property from the separately
+        # certified Nayuta cross-mode weapon-change lifecycle. Keep every effect
+        # slot/effect_id intact because Dispatcher indexes the flattened table by
+        # compiled effect_id; only neutralize 기억 연소 inside this synthetic fixture.
+        memory_burn = next(effect for effect in owner.effects if effect.name == "기억 연소")
+        inert_memory_burn = replace(
+            memory_burn,
+            name="synthetic inert weapon change",
+            effect_type="stat",
+            stat="atk_pct",
+            target="self",
+            target_spec=replace(memory_burn.target_spec, mode=TargetMode.SELF),
+            conditions=(),
+            condition_rules=(),
+            triggers=(),
+            value=0.0,
+            duration=None,
+            max_stack=None,
+            max_trigger=None,
+            tick_interval=None,
+            parameters={},
+        )
         members[self.NAYUTA] = replace(
             owner,
             effects=tuple(
-                core_observer if effect.effect_id == base.effect_id else effect
+                core_observer if effect.effect_id == base.effect_id
+                else inert_memory_burn if effect.effect_id == memory_burn.effect_id
+                else effect
                 for effect in owner.effects
             ),
         )

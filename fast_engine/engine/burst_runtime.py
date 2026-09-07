@@ -533,6 +533,13 @@ class BurstRuntime:
                 if boundary is not None:
                     from .burst import BurstSignal
                     for count_signal in boundary.signals:
+                        if count_signal.event_key == "squad_ammo_consume":
+                            self.dispatcher.dispatch_team_hit(
+                                count_signal.event_key, time=event.time,
+                                attacker=boundary.actor, context=SignalContext(),
+                                count_increment=count_signal.count_increment,
+                            )
+                            continue
                         # Moris evaluates the `core_hit` condition attached to a
                         # raw full_charge_hit from target core presence, while
                         # ordinary normal-hit core damage still uses the expected

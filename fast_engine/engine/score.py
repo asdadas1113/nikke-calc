@@ -12,6 +12,7 @@ from .damage_policy import (
     is_direct_damage_buff_runtime_supported,
     is_static_element_override_score_supported,
 )
+from .damage import HitSpec, expected_damage
 from .damage_state import DamageTermResolver
 from .dispatcher import TriggerDispatcher
 from .enemy_replacement import certified_enemy_received_damage_replacements
@@ -304,6 +305,83 @@ def _temporary_self_rapid_weapon_change_score_supported(
     return True
 
 
+def _temporary_self_rapid_to_charge_skill_weapon_change_score_supported(
+    squad: CompiledSquad, effect
+) -> bool:
+    if not TriggerDispatcher._temporary_self_rapid_to_charge_skill_weapon_change_shape_supported(effect):
+        return False
+    actor=effect.actor
+    member=squad.members[actor]
+    if not (
+        str(member.weapon.get("fire_mode") or "") == "auto"
+        and not member.weapon.get("control")
+        and not member.weapon.get("is_clip")
+        and not member.weapon.get("cover_during_delay")
+        and member.burst_cooldown is not None
+        and float(member.burst_cooldown) + 1e-9 >= float(effect.duration or 0.0)
+        and effect.name
+    ):
+        return False
+    related=tuple(
+        other for other in squad.effects
+        if other.effect_type == "weapon_change"
+        and actor in _possible_ally_targets(squad,other)
+    )
+    if len(related) != 1 or related[0].effect_id != effect.effect_id:
+        return False
+    name=effect.name
+    consumers=[]
+    for other in squad.effects:
+        if other.effect_id == effect.effect_id:
+            continue
+        references=(
+            any(rule.key == name for rule in other.condition_rules)
+            or any((rule.event_key or "") == f"event:state_end:{name}" for rule in other.triggers)
+            or other.parameters.get("target_effect") == name
+            or other.parameters.get("scaling_ref") == name
+        )
+        if references:
+            consumers.append(other)
+    if len(consumers) != 2:
+        return False
+    seen=set()
+    for consumer in consumers:
+        stat=consumer.stat or ""
+        target_mode=consumer.target_spec.mode.value
+        if not (
+            consumer.actor == actor
+            and consumer.effect_type == "damage"
+            and stat in {"damage","bonus_damage"}
+            and stat not in seen
+            and target_mode == "enemy"
+            and consumer.target_spec.runtime_supported
+            and consumer.value is not None and float(consumer.value) >= 0.0
+            and consumer.duration is None
+            and consumer.max_stack is None
+            and consumer.max_trigger is None
+            and consumer.tick_interval is None
+            and not consumer.parameters
+            and len(consumer.condition_rules) == 1
+            and consumer.condition_rules[0].mode is ConditionMode.SELF_STATE
+            and consumer.condition_rules[0].key == name
+            and len(consumer.triggers) == 1
+            and consumer.triggers[0].mode is TriggerMode.EVENT
+            and consumer.triggers[0].event_key == "full_charge_hit"
+        ):
+            return False
+        seen.add(stat)
+    if seen != {"damage","bonus_damage"}:
+        return False
+    # Additional raw post-shot consumers would widen ordering/lifetime semantics.
+    for other in squad.members[actor].effects:
+        if other in consumers:
+            continue
+        if any(rule.event_key in {"full_charge_hit","on_attack"} for rule in other.triggers):
+            if TriggerDispatcher.is_executable_effect(other):
+                return False
+    return True
+
+
 def _charge_actor_score_safe(squad: CompiledSquad, actor: int) -> bool:
     """Safety contract for per-shot dynamic SR/RL score ownership."""
 
@@ -387,7 +465,10 @@ def _rapid_actor_score_safe(
     )
     if weapon_changes and not (
         len(weapon_changes) == 1
-        and _temporary_self_rapid_weapon_change_score_supported(squad, weapon_changes[0])
+        and (
+            _temporary_self_rapid_weapon_change_score_supported(squad, weapon_changes[0])
+            or _temporary_self_rapid_to_charge_skill_weapon_change_score_supported(squad, weapon_changes[0])
+        )
     ):
         return False
 
@@ -753,9 +834,14 @@ def _dynamic_charge_bullet_lifetime_score_actors(
 
 
 def _dynamic_charge_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
-    actors: set[int] = set()
+    cross={
+        effect.actor for effect in squad.effects
+        if effect.effect_type == "weapon_change"
+        and _temporary_self_rapid_to_charge_skill_weapon_change_score_supported(squad,effect)
+    }
+    actors: set[int] = set(cross)
     charge = set(_charge_actor_indexes(squad))
-    if not charge:
+    if not charge and not cross:
         return ()
     for effect in squad.effects:
         if (
@@ -813,7 +899,10 @@ def _dynamic_rapid_reload_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
         effect.actor
         for effect in squad.effects
         if effect.effect_type == "weapon_change"
-        and _temporary_self_rapid_weapon_change_score_supported(squad, effect)
+        and (
+            _temporary_self_rapid_weapon_change_score_supported(squad, effect)
+            or _temporary_self_rapid_to_charge_skill_weapon_change_score_supported(squad,effect)
+        )
         and _rapid_actor_score_safe(squad, effect.actor)
     )
     return tuple(sorted(actors))
@@ -1430,6 +1519,7 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
             if not (
                 _temporary_self_charge_weapon_change_score_supported(squad, effect)
                 or _temporary_self_rapid_weapon_change_score_supported(squad, effect)
+                or _temporary_self_rapid_to_charge_skill_weapon_change_score_supported(squad,effect)
             ):
                 blockers.append(f"weapon_change:{owner}:{effect.name or 'unnamed'}")
             continue
@@ -1658,7 +1748,34 @@ class StaticNormalAttackObserver:
         )
 
     def _score_dynamic_charge_shot(self, actor: int, time: float) -> None:
-        self._score_shots(actor, 1, eval_time=float(time))
+        when=float(time)
+        if not self.runtime.weapons.is_skill_weapon_mode(actor,when):
+            self._score_shots(actor,1,eval_time=when)
+            return
+        member=self.runtime.squad.members[actor]
+        weapon=self.runtime.weapons.effective_weapon(actor,when)
+        terms=self.resolver.resolve(actor,now=when)
+        core_prob=self.runtime.enemy.core_rate_for_weapon(
+            weapon,accuracy_pct=terms.accuracy_pct
+        )
+        self.char_total[actor] += expected_damage(
+            base_atk=member.base_atk, enemy_def=self.runtime.enemy.defense,
+            core_dmg_mult=float(weapon.get("core_dmg_mult",200.0)),
+            full_charge_mult=float(weapon.get("full_charge_mult",100.0)),
+            terms=terms,
+            hit=HitSpec(
+                coeff=float(weapon.get("damage_coeff",0.0)),
+                is_normal_atk=False, is_weapon_mode_skill=True,
+                core_prob=core_prob,
+                is_full_burst=self.runtime.machine.phase == "full_burst",
+                is_full_charge=True,
+                is_pierce_damage=terms.pierce_enabled,
+                is_armor_break_damage=terms.armor_break_enabled,
+                # Moris routes projectile-explosion by the base weapon, not the
+                # temporary mode weapon.
+                is_projectile_explosion=str(member.weapon.get("weapon_type") or member.weapon_type) == "RL",
+            ),
+        )
 
     def _score_dynamic_reload_block(self, actor: int, count: int, time: float) -> None:
         self._score_shots(actor, count, eval_time=float(time))

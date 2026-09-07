@@ -83,7 +83,7 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
     __slots__ = (
         "_cover_until", "_weapon_block_until", "_squad_ammo_thresholds",
         "_squad_ammo_generation", "_squad_ammo_scheduled_time",
-        "_squad_ammo_dispatched_count",
+        "_squad_ammo_dispatched_count", "_moris_frame_observed_actors",
     )
 
     def __init__(self, *args, **kwargs) -> None:
@@ -94,6 +94,15 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
         self._squad_ammo_generation = 0
         self._squad_ammo_scheduled_time: float | None = None
         self._squad_ammo_dispatched_count = 0
+        self._moris_frame_observed_actors: set[int] = set()
+
+    def _weapon(self, actor: int, now: float) -> dict:
+        weapon=super()._weapon(actor,now)
+        if actor not in self._moris_frame_observed_actors or weapon.get("_moris_frame_observed"):
+            return weapon
+        marked=dict(weapon)
+        marked["_moris_frame_observed"]=True
+        return marked
 
     def attach_score_sink(
         self,
@@ -181,6 +190,23 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
         self._squad_ammo_generation += 1
         self._squad_ammo_scheduled_time=None
         self._plan_squad_ammo(now)
+
+    def resume_with_live_full_magazine(self, actor: int, now: float) -> None:
+        """Resume a suspended rapid actor exactly at a weapon-mode expiry edge."""
+        st=self._states.get(int(actor))
+        if st is None:
+            raise RuntimeError("Fast rapid resume actor has no runtime state")
+        self._moris_frame_observed_actors.add(int(actor))
+        full=self._full_ammo(int(actor),float(now))
+        st.ammo=full
+        st.phase="firing"
+        st.phase_end=float(now)
+        st.fire_deadline=float(now)
+        st.warmup=0.0
+        st.last_inter=0.0
+        self._invalidate(st)
+        self.state.set_ammo(int(actor),full)
+        self.refresh_squad_ammo_plan(float(now))
 
     def _cover_end(self, actor: int) -> float:
         return float(self._cover_until.get(actor, -1.0))

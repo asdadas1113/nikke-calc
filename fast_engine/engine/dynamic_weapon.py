@@ -59,6 +59,9 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         "_score_shot_sink",
         "_rapid_reload",
         "_charge_hold_release",
+        "_mode_only_charge_actors",
+        "_mode_only_weapon_change_ids",
+        "_external_weapon_block_until",
     )
 
     def __init__(
@@ -110,10 +113,31 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
             if values:
                 hit_thresholds[actor] = tuple(sorted(values))
 
+        mode_only_ids={}
+        for effect in squad.effects:
+            member=squad.members[effect.actor]
+            if not (
+                effect.effect_type == "weapon_change"
+                and effect_filter(effect)
+                and str(member.weapon.get("fire_mode") or "") == "auto"
+                and effect.parameters.get("weapon_type") in {"SR","RL"}
+                and effect.parameters.get("skill_damage") is True
+            ):
+                continue
+            mode_only_ids[effect.actor]=effect.effect_id
+        self._mode_only_charge_actors=frozenset(mode_only_ids)
+        self._mode_only_weapon_change_ids=dict(mode_only_ids)
+        self._external_weapon_block_until=None
+        if self._mode_only_charge_actors:
+            self.attach_mode_only_charge_actors(self._mode_only_charge_actors)
+
         interesting = set(hit_thresholds) | raw_full_charge_actors | raw_on_attack_actors
         for actor in interesting:
             character = squad.members[actor]
-            if str(character.weapon.get("fire_mode") or "") != "charge":
+            if (
+                str(character.weapon.get("fire_mode") or "") != "charge"
+                and actor not in self._mode_only_charge_actors
+            ):
                 if actor in raw_full_charge_actors:
                     raise NotImplementedError(
                         "Fast raw full_charge_hit consumer on non-charge weapon is not certified: "
@@ -146,6 +170,7 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
             and effect_filter(effect)
             and str(squad.members[effect.actor].weapon.get("fire_mode") or "")
             in {"auto", "auto_warmup"}
+            and effect.parameters.get("weapon_type") == "SMG"
         )
         if rapid_weapon_change_actors:
             self._rapid_reload.attach_effective_weapon(
@@ -173,9 +198,12 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         for actor in selected:
             if actor < 0 or actor >= len(self.squad.members):
                 raise IndexError(f"actor out of range: {actor}")
-            if str(self.squad.members[actor].weapon.get("fire_mode") or "") != "charge":
+            if (
+                str(self.squad.members[actor].weapon.get("fire_mode") or "") != "charge"
+                and actor not in self._mode_only_charge_actors
+            ):
                 raise NotImplementedError(
-                    "Fast dynamic score shot sink only supports charge weapons: "
+                    "Fast dynamic score shot sink only supports charge or owned mode-only weapons: "
                     + self.squad.members[actor].name
                 )
         # Charge duration_bullets must be registered before battle-start
@@ -194,10 +222,36 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
     ) -> None:
         self._rapid_reload.attach_score_sink(actors, sink)
 
+    def _combined_weapon_block_until(self, actor: int, now: float) -> float | None:
+        until = (
+            None if self._external_weapon_block_until is None
+            else self._external_weapon_block_until(actor,now)
+        )
+        effect_id=self._mode_only_weapon_change_ids.get(actor)
+        if effect_id is not None:
+            row=self.effects.active_effect_of_type(actor,"weapon_change",now=now)
+            if row is not None and int(row[0].effect_id) == int(effect_id):
+                expires=row[1].expires_at
+                if expires is not None:
+                    until=float(expires) if until is None else max(float(until),float(expires))
+        return until
+
     def attach_weapon_block_until(
         self, callback: Callable[[int, float], float | None]
     ) -> None:
-        self._rapid_reload.attach_weapon_block_until(callback)
+        self._external_weapon_block_until=callback
+        self._rapid_reload.attach_weapon_block_until(self._combined_weapon_block_until)
+
+    def is_skill_weapon_mode(self, actor: int, now: float) -> bool:
+        effect_id=self._mode_only_weapon_change_ids.get(int(actor))
+        if effect_id is None:
+            return False
+        row=self.effects.active_effect_of_type(int(actor),"weapon_change",now=float(now))
+        return (
+            row is not None
+            and int(row[0].effect_id) == int(effect_id)
+            and row[0].parameters.get("skill_damage") is True
+        )
 
     def attach_squad_ammo_thresholds(self, thresholds: tuple[int, ...]) -> None:
         self._rapid_reload.attach_squad_ammo_thresholds(thresholds)
@@ -375,8 +429,22 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         self._rapid_reload.advance_to(t, inclusive=inclusive)
 
     def sync(self, now: float) -> None:
+        was_active={
+            actor: (self._states.get(actor) is not None and self._states[actor].weapon_change_id is not None)
+            for actor in self._mode_only_charge_actors
+        }
         super().sync(now)
+        for actor,active_before in was_active.items():
+            active_after=(
+                self._states.get(actor) is not None
+                and self._states[actor].weapon_change_id is not None
+            )
+            if active_before and not active_after and actor in self._rapid_reload.actors:
+                self._rapid_reload.resume_with_live_full_magazine(actor,float(now))
         self._rapid_reload.sync(now)
+        for actor in self._mode_only_charge_actors:
+            if self.is_skill_weapon_mode(actor,now) and actor in self._states:
+                self.state.set_ammo(actor,self._states[actor].ammo)
 
     def handle_boundary(self, event: ScheduledEvent) -> DynamicChargeBoundary | None:
         rapid = self._rapid_reload.handle_boundary(event)
@@ -415,16 +483,22 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
             self._score_shot_sink(actor, float(event.time))
 
         signals: list[DynamicCountSignal] = []
+        if actor in self._mode_only_charge_actors:
+            # Moris skill-weapon shots still consume one physical squad-ammo count
+            # before their post-shot full-charge consumers.
+            signals.append(DynamicCountSignal("squad_ammo_consume",1))
         if actor in self._thresholds or actor in self._raw_full_charge_actors:
             signals.append(DynamicCountSignal("full_charge_hit", count_increment))
         if actor in self._hit_thresholds:
             signals.append(DynamicCountSignal("hit_count", count_increment))
         if actor in self._raw_on_attack_actors:
             signals.append(DynamicCountSignal("on_attack", 1))
-        if self.effects.has_dynamic_bullet_lifetime(actor, now=float(event.time)):
-            # The consuming charge shot is scored above and its hit/full-charge
-            # signals are delivered first. Remove bullet-duration state only at
-            # the same post-shot point used by the rapid runtime.
+        if (
+            actor not in self._mode_only_charge_actors
+            and self.effects.has_dynamic_bullet_lifetime(actor, now=float(event.time))
+        ):
+            # Skill-weapon mode shots are not normal ammunition shots for Moris
+            # bullet-duration consumption. Ordinary charge shots retain the old path.
             signals.append(DynamicCountSignal(_INTERNAL_BULLET_CONSUME_EVENT, 1))
         return DynamicChargeBoundary(
             actor,

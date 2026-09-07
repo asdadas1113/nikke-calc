@@ -1200,6 +1200,67 @@ class TriggerDispatcher:
             and effect.triggers[0].event_key == "burst_cast"
         )
 
+    @classmethod
+    def _temporary_self_rapid_to_charge_skill_weapon_change_shape_supported(
+        cls, effect: "CompiledEffect"
+    ) -> bool:
+        """Certify one finite self rapid->charge skill-weapon session shape.
+
+        This is intentionally separate from ordinary rapid/charge weapon-change
+        families: the changed shot is skill damage, starts with a fresh infinite
+        magazine, and uses the SR/RL weapon-change timing defaults.
+        """
+        params = effect.parameters
+        allowed = {
+            "weapon_type", "damage_coeff", "max_ammo", "charge_time",
+            "full_charge_mult", "skill_damage",
+        }
+        return (
+            effect.capability.disposition is CapabilityDisposition.PLANNED
+            and set(effect.capability.blockers).issubset({
+                "stat:None", "field:weapon_type", "field:damage_coeff",
+                "field:max_ammo", "field:charge_time",
+                "field:full_charge_mult", "field:skill_damage",
+            })
+            and effect.effect_type == "weapon_change"
+            and effect.target_spec.mode is TargetMode.SELF
+            and effect.target_spec.runtime_supported
+            and bool(effect.name)
+            and effect.duration is not None and float(effect.duration) > 0.0
+            and effect.max_stack in (None, 1, 1.0)
+            and effect.max_trigger is None
+            and effect.tick_interval is None
+            and not effect.condition_rules
+            and set(params) == allowed
+            and params.get("weapon_type") in {"SR", "RL"}
+            and params.get("max_ammo") == -1
+            and params.get("skill_damage") is True
+            and isinstance(params.get("damage_coeff"), (int, float))
+            and float(params.get("damage_coeff")) > 0.0
+            and isinstance(params.get("charge_time"), (int, float))
+            and float(params.get("charge_time")) > 0.0
+            and isinstance(params.get("full_charge_mult"), (int, float))
+            and float(params.get("full_charge_mult")) > 0.0
+            and len(effect.triggers) == 1
+            and effect.triggers[0].mode is TriggerMode.EVENT
+            and effect.triggers[0].event_key == "burst_cast"
+        )
+
+    def _temporary_self_rapid_to_charge_skill_weapon_change_runtime_supported(
+        self, effect: "CompiledEffect"
+    ) -> bool:
+        if not self._temporary_self_rapid_to_charge_skill_weapon_change_shape_supported(effect):
+            return False
+        member = self.squad.members[effect.actor]
+        return (
+            str(member.weapon.get("fire_mode") or "") == "auto"
+            and not member.weapon.get("control")
+            and not member.weapon.get("is_clip")
+            and not member.weapon.get("cover_during_delay")
+            and member.burst_cooldown is not None
+            and float(member.burst_cooldown) + 1e-9 >= float(effect.duration or 0.0)
+        )
+
     def _temporary_self_rapid_weapon_change_runtime_supported(
         self, effect: "CompiledEffect"
     ) -> bool:
@@ -1656,6 +1717,7 @@ class TriggerDispatcher:
         if (
             self._temporary_self_charge_weapon_change_runtime_supported(effect)
             or self._temporary_self_rapid_weapon_change_runtime_supported(effect)
+            or self._temporary_self_rapid_to_charge_skill_weapon_change_runtime_supported(effect)
         ):
             return True
         if self._trigger_count_reduce_runtime_supported(effect):
@@ -2204,6 +2266,7 @@ class TriggerDispatcher:
                 not (
                     self._temporary_self_charge_weapon_change_runtime_supported(effect)
                     or self._temporary_self_rapid_weapon_change_runtime_supported(effect)
+                    or self._temporary_self_rapid_to_charge_skill_weapon_change_runtime_supported(effect)
                 )
                 or tuple(targets) != (effect.actor,)
             ):
