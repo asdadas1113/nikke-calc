@@ -226,9 +226,22 @@ class ActiveEffectStore:
             cohort = self._cohort(targets)
             if not cohort:
                 continue
-            # Lifetimes start at activation, not at first read.  This slice does
-            # not defer duration_bullets, so scheduling from activated_at cannot
-            # create a missed post-shot expiry.
+            if effect.parameters.get("duration_bullets") is not None:
+                unsafe = tuple(
+                    target
+                    for target in cohort
+                    if target not in self._dynamic_bullet_targets
+                )
+                if unsafe:
+                    names = ", ".join(self.squad.members[target].name for target in unsafe)
+                    raise NotImplementedError(
+                        "Fast lazy duration_bullets requires live recipient cadence: "
+                        + names
+                    )
+            # Lifetimes still start at activation.  The one-bullet lazy slice is
+            # materialized immediately before the recipient's first scored shot,
+            # then consumed by that live cadence runtime after the shot damage and
+            # post-hit signals. Static Nth-shot back-scheduling is forbidden here.
             for target in cohort:
                 self._activate_one(
                     effect,

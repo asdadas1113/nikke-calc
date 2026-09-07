@@ -1668,15 +1668,39 @@ class TriggerDispatcher:
     })
 
     @staticmethod
-    def _lazy_rank_target_shape_supported(effect: "CompiledEffect") -> bool:
-        """Own simple Moris lazy ATK-rank states without bullet lifetimes.
+    def _lazy_rank_one_bullet_shape_supported(effect: "CompiledEffect") -> bool:
+        """Certify one Moris-lazy rank buff lasting one recipient shot.
 
-        Direct-damage buffs retain the existing generic slice. Cadence is much
-        narrower: one finite positive caster-based charge-speed buff delivered
-        to the lowest-ATK base B3 at full-burst start. Recipient weapon safety
-        is a squad-level score proof, not a runtime-shape assumption.
+        The first slice is deliberately narrow: one direct-damage state, top-ATK
+        excluding self, one recipient, one full-burst-start trigger and exactly
+        one bullet of lifetime. ``favorite`` is compiler metadata only.
         """
+        params = effect.parameters
+        max_stack = effect.max_stack if effect.max_stack is not None else 1.0
+        return (
+            is_direct_damage_buff_runtime_supported(effect)
+            and effect.effect_type == "buff"
+            and effect.target_spec.mode is TargetMode.TOP_ATK_EXCL_SELF
+            and effect.target_spec.runtime_supported
+            and int(effect.target_spec.count or 0) == 1
+            and float(max_stack) == 1.0
+            and effect.max_trigger is None
+            and effect.tick_interval is None
+            and effect.duration in (None, -1, -1.0)
+            and params.get("duration_bullets") == 1
+            and set(params).issubset({"favorite", "duration_bullets"})
+            and not effect.condition_rules
+            and len(effect.triggers) == 1
+            and effect.triggers[0].mode is TriggerMode.EVENT
+            and effect.triggers[0].event_key == "full_burst_start"
+        )
 
+    @staticmethod
+    def _lazy_rank_target_shape_supported(effect: "CompiledEffect") -> bool:
+        """Own the certified Moris-lazy ATK-rank state families."""
+
+        if TriggerDispatcher._lazy_rank_one_bullet_shape_supported(effect):
+            return True
         max_stack = effect.max_stack if effect.max_stack is not None else 1.0
         common = (
             effect.effect_type == "buff"
@@ -1709,6 +1733,13 @@ class TriggerDispatcher:
     def _lazy_rank_target_runtime_supported(self, effect: "CompiledEffect") -> bool:
         if not self._lazy_rank_target_shape_supported(effect):
             return False
+        if self._lazy_rank_one_bullet_shape_supported(effect):
+            targets = possible_ally_targets(self.squad, effect)
+            if not targets or not all(
+                self.effects.dynamic_bullet_lifetime_supported(actor)
+                for actor in targets
+            ):
+                return False
         if effect.name:
             if effect.name in self._named_event_names_needed:
                 return False

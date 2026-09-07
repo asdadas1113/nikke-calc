@@ -39,7 +39,8 @@ class EffectIntervalPeriodicGridTests(unittest.TestCase):
             'periodic_grid:에이다:섬광 수류탄 투척 발동 시간 조건:effect_interval',
             blockers,
         )
-        self.assertIn('normal_state:미란다:웨이크업! 4:rank_target_timing', blockers)
+        self.assertNotIn('normal_state:미란다:웨이크업! 4:rank_target_timing', blockers)
+        self.assertEqual(blockers, ())
 
     def test_public_fast_grenade_activation_frames_match_moris(self):
         moris, squad = _compiled()

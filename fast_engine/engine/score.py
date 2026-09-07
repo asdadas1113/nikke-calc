@@ -930,6 +930,23 @@ def _dynamic_charge_bullet_lifetime_score_actors(
     return tuple(sorted(actors))
 
 
+def _dynamic_rapid_bullet_lifetime_score_actors(
+    squad: CompiledSquad,
+) -> tuple[int, ...]:
+    actors: set[int] = set()
+    for effect in squad.effects:
+        if effect.parameters.get("duration_bullets") is None:
+            continue
+        if not is_direct_damage_buff_runtime_supported(effect):
+            continue
+        if not TriggerDispatcher.is_executable_effect(effect):
+            continue
+        for actor in _possible_ally_targets(squad, effect):
+            if _rapid_actor_score_safe(squad, actor):
+                actors.add(actor)
+    return tuple(sorted(actors))
+
+
 def _dynamic_charge_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
     cross={
         effect.actor for effect in squad.effects
@@ -989,6 +1006,7 @@ def _dynamic_rapid_reload_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
     )
     actors.update(_dynamic_mg_warmup_score_actors(squad))
     actors.update(_dynamic_force_reload_score_actors(squad))
+    actors.update(_dynamic_rapid_bullet_lifetime_score_actors(squad))
     actors.update(a for a in _dynamic_max_ammo_score_actors(squad) if str(squad.members[a].weapon.get("fire_mode") or "") in {"auto", "auto_warmup"})
     actors.update(
         row.actor
@@ -1292,6 +1310,14 @@ _ATK_RANK_MUTATION_STATS = frozenset({
 def _lazy_rank_target_score_safe(squad: CompiledSquad, effect) -> bool:
     if not TriggerDispatcher._lazy_rank_target_shape_supported(effect):
         return False
+    if TriggerDispatcher._lazy_rank_one_bullet_shape_supported(effect):
+        candidates = _possible_ally_targets(squad, effect)
+        if not candidates or not all(
+            _charge_actor_score_safe(squad, actor)
+            or _rapid_actor_score_safe(squad, actor)
+            for actor in candidates
+        ):
+            return False
     if (effect.stat or "") == "charge_speed_caster_based_pct":
         if effect.target_spec.mode is not TargetMode.LOWEST_ATK_BURST3:
             return False
