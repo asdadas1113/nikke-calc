@@ -1,4 +1,4 @@
-name: Temporary next semantic frontier
+name: Temporary single-charge semantic gate
 
 on:
   push:
@@ -7,31 +7,50 @@ on:
   workflow_dispatch:
 
 jobs:
-  diagnose:
+  gate:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           ref: fast-engine-phase2-20260901
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect single-charge post-shot consumer graph
+      - name: Apply staged implementation
+        run: python -u .github/tmp_single_charge_apply.py
+      - name: Validate staged scope
+        run: |
+          git diff --check
+          git status --short
+          changed="$(git status --porcelain | sed -E 's/^.. //')"
+          test -n "$changed"
+          if printf '%s\n' "$changed" | grep -v '^fast_engine/' ; then
+            echo 'Refusing non-fast_engine staged diff'
+            exit 1
+          fi
+          test -z "$(git diff --name-only -- calculator/)"
+      - name: Run focused and neighboring regressions
+        run: |
+          python -m unittest fast_engine.tests.test_damage_single_charge_weapon_change
+          python -m unittest \
+            fast_engine.tests.test_damage_nayuta_cross_mode_weapon_change \
+            fast_engine.tests.test_damage_moran_weapon_change_lifecycle \
+            fast_engine.tests.test_damage_dynamic_reload_scoring \
+            fast_engine.tests.test_dynamic_weapon_signals \
+            fast_engine.tests.test_dynamic_charge_max_ammo_semantics \
+            fast_engine.tests.test_performance_contract
+      - name: Print staged frontier delta
         run: |
           python - <<'PY'
-          from context import snapshot,spec
-          from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.dispatcher import TriggerDispatcher
-          cases=[('스쿼드2','츠바이'),('레이드_헬름아쿠아스노우','스노우 화이트')]
-          keys={'full_charge_hit','on_attack','hit_count','pellet_hit'}
-          for source,actor in cases:
-              sq=compile_moris_squad(spec.build_squad(list(snapshot.SQUADS[source]['members'])))
-              idx=sq.names.index(actor)
-              print('\nCASE',source,actor)
-              for e in sq.members[idx].effects:
-                  interesting=any((r.event_key or '') in keys for r in e.triggers)
-                  if not interesting:
-                      continue
-                  print('POST',e.effect_id,e.name,e.effect_type,e.stat,'value=',e.value,'dur=',e.duration,'stack=',e.max_stack,'target=',e.target_spec.mode.value,'params=',dict(e.parameters),'cap=',e.capability.disposition.value,e.capability.blockers,'exec=',TriggerDispatcher.is_executable_effect(e),'triggers=',[(r.mode.value,r.event_key,r.threshold,r.trigger_count_reducible,r.raw) for r in e.triggers],'conditions=',[(r.mode.value,r.key) for r in e.condition_rules])
+          from collections import Counter
+          from fast_engine.research.public_blocker_frontier import scan_public_blockers
+          r=scan_public_blockers()
+          fam=Counter(b.split(':',1)[0] for row in r['rows'] for b in row['blockers'])
+          print('COUNTS',r['team_count'],r['certified_team_count'],r['coverage_gap_count'])
+          print('FAMILIES',sorted(fam.items()))
+          for row in r['rows']:
+              if row['source_name'] in {'스쿼드2','레이드_헬름아쿠아스노우'}:
+                  print('ROW',row['source_name'],row['blockers'])
           PY
