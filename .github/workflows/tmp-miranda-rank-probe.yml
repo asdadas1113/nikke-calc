@@ -23,6 +23,7 @@ jobs:
         run: |
           python -u .github/tmp_miranda_rank_apply.py
           python -u .github/tmp_miranda_rank_fix1.py
+          python -u .github/tmp_miranda_rank_fix2.py
       - name: Validate staged scope
         run: |
           git diff --check
