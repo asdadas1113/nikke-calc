@@ -19,6 +19,17 @@ jobs:
         run: test "$(git rev-parse origin/master)" = "fb2fd9157aa14499daf6b9f185beb685d4393f90"
       - name: Apply Velvet staging patch
         run: python -u .github/tmp_next_frontier_probe.py
+      - name: Connect exact weapon-change activation seam
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('fast_engine/engine/dispatcher.py')
+          s=p.read_text()
+          old='''                    self._temporary_self_charge_weapon_change_runtime_supported(effect)\n                    or self._temporary_self_rapid_weapon_change_runtime_supported(effect)\n                    or self._temporary_self_rapid_to_single_charge_weapon_change_runtime_supported(effect)\n'''
+          new='''                    self._temporary_self_charge_weapon_change_runtime_supported(effect)\n                    or self._temporary_self_charge_to_rapid_weapon_change_runtime_supported(effect)\n                    or self._temporary_self_rapid_weapon_change_runtime_supported(effect)\n                    or self._temporary_self_rapid_to_single_charge_weapon_change_runtime_supported(effect)\n'''
+          assert s.count(old)==1, s.count(old)
+          p.write_text(s.replace(old,new,1))
+          PY
       - name: Compile staged Fast code
         run: python -m compileall -q fast_engine
       - name: Focused Velvet lifecycle
