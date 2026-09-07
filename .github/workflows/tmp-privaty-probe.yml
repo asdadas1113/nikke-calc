@@ -11,10 +11,11 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   inspect:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -23,5 +24,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect Privaty cadence lifecycle
-        run: python -u .github/tmp_privaty_probe.py
+      - name: Apply charge max-ammo safety repair
+        run: python .github/tmp_privaty_apply.py
+      - name: Focused charge/Privaty regression
+        run: |
+          python -m unittest fast_engine.tests.test_dynamic_charge_max_ammo_semantics
+          python -m unittest fast_engine.tests.test_damage_dynamic_reload_scoring
+          python -m unittest fast_engine.tests.test_dynamic_weapon_change
+          python -m unittest fast_engine.tests.test_performance_contract
+      - name: Commit semantic repair
+        run: |
+          if git diff --quiet -- fast_engine; then
+            echo "No semantic changes to commit"
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add fast_engine
+          git commit -m "Fast: align charge live max-ammo semantics"
+          git push origin HEAD:fast-engine-phase2-20260901
