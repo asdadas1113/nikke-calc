@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from context import snapshot, spec
 from fast_engine.engine.compiler import compile_moris_squad
