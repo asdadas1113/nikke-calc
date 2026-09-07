@@ -25,5 +25,22 @@ jobs:
           python-version: '3.13'
       - name: Apply staged Nayuta implementation
         run: python -u .github/tmp_nayuta_apply.py
-      - name: Diagnose ownership proof
-        run: python -u .github/tmp_nayuta_probe.py
+      - name: Correct compiled target proof representation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('fast_engine/engine/score.py')
+          s=p.read_text(encoding='utf-8')
+          old='''        expected_target=("all_enemies" if stat == "damage" else "same_target")\n        if not (\n            consumer.actor == actor\n            and consumer.effect_type == "damage"\n            and stat in {"damage","bonus_damage"}\n            and stat not in seen\n            and target_mode == expected_target\n'''
+          new='''        if not (\n            consumer.actor == actor\n            and consumer.effect_type == "damage"\n            and stat in {"damage","bonus_damage"}\n            and stat not in seen\n            and target_mode == "enemy"\n'''
+          if old not in s:
+              raise SystemExit('target proof anchor missing')
+          p.write_text(s.replace(old,new,1),encoding='utf-8')
+          PY
+      - name: Verify ownership proof
+        run: |
+          python -m unittest \
+            fast_engine.tests.test_damage_nayuta_cross_mode_weapon_change.NayutaCrossModeWeaponChangeTests.test_public_nayuta_weapon_change_blocker_is_owned_in_all_three_memberships \
+            fast_engine.tests.test_damage_nayuta_cross_mode_weapon_change.NayutaCrossModeWeaponChangeTests.test_public_owned_scope_is_exact \
+            fast_engine.tests.test_damage_nayuta_cross_mode_weapon_change.NayutaCrossModeWeaponChangeTests.test_wider_cross_mode_shapes_fail_closed \
+            fast_engine.tests.test_damage_nayuta_cross_mode_weapon_change.NayutaCrossModeWeaponChangeTests.test_consumer_graph_must_remain_exact
