@@ -17,23 +17,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect single-charge compiled proof
+      - name: Inspect single-charge post-shot consumer graph
         run: |
           python - <<'PY'
           from context import snapshot,spec
           from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.score import static_score_blockers
-          cases=[('스쿼드2','츠바이','과충전 공식'),('레이드_헬름아쿠아스노우','스노우 화이트','세븐스 드워프 : I')]
-          for source,actor,wc_name in cases:
+          from fast_engine.engine.dispatcher import TriggerDispatcher
+          cases=[('스쿼드2','츠바이'),('레이드_헬름아쿠아스노우','스노우 화이트')]
+          keys={'full_charge_hit','on_attack','hit_count','pellet_hit'}
+          for source,actor in cases:
               sq=compile_moris_squad(spec.build_squad(list(snapshot.SQUADS[source]['members'])))
-              print('\nCASE',source)
-              print('BLOCKERS',static_score_blockers(sq))
               idx=sq.names.index(actor)
+              print('\nCASE',source,actor)
               for e in sq.members[idx].effects:
-                  if e.name.startswith(wc_name):
-                      print('EFFECT',e.effect_id,e.name,e.effect_type,e.stat,'value',e.value,'duration',e.duration,'max_stack',e.max_stack,'max_trigger',e.max_trigger,'tick',e.tick_interval,'target',e.target_spec.mode.value,'runtime_target',e.target_spec.runtime_supported,'params',dict(e.parameters),'cap',e.capability.disposition.value,e.capability.blockers,'triggers',[(r.mode.value,r.event_key,r.threshold,r.raw) for r in e.triggers],'conditions',[(r.mode.value,r.key) for r in e.condition_rules])
-              for other in sq.effects:
-                  refs=(any(r.key==wc_name for r in other.condition_rules) or any((r.event_key or '')==f'event:state_end:{wc_name}' for r in other.triggers) or other.parameters.get('target_effect')==wc_name or other.parameters.get('scaling_ref')==wc_name)
-                  if refs:
-                      print('REFERENCE',sq.members[other.actor].name,other.name,other.effect_type,other.stat,dict(other.parameters))
+                  interesting=any((r.event_key or '') in keys for r in e.triggers)
+                  if not interesting:
+                      continue
+                  print('POST',e.effect_id,e.name,e.effect_type,e.stat,'value=',e.value,'dur=',e.duration,'stack=',e.max_stack,'target=',e.target_spec.mode.value,'params=',dict(e.parameters),'cap=',e.capability.disposition.value,e.capability.blockers,'exec=',TriggerDispatcher.is_executable_effect(e),'triggers=',[(r.mode.value,r.event_key,r.threshold,r.trigger_count_reducible,r.raw) for r in e.triggers],'conditions=',[(r.mode.value,r.key) for r in e.condition_rules])
           PY
