@@ -1,4 +1,4 @@
-name: Temporary Nayuta frontier A-B
+name: Temporary Nayuta production promotion
 
 on:
   push:
@@ -7,68 +7,75 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: temp-nayuta-frontier-ab
+  group: temp-nayuta-production-promotion
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  frontier-ab:
+  promote:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
           ref: fast-engine-phase2-20260901
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Baseline public frontier
-        run: |
-          python - <<'PY'
-          from collections import Counter
-          from fast_engine.research.public_blocker_frontier import scan_public_blockers
-          r=scan_public_blockers()
-          fam=Counter(b.split(':',1)[0] for row in r['rows'] for b in row['blockers'])
-          print('BASE_COUNTS',r['team_count'],r['certified_team_count'],r['coverage_gap_count'])
-          print('BASE_FAMILIES',sorted(fam.items()))
-          for row in r['rows']:
-              bs=[b for b in row['blockers'] if '나유타' in b]
-              if bs:
-                  print('BASE_NAYUTA',row['source_name'],bs)
-          PY
       - name: Apply staged Nayuta implementation
         run: python -u .github/tmp_nayuta_apply.py
-      - name: Patched public frontier
+      - name: Validate production diff scope
+        run: |
+          git diff --check
+          echo '=== staged diff ==='
+          git diff --name-only
+          test -n "$(git diff --name-only)"
+          if git diff --name-only | grep -v '^fast_engine/' ; then
+            echo 'Refusing non-fast_engine production diff'
+            exit 1
+          fi
+          test -z "$(git diff --name-only -- calculator/)"
+      - name: Run focused and neighboring regressions
+        run: |
+          python -m unittest fast_engine.tests.test_damage_nayuta_cross_mode_weapon_change
+          python -m unittest \
+            fast_engine.tests.test_damage_moran_weapon_change_lifecycle \
+            fast_engine.tests.test_damage_dynamic_reload_scoring \
+            fast_engine.tests.test_dynamic_weapon_signals \
+            fast_engine.tests.test_dynamic_charge_max_ammo_semantics \
+            fast_engine.tests.test_performance_contract
+      - name: Run complete Fast discovery
+        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
+      - name: Verify promoted public frontier
         run: |
           python - <<'PY'
           from collections import Counter
           from fast_engine.research.public_blocker_frontier import scan_public_blockers
           r=scan_public_blockers()
           fam=Counter(b.split(':',1)[0] for row in r['rows'] for b in row['blockers'])
-          print('PATCH_COUNTS',r['team_count'],r['certified_team_count'],r['coverage_gap_count'])
-          print('PATCH_FAMILIES',sorted(fam.items()))
-          for row in r['rows']:
-              bs=[b for b in row['blockers'] if '나유타' in b]
-              if bs:
-                  print('PATCH_NAYUTA',row['source_name'],bs)
+          print('PROMOTION_COUNTS',r['team_count'],r['certified_team_count'],r['coverage_gap_count'])
+          print('PROMOTION_FAMILIES',sorted(fam.items()))
+          assert r['team_count']==24
+          assert r['certified_team_count']==6
+          assert fam['weapon_change']==4
+          assert fam['cadence']==56
+          assert fam['control']==5
+          assert fam['normal_delivery']==47
+          assert fam['normal_state']==18
+          assert fam['skill_damage']==25
+          assert fam['skill_state_delivery']==49
+          assert fam['periodic_grid']==1
+          assert not any('weapon_change:나유타:기억 연소' in b for row in r['rows'] for b in row['blockers'])
           PY
-      - name: Assert intended frontier delta
+      - name: Commit semantic checkpoint
         run: |
-          python - <<'PY'
-          from collections import Counter
-          from context import snapshot,spec
-          from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.score import static_score_blockers
-          expected={'스쿼드2','레이드_네온벨벳','레이드_소다'}
-          seen=set()
-          for name,case in snapshot.SQUADS.items():
-              members=tuple(case['members'])
-              if '나유타' not in members:
-                  continue
-              blockers=static_score_blockers(compile_moris_squad(spec.build_squad(list(members))))
-              if not any(b.startswith('weapon_change:나유타:기억 연소') for b in blockers):
-                  seen.add(name)
-          print('NAYUTA_WEAPON_CHANGE_CLEARED_SOURCE_CASES',sorted(seen))
-          assert expected <= seen, (expected,seen)
-          PY
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add fast_engine
+          git diff --cached --check
+          git status --short
+          git commit -m "Fast: support rapid-to-charge skill weapon changes"
+          git push origin HEAD:fast-engine-phase2-20260901
