@@ -14,48 +14,26 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: fast-engine-phase2-20260901
-          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Trace Moris rapid-to-single-charge lifecycle
+      - name: Inspect single-charge compiled proof
         run: |
           python - <<'PY'
-          from dataclasses import asdict
-          from unittest.mock import patch
-          from context import snapshot, spec
-          from calculator.timeline import simulate
-          from calculator.buff_manager import BuffManager
-
-          cases=[
-            ('스쿼드2','츠바이','과충전 공식',7.0),
-            ('레이드_헬름아쿠아스노우','스노우 화이트','세븐스 드워프 : I',12.0),
-          ]
-          for source,actor,wc_name,duration in cases:
-              squad=spec.build_squad(list(snapshot.SQUADS[source]['members']))
-              ends=[]
-              orig=BuffManager.end_weapon_change
-              def traced_end(self,caster,t,*args,**kwargs):
-                  if caster==actor:
-                      ends.append(float(t))
-                  return orig(self,caster,t,*args,**kwargs)
-              with patch.object(BuffManager,'end_weapon_change',new=traced_end):
-                  result=simulate(squad,config={'duration':duration,'rng_mode':'expected'},verbose=True)
-              print('\n=== CASE',source,actor,wc_name,'===')
-              print('ENDS',ends)
-              print('BURSTS',[asdict(x) for x in result.log.burst_log])
-              relevant=[]
-              for x in result.log.buff_events:
-                  d=asdict(x)
-                  if d['caster']==actor and (
-                      d['name']==wc_name or d['name'].startswith(wc_name)
-                      or d['stat'] in {'pierce_enabled','charge_dmg_pct','charge_speed_pct'}
-                  ):
-                      relevant.append(d)
-              print('BUFFS',relevant)
-              ammo=[asdict(x) for x in result.log.ammo_log if x.caster==actor]
-              print('AMMO',ammo)
-              print('RELOAD',[asdict(x) for x in result.log.reload_log if x.caster==actor])
-              hits=[asdict(x) for x in result.hits if x.caster==actor]
-              print('HITS',hits)
+          from context import snapshot,spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import static_score_blockers
+          cases=[('스쿼드2','츠바이','과충전 공식'),('레이드_헬름아쿠아스노우','스노우 화이트','세븐스 드워프 : I')]
+          for source,actor,wc_name in cases:
+              sq=compile_moris_squad(spec.build_squad(list(snapshot.SQUADS[source]['members'])))
+              print('\nCASE',source)
+              print('BLOCKERS',static_score_blockers(sq))
+              idx=sq.names.index(actor)
+              for e in sq.members[idx].effects:
+                  if e.name.startswith(wc_name):
+                      print('EFFECT',e.effect_id,e.name,e.effect_type,e.stat,'value',e.value,'duration',e.duration,'max_stack',e.max_stack,'max_trigger',e.max_trigger,'tick',e.tick_interval,'target',e.target_spec.mode.value,'runtime_target',e.target_spec.runtime_supported,'params',dict(e.parameters),'cap',e.capability.disposition.value,e.capability.blockers,'triggers',[(r.mode.value,r.event_key,r.threshold,r.raw) for r in e.triggers],'conditions',[(r.mode.value,r.key) for r in e.condition_rules])
+              for other in sq.effects:
+                  refs=(any(r.key==wc_name for r in other.condition_rules) or any((r.event_key or '')==f'event:state_end:{wc_name}' for r in other.triggers) or other.parameters.get('target_effect')==wc_name or other.parameters.get('scaling_ref')==wc_name)
+                  if refs:
+                      print('REFERENCE',sq.members[other.actor].name,other.name,other.effect_type,other.stat,dict(other.parameters))
           PY
