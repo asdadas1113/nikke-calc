@@ -739,14 +739,43 @@ class DynamicChargeCadenceRuntime:
         base = int(weapon["max_ammo"])
         if base < 0:
             return 999999
-        pct = self._active_sum(actor, "max_ammo_pct", now)
-        flat = self._active_sum(actor, "max_ammo_flat", now)
-        return max(
-            1,
-            base
-            + _round_half_up(base * pct / 100.0)
-            + _round_half_up(flat),
-        )
+
+        def static_folded(effect) -> bool:
+            return (
+                (effect.stat or "") in {"max_ammo_pct", "max_ammo_flat"}
+                and effect.effect_type == "buff"
+                and effect.target_spec.mode.value == "self"
+                and effect.duration in (None, -1.0)
+                and not effect.condition_rules
+                and bool(effect.triggers)
+                and all(rule.event_key == "battle_start" for rule in effect.triggers)
+            )
+
+        # Static cadence already owns permanent self sources.  Preserve the same
+        # source-by-source Moris quantization, then add only live sources from the
+        # active store so battle-start equipment/collection effects are not counted
+        # twice when a temporary max-ammo effect appears.
+        pct_gain = 0
+        flat_gain = 0.0
+        for effect in self.squad.members[actor].effects:
+            if not static_folded(effect):
+                continue
+            value = float(effect.value or 0.0)
+            if (effect.stat or "") == "max_ammo_pct":
+                pct_gain += _round_half_up(base * value / 100.0)
+            else:
+                flat_gain += value
+
+        for stat in ("max_ammo_pct", "max_ammo_flat"):
+            for effect, active in self.effects.iter_stat(stat, now=now):
+                if active.target != actor or static_folded(effect):
+                    continue
+                value = float(effect.value or 0.0) * active.stacks
+                if stat == "max_ammo_pct":
+                    pct_gain += _round_half_up(base * value / 100.0)
+                else:
+                    flat_gain += value
+        return max(1, base + pct_gain + _round_half_up(flat_gain))
 
     def _reload_factor(self, actor: int, now: float) -> float:
         return max(0.0, 1.0 - self._active_sum(actor, "reload_speed_pct", now) / 100.0)
@@ -997,6 +1026,15 @@ class DynamicChargeCadenceRuntime:
                         st.phase_end = self._observe_phase_boundary(
                             st.charge_start + self._effective_charge_time(actor, now)
                         )
+
+            # Moris clamps a reduced live magazine immediately whenever the
+            # actor is not inside an active reload. Reloading is the one
+            # exception: completion refills from the live cap at finish.
+            full = self._full_ammo(actor, now)
+            if st.phase != "reloading" and st.ammo > full:
+                st.ammo = full
+                self._invalidate(st)
+
             if st.scheduled_time is None:
                 self._plan(actor, now)
             self.state.set_ammo(actor, st.ammo)
