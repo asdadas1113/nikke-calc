@@ -8,7 +8,7 @@ jobs:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -24,6 +24,7 @@ jobs:
           python -u .github/tmp_periodic_grid_apply.py
           python -u .github/tmp_periodic_grid_fix1.py
           python -u .github/tmp_periodic_grid_regression_fix.py
+          python -u .github/tmp_periodic_grid_fix2.py
       - name: Validate staged scope
         run: |
           git diff --check
@@ -43,6 +44,8 @@ jobs:
             fast_engine.tests.test_damage_periodic_self_crit \
             fast_engine.tests.test_periodic_runtime \
             fast_engine.tests.test_performance_contract
+      - name: Complete Fast discovery
+        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
       - name: Frontier delta
         run: |
           python - <<'PY'
@@ -52,6 +55,20 @@ jobs:
           fam=Counter(b.split(':',1)[0] for row in r['rows'] for b in row['blockers'])
           print('COUNTS',r['team_count'],r['certified_team_count'],r['coverage_gap_count'])
           print('FAMILIES',sorted(fam.items()))
-          for row in r['rows']:
-              if row['source_name']=='레이드_헬름아쿠아스노우': print('ROW',row)
+          assert (r['team_count'],r['certified_team_count'],r['coverage_gap_count']) == (24,6,18)
+          assert fam.get('periodic_grid',0) == 0
+          target=next(row for row in r['rows'] if row['source_name']=='레이드_헬름아쿠아스노우')
+          print('ROW',target)
+          assert target['blockers'] == ('normal_state:미란다:웨이크업! 4:rank_target_timing',)
+          assert target['unsupported'] == ()
           PY
+      - name: Promote semantic checkpoint
+        run: |
+          test "$(git rev-parse origin/master)" = "fb2fd9157aa14499daf6b9f185beb685d4393f90"
+          test -z "$(git diff --name-only -- calculator/)"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add fast_engine
+          git diff --cached --check
+          git commit -m "Fast: support targeted dynamic periodic intervals"
+          git push origin HEAD:fast-engine-phase2-20260901
