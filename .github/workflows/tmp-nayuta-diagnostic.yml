@@ -37,5 +37,21 @@ jobs:
               raise SystemExit('target proof anchor missing')
           p.write_text(s.replace(old,new,1),encoding='utf-8')
           PY
-      - name: Run full focused Nayuta gate
-        run: python -m unittest fast_engine.tests.test_damage_nayuta_cross_mode_weapon_change
+      - name: Inspect Nayuta live ammo sources
+        run: |
+          python - <<'PY'
+          from context import snapshot,spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.score import _possible_ally_targets
+          squad=compile_moris_squad(spec.build_squad(list(snapshot.SQUADS['스쿼드2']['members'])))
+          actor=next(i for i,m in enumerate(squad.members) if m.name=='나유타')
+          print('NAYUTA',actor,squad.members[actor].weapon)
+          for e in squad.effects:
+              if (e.stat or '') not in {'max_ammo_pct','max_ammo_flat','max_ammo_infinite','reload_speed_pct'}:
+                  continue
+              if actor not in _possible_ally_targets(squad,e):
+                  continue
+              print('SRC',squad.members[e.actor].name,e.effect_id,e.name,e.effect_type,e.stat,e.value,e.duration,e.target_spec.mode.value,e.target_spec.runtime_supported,
+                    [(r.mode.value,r.event_key,r.threshold) for r in e.triggers],
+                    [(r.mode.value,r.key,r.value) for r in e.condition_rules],e.parameters,e.capability.disposition.value,e.capability.blockers)
+          PY
