@@ -17,5 +17,26 @@ jobs:
           python-version: '3.13'
       - name: Verify protected baseline
         run: test "$(git rev-parse origin/master)" = "fb2fd9157aa14499daf6b9f185beb685d4393f90"
-      - name: Print current frontier
+      - name: Apply Velvet staging patch
         run: python -u .github/tmp_next_frontier_probe.py
+      - name: Compile staged Fast code
+        run: python -m compileall -q fast_engine
+      - name: Focused Velvet lifecycle
+        run: python -m unittest -v fast_engine.tests.test_damage_charge_to_rapid_weapon_change
+      - name: Neighboring weapon-change regressions
+        run: |
+          python -m unittest -v \
+            fast_engine.tests.test_damage_moran_weapon_change_lifecycle \
+            fast_engine.tests.test_damage_single_charge_weapon_change \
+            fast_engine.tests.test_damage_nayuta_weapon_change_lifecycle \
+            fast_engine.tests.test_dynamic_weapon_change
+      - name: Full Fast discovery
+        run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
+      - name: Public blocker frontier
+        run: python -u fast_engine/research/public_blocker_frontier.py
+      - name: Scope and diff
+        run: |
+          test -z "$(git diff --name-only -- calculator)"
+          git diff --check -- fast_engine
+          git diff --stat -- fast_engine
+          git status --short
