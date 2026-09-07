@@ -23,12 +23,13 @@ Fast Engine은 Moris 복제품이 아니라 optimizer용 고속 sparse-event ran
 먼저 읽을 문서:
 
 1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260908.md`
-2. `fast_engine/research/ADA_TARGETED_EFFECT_INTERVAL_PERIODIC_GRID_CHECKPOINT_20260908.md`
-3. `fast_engine/research/RAPID_TO_SINGLE_CHARGE_WEAPON_CHANGE_CHECKPOINT_20260907.md`
-4. `fast_engine/research/NAYUTA_RAPID_TO_CHARGE_SKILL_WEAPON_CHANGE_WIP_CHECKPOINT_20260907.md`
-5. `fast_engine/research/PRIVATY_CHARGE_LIVE_MAX_AMMO_SAFETY_CHECKPOINT_20260907.md`
-6. `fast_engine/research/MORAN_RAPID_WEAPON_CHANGE_LIFECYCLE_CHECKPOINT_20260907.md`
-7. `fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md`
+2. `fast_engine/research/MIRANDA_LAZY_RANK_BULLET_LIFETIME_CHECKPOINT_20260908.md`
+3. `fast_engine/research/ADA_TARGETED_EFFECT_INTERVAL_PERIODIC_GRID_CHECKPOINT_20260908.md`
+4. `fast_engine/research/RAPID_TO_SINGLE_CHARGE_WEAPON_CHANGE_CHECKPOINT_20260907.md`
+5. `fast_engine/research/NAYUTA_RAPID_TO_CHARGE_SKILL_WEAPON_CHANGE_WIP_CHECKPOINT_20260907.md`
+6. `fast_engine/research/PRIVATY_CHARGE_LIVE_MAX_AMMO_SAFETY_CHECKPOINT_20260907.md`
+7. `fast_engine/research/MORAN_RAPID_WEAPON_CHANGE_LIFECYCLE_CHECKPOINT_20260907.md`
+8. `fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md`
 
 ## 1. Protected baseline
 
@@ -36,171 +37,171 @@ Fast Engine은 Moris 복제품이 아니라 optimizer용 고속 sparse-event ran
 
 - `fb2fd9157aa14499daf6b9f185beb685d4393f90`
 
-Ada promotion gate 직전과 semantic promotion 시점 모두 이 SHA를 다시 검증했다.
-
-이 SHA가 계속 불변이어야 한다.
+Miranda 조사·promotion·cleanup 후에도 이 SHA가 불변임을 재확인했다.
 
 ## 2. Latest completed semantic checkpoint
 
 최신 production semantic commit:
 
-- `2063efc88d4947225b44746bab29364afc9a09cf` — `Fast: support targeted dynamic periodic intervals`
+- `c877c523032459e6232547a1db21fc2db23373b8` — `Fast: support lazy rank bullet lifetimes`
 
 완료 checkpoint:
 
-- Ada `섬광 수류탄 투척 발동 시간 조건` targeted `effect_interval`
-- same-actor periodic damage의 mid-cooldown interval rescale
-- Moris outer-loop phase order에 맞춘 sparse next-frame interval observation
+- Miranda `웨이크업! 4`
+- dynamic ATK rank target을 activation transaction의 올바른 시점에 lazy materialize
+- `duration_bullets=1`을 실제 resolved recipient의 다음 live scored shot에서 소비
+- 기존 bare-dispatcher atomic fail-closed 계약 유지
 
 상세 기록:
 
-- `fast_engine/research/ADA_TARGETED_EFFECT_INTERVAL_PERIODIC_GRID_CHECKPOINT_20260908.md`
+- `fast_engine/research/MIRANDA_LAZY_RANK_BULLET_LIFETIME_CHECKPOINT_20260908.md`
 
-## 3. Exact Ada semantics now owned
+## 3. Exact Miranda semantics now owned
 
 Public source case:
 
 - `레이드_헬름아쿠아스노우`
 
-Producer:
+Effect:
 
-- Ada `섬광 수류탄 투척 발동 시간 조건`
-- self buff
-- `effect_interval = -1.0`
-- finite `10s`
-- one stack
-- one `burst_cast` trigger
-- exact `target_effect = "섬광 수류탄 투척"`
+- Miranda `웨이크업! 4`
+- buff `crit_rate = 85.42`
+- target `allies_top_atk_excl:1`
+- trigger `full_burst_start`
+- no time duration
+- `duration_bullets = 1`
 
-Target:
+Moris oracle proved the target is not static. First five owned resolutions:
 
-- Ada `섬광 수류탄 투척`
-- enemy damage
-- `armor_break_damage = 420`
-- fixed base `every:2s`
-- `during_full_burst` activation condition
-- already score-supported by `SimpleDamageScoreSink`
+1. `3.399999999999993` → 스노우 화이트
+2. `21.58333333333339` → 에이다
+3. `37.56666666666582` → 스노우 화이트
+4. `50.94999999999839` → 에이다
+5. `64.33333333333097` → 스노우 화이트
 
-Owned lifecycle:
+A static rank proof would therefore be wrong.
 
-- active modifier changes effective interval `2.0s → 1.0s`
-- remaining in-progress cooldown is rescaled proportionally
-- modifier expiry rescales the remaining cooldown back toward the base interval
-- raw deadlines are mapped onto the existing repeated-add Moris frame lattice
-- stale sparse reservations are generation-invalidated
+The existing generic pending/lazy-rank infrastructure already reproduced the exact Moris sequence when forced. The production slice extends that infrastructure to this one-bullet lifetime shape rather than adding a new rank subsystem.
 
-No arbitrary interval family was opened.
+## 4. Ownership and fail-closed contract
 
-## 4. Important Moris phase-order lesson
+`possible_ally_targets()` is intentionally conservative for dynamic rank selection, so the public effect can potentially resolve to all five members.
 
-Moris `BuffManager.tick()` evaluates `every:Ns` cooldowns before the burst controller on each outer-loop frame.
+The public roster's possible recipients are already score-cadence-owned:
 
-Therefore a `burst_cast` interval modifier created at frame `t` is not visible to that periodic cooldown system until the next repeated-add 60 Hz frame.
+- Miranda — rapid
+- Helm : Aquamarine — rapid
+- Ade : Agent Bunny — charge
+- Snow White — rapid / owned single-charge mode
+- Ada — charge
 
-Public oracle around Ada's second burst:
+For lazy one-bullet rank effects, score setup registers all proved recipients with the existing live dynamic bullet-lifetime machinery.
 
-- Ada burst cast / modifier activation: `21.533333333333392`
-- first accelerated grenade: `21.783333333333378`
-- subsequent accelerated grenades: `22.783333...`, `23.783333...`, ...
+Important safety boundary:
 
-The first staged Fast implementation observed the modifier immediately and fired at `21.766666...`, exactly one frame early.
+- bare `TriggerDispatcher` keeps the previous executable + activation-time atomic fail-closed contract
+- if a dynamic bullet target resolves to an actor without a live owner, activation raises rather than silently applying a stale/static lifetime
+- the broader family is not opened merely because Miranda is now supported
 
-Do not solve such differences with tolerance widening. The fix is semantic phase ordering.
+## 5. Implementation surface
 
-Fast now uses one sparse `PERIODIC_SYNC` boundary on `moris_next_tick()` for the owned actor/shape rather than a global 60 Hz loop.
+Semantic diff from promotion parent to `c877c523...` contains exactly 8 `fast_engine/` files:
 
-## 5. Sparse performance boundary
-
-An intermediate implementation scheduled deferred periodic sync after every burst-machine event and moved the structural event count from `539` to `577`.
-
-This was rejected as unnecessarily dense even though tests were semantically green.
-
-Final implementation schedules deferred sync only for a `burst_cast` from an actor that owns a supported targeted interval relationship.
-
-Final promotion performance:
-
-- median `199.36ms`
-- events `539`
-
-This is an important design constraint for future cadence work: new semantic boundaries should remain conditional sparse events.
-
-## 6. Production implementation surface
-
-Semantic diff from the temp promotion parent contains exactly 9 `fast_engine/` files:
-
-- `fast_engine/engine/burst_runtime.py`
 - `fast_engine/engine/dispatcher.py`
-- `fast_engine/engine/dynamic_periodic.py` — new
 - `fast_engine/engine/effects.py`
-- `fast_engine/engine/scheduler.py`
 - `fast_engine/engine/score.py`
-- `fast_engine/tests/test_damage_effect_interval_periodic_grid.py` — new
-- `fast_engine/tests/test_damage_periodic_enemy_received.py`
-- `fast_engine/tests/test_damage_periodic_self_crit.py`
+- `fast_engine/tests/test_damage_miranda_lazy_rank_bullet_lifetime.py` — new
+- `fast_engine/tests/test_damage_effect_interval_periodic_grid.py`
+- `fast_engine/tests/test_damage_full_charge_bullet_lifetime.py`
+- `fast_engine/tests/test_damage_full_charge_hit_charge_speed.py`
+- `fast_engine/tests/test_damage_stat_applied_charge_speed.py`
 
 Stats:
 
-- 480 insertions
-- 23 deletions
+- 190 insertions
+- 13 deletions
 
 `calculator/` diff: none.
 
-## 7. Promotion validation
+The four existing test edits are stale shared-frontier expectation updates, not mechanic widening.
 
-Semantic promotion workflow:
+## 6. Promotion validation
 
-- run `34150287961`
-- job `101830953514`
+Semantic promotion gate:
+
+- run `34153154510`
+- job `101839405882`
 - result `success`
 
 Results:
 
-- Ada focused oracle regression `3/3`
-- neighboring periodic/runtime/performance `17/17`
-- full Fast discovery `364/364`
-- performance median `199.36ms`, events `539`
+- Miranda focused `4/4`
+- neighboring `25/25`
+- full Fast discovery `368/368`
+- performance median `181.25ms`, events `539`
 - protected master assertion passed immediately before promotion
 - no `calculator/` diff
 
-The public Fast/Moris Ada grenade activation list matches frame-for-frame.
+## 7. Post-clean canonical CI
+
+The first exact clean checkpoint documentation HEAD was:
+
+- `7c595f6a199fe67651693ad47176c1934bfafd44`
+
+Canonical CI on that exact HEAD:
+
+- run `34153410587`
+- job `101840174194`
+- result `success`
+
+Counts:
+
+- Fast damage `254/254`
+- Fast complete discovery `368/368`
+- calculator `137/137` (`1` skip)
+- optimizer `374/374`
+- bridge `31/31` (`1` skip)
+- site `385/385`
+- golden snapshot `29/29`
+- doclint OK
+- structural performance `200.81ms` median / `539` events in the dedicated performance step
+
+This handoff update itself creates a later documentation HEAD, so after editing this file the canonical `ci.yml` on the new exact HEAD must also be checked before handing off again.
 
 ## 8. Current public frontier
 
-Standard `fast_engine/research/public_blocker_frontier.py` view after Ada:
+Standard `fast_engine/research/public_blocker_frontier.py` view after Miranda:
 
 - source cases `24`
-- certified source cases `6`
-- source-case gaps `18`
+- certified source cases `7`
+- source-case gaps `17`
 
 Blocker family counts:
 
 - cadence `55`
 - control `5`
 - normal_delivery `45`
-- normal_state `18`
+- normal_state `17`
 - skill_damage `25`
 - skill_state_delivery `49`
 - weapon_change `2`
 - periodic_grid `0`
 
-Ada A/B:
+Miranda A/B:
 
-- `periodic_grid: 1 → 0`
+- `normal_state: 18 → 17`
+- certified `6 → 7`
+- gaps `18 → 17`
 - no other family count changed directly
-- certified stays `6`
 
-Critical near-frontier row:
+`레이드_헬름아쿠아스노우` is now fully certified:
 
-`레이드_헬름아쿠아스노우`
-
-- blockers: exactly `normal_state:미란다:웨이크업! 4:rank_target_timing`
-- unsupported: empty
-
-This roster is now one blocker from certification.
+- blockers `()`
+- unsupported `()`
 
 ## 9. Cleanup state
 
-All temporary Ada probe/apply/fix/workflow assets were removed after promotion.
+All temporary Miranda probe/apply/fix/workflow assets were removed after promotion.
 
 Final `.github` root must contain only:
 
@@ -212,7 +213,7 @@ Final `.github/workflows` must contain only:
 - `ci.yml`
 - `pages.yml`
 
-This hygiene was verified after cleanup and before writing this handoff.
+This hygiene was verified after cleanup.
 
 ## 10. Current phase
 
@@ -230,49 +231,40 @@ Recent completed restoration chain includes:
 - charge live max-ammo source quantization/clamp safety repair
 - Nayuta rapid→charge skill weapon-change lifecycle
 - rapid→single-charge duration-bullet weapon-change lifecycle
-- targeted dynamic periodic interval rescaling
+- Ada targeted dynamic periodic interval rescaling
+- Miranda dynamic rank + one-bullet lifetime lazy materialization
 
 Do not jump to raw coverage expansion or optimizer integration.
 
 ## 11. Next checkpoint selection
 
-Highest-leverage immediate investigation is now Miranda `웨이크업! 4:rank_target_timing` in `레이드_헬름아쿠아스노우`, because it is the roster's only blocker.
-
-However **do not remove it simply to obtain a seventh certified source case.** Treat it as a new semantic checkpoint.
+Miranda is CLOSED. Select the next single semantics-restoration checkpoint from the current `24 / 7 / 17` public frontier; do not inherit the old recommendation to work on Miranda again.
 
 Required order:
 
 1. query current branch HEAD and verify `master`
-2. inspect the exact compiled Miranda effect, trigger, target mode, and all ATK-ranking dependencies
-3. run Moris oracle to determine whether target ranking is static in this public roster or changes over time
-4. determine whether the correct fix is:
-   - a narrow static ranking proof, or
-   - an actual dynamic rank-target timing runtime
-5. prove ownership without character-name runtime branches
-6. focused regression with Moris target/timing trace
-7. full Fast discovery
-8. public frontier A/B
-9. semantic promotion only after all gates are green
-10. cleanup temp assets and run canonical CI on the final clean documentation HEAD
+2. rerun/inspect the current blocker frontier and identify the closest generic candidates
+3. prefer false-supported safety closure or a narrow reusable semantic slice over raw blocker count
+4. inspect exact compiled shapes and dependency graph
+5. execute Moris oracle traces before changing Fast semantics
+6. prove ownership without character-name runtime branches or global 60Hz loops
+7. focused + neighboring regression
+8. full Fast discovery
+9. public frontier A/B
+10. semantic promotion only after all gates are green
+11. cleanup temp assets
+12. update checkpoint/handoff docs
+13. canonical CI on the final exact clean HEAD
 
-If Miranda is not safely narrow after inspection, choose another single restoration checkpoint instead; do not force certification.
+If a candidate widens into a broader unresolved ordering/cadence problem, leave it fail-closed and choose another single checkpoint rather than forcing certification.
 
-## 12. Final canonical CI requirement
+## 12. Moris baseline policy
 
-This handoff is written after semantic promotion and cleanup. The final documentation HEAD still needs its canonical `ci.yml` run checked before declaring the overall checkpoint closed.
+Continue using the project's fixed Moris/master baseline as the oracle for this phase.
 
-Canonical gate must include green results for:
+Do not chase unrelated newer upstream Moris changes while Fast semantic restoration is still in progress. After Fast reaches the intended baseline completeness/ranking-validation state, perform a separate fixed-baseline → latest-Moris migration/audit.
 
-- doclint
-- Fast shards
-- Fast complete discovery
-- calculator
-- optimizer
-- bridge
-- site
-- golden snapshot 29/29
-
-The final user-facing completion message should record the exact clean HEAD, CI run/job IDs, and counts.
+Exception: if a newer Moris change is confirmed to fix the exact mechanic currently being implemented, stop and explicitly decide whether to update the oracle rather than carefully cloning a known-bad old behavior.
 
 ## 13. 절대 하지 말 것
 
