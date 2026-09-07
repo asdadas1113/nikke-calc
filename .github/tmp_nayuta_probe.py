@@ -7,28 +7,33 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-print("=== SOURCE MATCHES ===", flush=True)
-needles = ("skill_damage", "weapon_change", "full_charge_hit")
-for base in (ROOT / "calculator", ROOT / "fast_engine" / "engine"):
-    for path in sorted(base.rglob("*.py")):
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except Exception:
-            continue
-        for idx, line in enumerate(lines):
-            if any(n in line for n in needles):
-                lo=max(0,idx-3); hi=min(len(lines),idx+5)
-                print(f"--- {path.relative_to(ROOT)}:{idx+1}", flush=True)
-                for j in range(lo,hi): print(f"{j+1}: {lines[j]}", flush=True)
+from context import snapshot
+from context.spec import build_config, build_squad
+from calculator.timeline import simulate
+from calculator.sim_result import _is_normal
 
-from context import snapshot, spec
-from fast_engine.engine.compiler import compile_moris_squad
-from fast_engine.engine.score import static_score_blockers
-
-print("=== STATIC NAYUTA ===", flush=True)
-for team in ("스쿼드2", "레이드_네온벨벳", "레이드_소다"):
+TEAMS=("스쿼드2","레이드_네온벨벳","레이드_소다")
+for team in TEAMS:
     case=snapshot.SQUADS[team]
-    compiled=compile_moris_squad(spec.build_squad(list(case["members"])))
-    nayuta=next(i for i,m in enumerate(compiled.members) if m.name=="나유타")
-    wc=next(e for e in compiled.members[nayuta].effects if e.name=="기억 연소")
-    print(team, "actor", nayuta, "base", compiled.members[nayuta].weapon, "wc", wc.parameters, "blockers", tuple(b for b in static_score_blockers(compiled) if ":나유타:" in b), flush=True)
+    members=list(case["members"])
+    squad=build_squad(members)
+    cfg=build_config(squad,{"duration":30.0,"first_burst_time":3.0})
+    result=simulate(
+        squad,
+        config=cfg,
+        enemy={"def":0,"code":"","core_px":0,"has_parts":False},
+        seed=42,
+        verbose=True,
+    )
+    print("\n===",team,tuple(members),flush=True)
+    print("BURSTS",[(round(e.t,6),e.event,e.caster) for e in result.log.burst_log if e.t < 20],flush=True)
+    hits=[h for h in result.hits if h.caster=="나유타" and h.t < 20]
+    print("NAYUTA_HITS",[(round(h.t,6),h.skill_name,h.hit_tag,h.damage,_is_normal(h)) for h in hits],flush=True)
+    mode=[h for h in hits if h.skill_name=="기억 연소"]
+    print("MODE_TIMES",[round(h.t,6) for h in mode],flush=True)
+    print("MODE_MAIN",[(round(h.t,6),h.damage,h.hit_tag) for h in mode],flush=True)
+    derived=[h for h in hits if h.skill_name in {"위선 5","위선 6"}]
+    print("MODE_DERIVED",[(round(h.t,6),h.skill_name,h.damage,h.hit_tag) for h in derived],flush=True)
+    print("AMMO",[(round(e.t,6),e.ammo) for e in result.log.ammo_log if e.caster=="나유타" and e.t < 20],flush=True)
+    print("RELOAD",[(round(e.t,6),e.event) for e in result.log.reload_log if e.caster=="나유타" and e.t < 20],flush=True)
+    print("TOTAL",result.char_total.get("나유타"),flush=True)
