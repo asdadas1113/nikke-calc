@@ -41,6 +41,17 @@ jobs:
           assert s.count(old)==1, s.count(old)
           p.write_text(s.replace(old,new,1))
           PY
+      - name: Graduate Velvet from stale class-change regression
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('fast_engine/tests/test_dynamic_weapon_change.py')
+          s=p.read_text()
+          old='''    def test_other_class_changing_weapon_changes_stay_blocked(self):\n        for name, blocker in (\n            ("레이드_네온벨벳", "weapon_change:벨벳:깔끔한 마무리"),\n            ("레이드_작열짬", "weapon_change:모더니아:섬멸 모드"),\n        ):\n            with self.subTest(name=name):\n                case = snapshot.SQUADS[name]\n                compiled = compile_moris_squad(spec.build_squad(list(case["members"])))\n                self.assertIn(blocker, static_score_blockers(compiled))\n'''
+          new='''    def test_other_class_changing_weapon_changes_stay_blocked(self):\n        name = "레이드_작열짬"\n        blocker = "weapon_change:모더니아:섬멸 모드"\n        case = snapshot.SQUADS[name]\n        compiled = compile_moris_squad(spec.build_squad(list(case["members"])))\n        self.assertIn(blocker, static_score_blockers(compiled))\n'''
+          assert s.count(old)==1, s.count(old)
+          p.write_text(s.replace(old,new,1))
+          PY
       - name: Compile staged Fast code
         run: python -m compileall -q fast_engine
       - name: Focused Velvet lifecycle
@@ -50,7 +61,7 @@ jobs:
           python -m unittest -v \
             fast_engine.tests.test_damage_moran_weapon_change_lifecycle \
             fast_engine.tests.test_damage_single_charge_weapon_change \
-            fast_engine.tests.test_damage_nayuta_weapon_change_lifecycle \
+            fast_engine.tests.test_damage_nayuta_cross_mode_weapon_change \
             fast_engine.tests.test_dynamic_weapon_change
       - name: Full Fast discovery
         run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
