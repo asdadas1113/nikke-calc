@@ -38,7 +38,7 @@ orig_fast=TriggerDispatcher.dispatch_periodic
 def traced_fast(dispatcher,effect_id,rule_index,*,time,context):
     result=orig_fast(dispatcher,effect_id,rule_index,time=time,context=context)
     if effect_id==grenade.effect_id:
-        fast.append((time,effect_id in result.activated_effect_ids, dispatcher.burst.full_burst))
+        fast.append((time,effect_id in result.activated_effect_ids))
     return result
 with patch.object(TriggerDispatcher,'dispatch_periodic',new=traced_fast):
     BurstRuntime(c,policy,enemy_profile,damage_sink=sink).run(duration=duration)
