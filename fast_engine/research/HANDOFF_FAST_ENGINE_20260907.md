@@ -17,31 +17,39 @@ Fast Engine은 Moris 복제품이 아니라 optimizer용 고속 sparse-event ran
 - unsupported comparison-critical mechanic silent zero 금지
 - 한 번에 하나의 semantic checkpoint만 완결
 - false-supported safety closure보다 coverage 숫자를 우선하지 않음
+- Moris 불일치를 tolerance 확대로 숨기지 않음
 
 작업 시작 시 branch HEAD와 `master`를 다시 조회한다. 이 문서의 SHA는 semantic 기준점을 기록하는 것이며 현재 HEAD 자체를 뜻하지 않을 수 있다.
 
 먼저 읽을 문서:
 
 1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260907.md`
-2. `fast_engine/research/NAYUTA_RAPID_TO_CHARGE_SKILL_WEAPON_CHANGE_WIP_CHECKPOINT_20260907.md`
-3. `fast_engine/research/PRIVATY_CHARGE_LIVE_MAX_AMMO_SAFETY_CHECKPOINT_20260907.md`
-4. `fast_engine/research/MORAN_RAPID_WEAPON_CHANGE_LIFECYCLE_CHECKPOINT_20260907.md`
-5. `fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md`
+2. `fast_engine/research/RAPID_TO_SINGLE_CHARGE_WEAPON_CHANGE_CHECKPOINT_20260907.md`
+3. `fast_engine/research/NAYUTA_RAPID_TO_CHARGE_SKILL_WEAPON_CHANGE_WIP_CHECKPOINT_20260907.md`
+4. `fast_engine/research/PRIVATY_CHARGE_LIVE_MAX_AMMO_SAFETY_CHECKPOINT_20260907.md`
+5. `fast_engine/research/MORAN_RAPID_WEAPON_CHANGE_LIFECYCLE_CHECKPOINT_20260907.md`
+6. `fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md`
 
 ## 1. Latest completed semantic checkpoint
 
 최신 production semantic commit:
 
-- `38244aeda6313f7c978af9658dc9f2eae1aa6dc0` — `Fast: support rapid-to-charge skill weapon changes`
+- `b492c4d0c3d45cfe3eea5ca9b80cbd755340e13a` — `Fast: support rapid-to-single-charge weapon changes`
 
 완료 checkpoint:
 
-- Nayuta `기억 연소` rapid→charge skill weapon-change lifecycle
+- generic rapid-base → one ordinary SR full-charge shot weapon-change lifecycle
+- public owned shapes:
+  - `스쿼드2` 츠바이 `과충전 공식`
+  - `레이드_헬름아쿠아스노우` 스노우 화이트 `세븐스 드워프 : I`
 
 상세 기록:
 
-- `fast_engine/research/NAYUTA_RAPID_TO_CHARGE_SKILL_WEAPON_CHANGE_WIP_CHECKPOINT_20260907.md`
-  - 파일명에는 역사적으로 `WIP`가 남아 있지만 문서 status는 **COMPLETED**다.
+- `fast_engine/research/RAPID_TO_SINGLE_CHARGE_WEAPON_CHANGE_CHECKPOINT_20260907.md`
+
+직전 semantic checkpoint:
+
+- `38244aeda6313f7c978af9658dc9f2eae1aa6dc0` — Nayuta `기억 연소` rapid→charge skill weapon-change lifecycle
 
 `master` 기준 SHA:
 
@@ -49,133 +57,131 @@ Fast Engine은 Moris 복제품이 아니라 optimizer용 고속 sparse-event ran
 
 이 SHA가 계속 불변이어야 한다.
 
-## 2. Nayuta에서 복원한 exact semantics
+## 2. Latest restored semantics
 
-Public source cases:
+Exact common compiled shape:
 
-- `스쿼드2`
-- `레이드_네온벨벳`
-- `레이드_소다`
+- base weapon `auto`, non-clip
+- self `burst_cast` weapon change
+- changed weapon `SR`
+- changed max ammo `1`
+- no finite time duration
+- `duration_bullets=1`
+- positive damage/charge/full-charge fields
+- no `skill_damage=True`
+- same-cast self `pierce_enabled`, also `duration_bullets=1`
 
-Owned exact shape:
+The changed SR shot is an ordinary full-charge weapon attack, not a skill-weapon shot.
 
-- base `SMG / auto`, non-clip
-- self finite `burst_cast` weapon change
-- changed `RL / charge`
-- duration `10s`
-- infinite changed magazine
-- damage coeff `275.18%`
-- charge time `1.8s`
-- full-charge mult `250%`
-- post-fire delay `0.215s`
-- `skill_damage=True`
-- same actor `full_charge_hit` damage consumers exactly two:
-  - `위선 5` `150%`
-  - `위선 6` `380.46%`
+Moris first-session oracle:
 
-중요 proof correction:
+### Zwei
 
-- 두 consumer의 실제 compiled `target_spec.mode.value`는 `enemy`
-- 초기 staged proof의 `all_enemies` / `same_target` 가정이 over-reject 원인이었음
-- 실제 compiled representation만 인정하도록 좁게 수정함
+- mode enter `3.05`
+- changed SR shot / mode consumption `4.266667`
+- base SG resume next frame `4.283333`
 
-Neighboring widened shape는 계속 fail-closed다.
+### Snow White
 
-## 3. Moris timing과 sparse frame observation
+- mode enter `3.35`
+- changed SR shot / mode consumption `8.35`
+- base AR resume next frame `8.366667`
 
-첫 session Moris oracle:
+## 3. Sparse resume and frame-lattice semantics
 
-- mode enter `3.20`
-- changed shots:
-  - `5.016667`
-  - `7.05`
-  - `9.066667`
-  - `11.083333`
-  - `13.10`
-- expire/base resume `13.20`
+Moris does not restore pre-entry ammo or a live full magazine after this one-shot mode.
 
-만료 시 unfinished charge는 취소되고 base rapid는 **종료 시점 live full magazine**으로 재개한다.
+After the changed SR round is consumed:
 
-`스쿼드2` isolated harness:
+- base rapid state gets exactly `1` round
+- base firing resumes on the next repeated-add Moris frame
+- that round then reaches zero and ordinary reload semantics continue
 
-- live full at expiry `215`
-- resume shot `13.20`
-- ammo after resume shot `214`
+Fast implements this with sparse re-anchoring only:
 
-발견했던 real Fast divergence:
+- `resume_after_single_charge()`
+- `moris_next_tick()` for base resume
+- no global frame loop
 
-- 초기 staged Fast는 nominal `13.241667`에도 두 번째 SMG shot을 발사해 13.25 boundary 전에 ammo `213`이 됨
-- Moris는 해당 nominal deadline을 다음 60Hz frame `13.25`에서 관측
-- half-open horizon `[0, 13.25)`에서는 두 번째 shot이 없음
+A real staged Snow White divergence was also fixed:
 
-수정:
+- naive decimal `3.35 + 5.0` was observed as `8.366667`
+- Moris releases at `8.35`
+- the single-charge mode entry is now anchored through the existing repeated-add frame lattice with epsilon only for this exact family
 
-- global frame loop를 추가하지 않음
-- 기존 sparse `_moris_frame_observed` deadline path를 cross-mode 종료 후 base rapid resume에도 generic하게 이어 줌
-- `resume_with_live_full_magazine()`가 actor를 frame-observed cadence로 re-anchor
+No global charge timing tolerance was widened.
 
-결과:
+## 4. Bullet lifetime and score ownership
 
-- `13.20` 한 발만 발생
-- next observed phase end `13.25`
-- ammo `214`
+Changed-shot ordering:
 
-## 4. Damage classification
+1. changed SR full-charge attack is scored
+2. already-owned reducible hit-count crossings may dispatch
+3. `duration_bullets=1` is consumed
+4. weapon-change and one-shot pierce states are removed
+5. base rapid resumes next frame
 
-Changed-mode shot은 ordinary normal attack이 아니라 weapon-mode skill damage다.
+Score certification requires:
 
-보존된 의미론:
+- exactly one weapon change affecting the actor
+- exact single-charge shape
+- exact one-shot self pierce companion
+- no named-state reference graph around the mode
+- no executable raw `full_charge_hit` / `on_attack` consumers introduced by this slice
 
-- `is_normal_atk=False`
-- `is_weapon_mode_skill=True`
-- full-charge layer 사용
-- weapon-mode skill core semantics 사용
-- normal attack bonus 미적용
-- `duration_bullets` 미소비
-- `full_charge_hit` 후 `위선 5/6` same-timestamp 파생
-- changed RL이라는 이유만으로 projectile explosion bonus를 붙이지 않음
+Still-unowned class-changing families explicitly remain fail-closed:
 
-## 5. Privaty와 기존 safety guard
+- `레이드_네온벨벳` — Velvet `깔끔한 마무리`
+- `레이드_작열짬` — Modernia `섬멸 모드`
 
-Nayuta public timing을 full `스쿼드2` runtime으로 검증하려 하면 기존 Privaty `EX 매거진 2/3` static last-bullet guard가 먼저 fail-closed한다.
+## 5. Privaty transitive dependency
 
-이번 checkpoint에서는 Privaty를 열지 않았다.
+`스쿼드2`의 Privaty `EX 매거진 2:reload_speed_pct`는 새 mechanic 구현이 아니다.
 
-- Privaty `EX 매거진 2/3` public certification은 여전히 별도 문제
-- Nayuta timing은 isolated lower-level runtime harness로 검증
+기존 generic dynamic-reload path는 이미 있었지만 Zwei recipient cadence가 unsafe여서 score proof가 fail-closed였다. 이번 exact Zwei cadence ownership으로 그 recipient dependency가 풀렸다.
 
-기존 periodic/core-count safety test도 약화하지 않았다.
+따라서 `스쿼드2`에서만:
 
-- 새 dynamic weapon guard가 원래 `기억 흡수` guard를 가리던 synthetic fixture만 격리
-- effect slot/effect_id를 유지한 inert `기억 연소`로 바꿔 원래 `기억 흡수` fail-closed를 직접 검증
+- `cadence:프리바티:EX 매거진 2:reload_speed_pct` 제거
+
+반면:
+
+- `cadence:프리바티:EX 매거진 3:max_ammo_pct`는 계속 fail-closed
+- 다른 public Privaty pair의 unresolved recipient dependencies도 계속 fail-closed
+
+이 변화는 regression으로 고정했다.
 
 ## 6. Promotion validation
 
-Semantic promotion workflow:
+Semantic promotion gate:
 
-- run `34104960960`
-- job `101687759145`
+- run `34135447642`
+- job `101785202117`
 - result `success`
 
-Gate results:
+Validation:
 
-- periodic named-stack isolation `4/4`
-- Nayuta focused `6/6`
-- neighboring regressions `29/29`
-- complete Fast discovery `356/356`
-- performance sample median `200.58ms`, events `539`
+- new single-charge focused `5/5`
+- neighboring grouped suite `35/35`
+- complete Fast discovery `361/361`, `65.368s`
+- focused performance median `198.38ms`, events `539`
+- complete-run performance median `201.28ms`, events `539`
+- `master` baseline rechecked before promotion
+- no `calculator/` diff
+- staged semantic diff restricted to `fast_engine/`
 
-Semantic diff는 `fast_engine/`의 8개 파일뿐이다.
+Semantic commit diff:
 
-- engine 6개
-- 신규 Nayuta regression 1개
-- 기존 periodic named-stack regression 1개
+- 12 `fast_engine/` files
+- 420 insertions / 40 deletions
+- new `test_damage_single_charge_weapon_change.py`
+- stale frontier expectations repaired only where the newly owned exact scope made them obsolete
 
-`calculator/` diff 없음.
+Full discovery initially found five stale regressions. They all encoded the old frontier; no runtime-semantic failure was hidden. Updated tests preserve explicit fail-closed witnesses for unrelated families.
 
 ## 7. Current public frontier
 
-표준 `fast_engine/research/public_blocker_frontier.py` 기준:
+표준 `fast_engine/research/public_blocker_frontier.py` raw source-case view:
 
 - source cases `24`
 - certified source cases `6`
@@ -183,50 +189,58 @@ Semantic diff는 `fast_engine/`의 8개 파일뿐이다.
 
 blocker family counts:
 
-- cadence `56`
+- cadence `55`
 - control `5`
-- normal_delivery `47`
+- normal_delivery `45`
 - normal_state `18`
 - periodic_grid `1`
 - skill_damage `25`
 - skill_state_delivery `49`
-- weapon_change `4`
+- weapon_change `2`
 
-Nayuta A/B에서 바뀐 family는 `weapon_change`뿐이다.
+Checkpoint A/B:
 
-- before `7`
-- after `4`
+- cadence `56 → 55`
+- normal_delivery `47 → 45`
+- weapon_change `4 → 2`
+- certified remains `6`
 
-없어진 blocker는 정확히 다음 세 source case의 `weapon_change:나유타:기억 연소`다.
+Direct removed blockers:
 
-- `스쿼드2`
-- `레이드_네온벨벳`
-- `레이드_소다`
+- `weapon_change:츠바이:과충전 공식`
+- `normal_delivery:츠바이:과충전 공식 2:pierce_enabled`
+- `weapon_change:스노우 화이트:세븐스 드워프 : I`
+- `normal_delivery:스노우 화이트:세븐스 드워프 : I 2:pierce_enabled`
 
-certified count가 증가하지 않은 것은 세 roster에 다른 blockers가 남아 있기 때문이다.
+Transitive removal:
+
+- `cadence:프리바티:EX 매거진 2:reload_speed_pct` in `스쿼드2`
+
+`레이드_헬름아쿠아스노우`의 현재 blocker는 정확히 두 개다.
+
+- `periodic_grid:에이다:섬광 수류탄 투척 발동 시간 조건:effect_interval`
+- `normal_state:미란다:웨이크업! 4:rank_target_timing`
 
 집계 주의:
 
-- scanner raw view: `24 source / 6 certified / 18 gaps`
-- 이전 handoff의 `23 unique memberships / 17 gaps`는 membership de-duplication view
-- 두 수치는 집계 단위가 다르다.
+- scanner raw view: `24 / 6 / 18`
+- membership de-duplication view는 23 unique memberships를 사용하며 cadence count도 raw view와 다를 수 있다.
 
 ## 8. Cleanup state
 
-Nayuta checkpoint 완료 후 다음 temporary assets는 제거했다.
+이번 checkpoint 임시 자산은 모두 제거했다.
 
-- `.github/workflows/tmp-nayuta-diagnostic.yml`
-- `.github/tmp_nayuta_apply.py`
-- `.github/tmp_nayuta_probe.py`
-- `.github/tmp_nayuta_integrate.py`
-- `.github/tmp_nayuta_regression_fix.py`
+- `.github/workflows/tmp-next-frontier.yml`
+- `.github/tmp_single_charge_apply.py`
+- `.github/tmp_single_charge_fix1.py`
+- `.github/tmp_single_charge_regression_fix.py`
 
 최종 `.github/workflows`에는 다음 두 개만 남아야 한다.
 
 - `ci.yml`
 - `pages.yml`
 
-재개 시 이 hygiene를 다시 확인한다.
+재개 시 다시 확인한다.
 
 ## 9. Current phase
 
@@ -240,19 +254,22 @@ Nayuta checkpoint 완료 후 다음 temporary assets는 제거했다.
 - Little Mermaid enemy replacement + global squad ammo crossing
 - Crown shared lifetime/heal_received
 - charge live max-ammo source quantization/clamp safety repair
-- exact self rapid→charge skill weapon-change lifecycle
+- Nayuta rapid→charge skill weapon-change lifecycle
+- rapid→single-charge ordinary weapon-change + one-shot bullet lifetime
 
-Nayuta checkpoint는 닫혔다. 다음 작업은 clean final canonical CI와 current frontier를 확인한 뒤 **다음 단일 semantic checkpoint를 선택**하는 것이다. raw coverage expansion이나 optimizer integration으로 바로 넘어가지 않는다.
+이번 checkpoint는 닫혔다. 다음에는 raw coverage 숫자를 보고 바로 가장 큰 family를 고르지 말고, current blockers 중 false-supported risk와 semantic leverage가 높은 **다음 하나의** checkpoint만 선택한다.
+
+현재 눈에 띄는 near-frontier 예시는 `레이드_헬름아쿠아스노우`의 남은 두 blocker지만, 실제 선택은 Moris ownership 범위를 다시 조사한 뒤 결정한다.
 
 ## 10. 다음 작업자가 할 순서
 
 1. branch HEAD 조회
 2. `master`가 `fb2fd9157aa14499daf6b9f185beb685d4393f90`인지 확인
-3. 이 handoff와 completed Nayuta checkpoint 읽기
+3. 이 handoff와 completed single-charge checkpoint 읽기
 4. `.github/workflows`가 `ci.yml`, `pages.yml`뿐인지 확인
-5. 최신 canonical CI가 green인지 확인
-6. current public frontier를 필요 시 재실행
-7. 남은 blockers 중 false-supported risk와 semantic leverage를 기준으로 다음 **하나의** checkpoint 선택
+5. 최신 clean-HEAD canonical CI가 green인지 확인
+6. 필요 시 current public frontier 재실행
+7. 남은 blockers 중 false-supported risk와 semantic leverage 기준으로 다음 **하나의** checkpoint 선택
 8. Moris oracle로 의미론을 먼저 고정
 9. narrow ownership proof + focused regression
 10. full Fast discovery + frontier A/B + canonical CI 후에만 완료 처리
