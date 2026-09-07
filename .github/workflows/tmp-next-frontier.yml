@@ -18,37 +18,53 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Compare remaining public weapon changes
+      - name: Trace Moris rapid-to-single-charge lifecycle
         run: |
-          echo '=== related existing tests/docs ==='
-          grep -R -n "과충전 공식\|세븐스 드워프 : I\|깔끔한 마무리\|섬멸 모드" fast_engine/tests fast_engine/research | head -300 || true
           python - <<'PY'
-          from context import spec
-          from fast_engine.engine.compiler import compile_moris_squad
-          from fast_engine.engine.score import static_score_blockers, _possible_ally_targets
-          from fast_engine.engine.dispatcher import TriggerDispatcher
+          from dataclasses import asdict, is_dataclass
+          from unittest.mock import patch
+          from context import snapshot, spec
+          from calculator.timeline import simulate
+          from calculator.buff_manager import BuffManager
 
-          rosters={
-            '스쿼드2':['츠바이','나유타','프리바티','스노우 화이트 : 헤비암즈','리틀 머메이드'],
-            '레이드_헬름아쿠아스노우':['미란다','헬름 : 아쿠아마린','에이드 : 에이전트 바니','스노우 화이트','에이다'],
-            '레이드_네온벨벳':['리틀 머메이드','벨벳','나유타','네온 : 비전 아이','리버렐리오'],
-            '레이드_작열짬':['리타','그레이브','레이','앨리스','모더니아'],
-          }
-          nameset={'과충전 공식','세븐스 드워프 : I','깔끔한 마무리','섬멸 모드'}
-          for label,names in rosters.items():
-              sq=compile_moris_squad(spec.build_squad(names))
-              print('\nROSTER',label,sq.names)
-              print('BLOCKERS',[b for b in static_score_blockers(sq) if b.startswith('weapon_change:')])
-              for e in sq.effects:
-                  if e.name not in nameset: continue
-                  m=sq.members[e.actor]
-                  print('WEAPON_CHANGE',m.name,'base=',m.weapon_type,dict(m.weapon),'effect_id=',e.effect_id,'effect=',e.effect_type,e.stat,'value=',e.value,'dur=',e.duration,'stack=',e.max_stack,'target=',e.target_spec.mode.value,'params=',dict(e.parameters),'conds=',[(c.mode.value,c.key,getattr(c,'value',None)) for c in e.condition_rules],'triggers=',[(t.mode.value,t.event_key,t.threshold,t.raw) for t in e.triggers],'cap=',e.capability.disposition.value,e.capability.blockers)
-                  print('  rapid_shape=',TriggerDispatcher._temporary_self_rapid_weapon_change_shape_supported(e))
-                  print('  charge_shape=',TriggerDispatcher._temporary_self_charge_weapon_change_shape_supported(e))
-                  print('  rapid_charge_skill_shape=',TriggerDispatcher._temporary_self_rapid_to_charge_skill_weapon_change_shape_supported(e))
-                  for o in sq.effects:
-                      if o.effect_id==e.effect_id: continue
-                      refs=(any(c.key==e.name for c in o.condition_rules) or any((r.event_key or '')==f'event:state_end:{e.name}' for r in o.triggers) or o.parameters.get('target_effect')==e.name or o.parameters.get('scaling_ref')==e.name)
-                      if refs:
-                          print('  CONSUMER',sq.members[o.actor].name,o.name,o.effect_type,o.stat,'value=',o.value,'dur=',o.duration,'target=',o.target_spec.mode.value,'params=',dict(o.parameters),'conds=',[(c.mode.value,c.key,getattr(c,'value',None)) for c in o.condition_rules],'triggers=',[(r.mode.value,r.event_key,r.threshold,r.raw) for r in o.triggers])
+          cases=[
+            ('스쿼드2','츠바이','과충전 공식',12.0),
+            ('레이드_헬름아쿠아스노우','스노우 화이트','세븐스 드워프 : I',15.0),
+          ]
+          for source,actor,wc_name,duration in cases:
+              squad=spec.build_squad(list(snapshot.SQUADS[source]['members']))
+              ends=[]
+              orig=BuffManager.end_weapon_change
+              def traced_end(self,caster,t,*args,**kwargs):
+                  # State is still active on entry; capture owner-visible ammo-independent boundary.
+                  ends.append((float(t),caster,wc_name))
+                  return orig(self,caster,t,*args,**kwargs)
+              with patch.object(BuffManager,'end_weapon_change',new=traced_end):
+                  result=simulate(squad,config={'duration':duration,'rng_mode':'expected'},verbose=True)
+              print('\n=== CASE',source,actor,wc_name,'===')
+              print('ENDS',ends)
+              for row in result.log.burst_log:
+                  d=asdict(row) if is_dataclass(row) else vars(row)
+                  if float(d.get('t',0.0)) <= duration:
+                      print('BURST',d)
+              for row in result.log.buff_events:
+                  d=asdict(row) if is_dataclass(row) else vars(row)
+                  if d.get('caster')==actor or d.get('name')==wc_name or str(d.get('name','')).startswith(wc_name):
+                      print('BUFF',d)
+              for row in result.log.ammo_log:
+                  d=asdict(row) if is_dataclass(row) else vars(row)
+                  if d.get('caster')==actor:
+                      print('AMMO',d)
+              for row in result.log.reload_log:
+                  d=asdict(row) if is_dataclass(row) else vars(row)
+                  if d.get('caster')==actor:
+                      print('RELOAD',d)
+              hits=[]
+              for row in result.log.hit_events:
+                  d=asdict(row) if is_dataclass(row) else vars(row)
+                  if d.get('caster')==actor:
+                      hits.append(d)
+              for d in hits:
+                  print('HIT',d)
+              print('HIT_TIMES',[(d.get('t'),d.get('skill_name'),d.get('hit_type'),d.get('damage')) for d in hits])
           PY
