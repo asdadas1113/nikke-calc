@@ -1,14 +1,16 @@
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from fast_engine.research.public_blocker_frontier import _load_public_cases
-from fast_engine.engine.compiler import compile_squad
+from context import spec
+from fast_engine.research.public_ranking_probe import _source_corpus
+from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.score import static_score_blockers
 
-for label, raw in _load_public_cases():
+for members,label in _source_corpus():
     if label != '레이드_네온벨벳':
         continue
-    squad=compile_squad(raw)
+    raw=spec.build_squad(list(members))
+    squad=compile_moris_squad(raw)
     print('TEAM',label, squad.names)
     print('BLOCKERS', static_score_blockers(squad))
     for i,m in enumerate(squad.members):
