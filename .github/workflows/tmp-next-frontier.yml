@@ -21,50 +21,41 @@ jobs:
       - name: Trace Moris rapid-to-single-charge lifecycle
         run: |
           python - <<'PY'
-          from dataclasses import asdict, is_dataclass
+          from dataclasses import asdict
           from unittest.mock import patch
           from context import snapshot, spec
           from calculator.timeline import simulate
           from calculator.buff_manager import BuffManager
 
           cases=[
-            ('스쿼드2','츠바이','과충전 공식',12.0),
-            ('레이드_헬름아쿠아스노우','스노우 화이트','세븐스 드워프 : I',15.0),
+            ('스쿼드2','츠바이','과충전 공식',7.0),
+            ('레이드_헬름아쿠아스노우','스노우 화이트','세븐스 드워프 : I',12.0),
           ]
           for source,actor,wc_name,duration in cases:
               squad=spec.build_squad(list(snapshot.SQUADS[source]['members']))
               ends=[]
               orig=BuffManager.end_weapon_change
               def traced_end(self,caster,t,*args,**kwargs):
-                  # State is still active on entry; capture owner-visible ammo-independent boundary.
-                  ends.append((float(t),caster,wc_name))
+                  if caster==actor:
+                      ends.append(float(t))
                   return orig(self,caster,t,*args,**kwargs)
               with patch.object(BuffManager,'end_weapon_change',new=traced_end):
                   result=simulate(squad,config={'duration':duration,'rng_mode':'expected'},verbose=True)
               print('\n=== CASE',source,actor,wc_name,'===')
               print('ENDS',ends)
-              for row in result.log.burst_log:
-                  d=asdict(row) if is_dataclass(row) else vars(row)
-                  if float(d.get('t',0.0)) <= duration:
-                      print('BURST',d)
-              for row in result.log.buff_events:
-                  d=asdict(row) if is_dataclass(row) else vars(row)
-                  if d.get('caster')==actor or d.get('name')==wc_name or str(d.get('name','')).startswith(wc_name):
-                      print('BUFF',d)
-              for row in result.log.ammo_log:
-                  d=asdict(row) if is_dataclass(row) else vars(row)
-                  if d.get('caster')==actor:
-                      print('AMMO',d)
-              for row in result.log.reload_log:
-                  d=asdict(row) if is_dataclass(row) else vars(row)
-                  if d.get('caster')==actor:
-                      print('RELOAD',d)
-              hits=[]
-              for row in result.log.hit_events:
-                  d=asdict(row) if is_dataclass(row) else vars(row)
-                  if d.get('caster')==actor:
-                      hits.append(d)
-              for d in hits:
-                  print('HIT',d)
-              print('HIT_TIMES',[(d.get('t'),d.get('skill_name'),d.get('hit_type'),d.get('damage')) for d in hits])
+              print('BURSTS',[asdict(x) for x in result.log.burst_log])
+              relevant=[]
+              for x in result.log.buff_events:
+                  d=asdict(x)
+                  if d['caster']==actor and (
+                      d['name']==wc_name or d['name'].startswith(wc_name)
+                      or d['stat'] in {'pierce_enabled','charge_dmg_pct','charge_speed_pct'}
+                  ):
+                      relevant.append(d)
+              print('BUFFS',relevant)
+              ammo=[asdict(x) for x in result.log.ammo_log if x.caster==actor]
+              print('AMMO',ammo)
+              print('RELOAD',[asdict(x) for x in result.log.reload_log if x.caster==actor])
+              hits=[asdict(x) for x in result.hits if x.caster==actor]
+              print('HITS',hits)
           PY
