@@ -22,6 +22,7 @@ jobs:
         run: |
           python -u .github/tmp_single_charge_apply.py
           python -u .github/tmp_single_charge_fix1.py
+          python -u .github/tmp_single_charge_regression_fix.py
       - name: Validate staged scope
         run: |
           git diff --check
