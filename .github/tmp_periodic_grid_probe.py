@@ -3,11 +3,13 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from unittest.mock import patch
+from calculator.buff_manager import BuffManager
 from calculator.timeline import DEFAULT_ENEMY, simulate
 from context import snapshot, spec
 from fast_engine.engine.burst import compile_burst_policy
 from fast_engine.engine.burst_runtime import BurstRuntime
 from fast_engine.engine.compiler import compile_moris_squad
+from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
 from fast_engine.engine.dispatcher import TriggerDispatcher
 from fast_engine.engine.model import EnemyStaticProfile
 from fast_engine.engine.score import static_score_blockers
@@ -20,41 +22,49 @@ print('BLOCKERS', static_score_blockers(c))
 ada=next(i for i,m in enumerate(c.members) if m.name=='에이다')
 grenade=next(e for e in c.members[ada].effects if e.name=='섬광 수류탄 투척')
 modifier=next(e for e in c.members[ada].effects if (e.stat or '')=='effect_interval')
-for e in c.effects:
-    if (e.stat or '') == 'effect_interval' or any(getattr(r,'mode',None).value == 'periodic' for r in e.triggers):
-        print('EFFECT', e.effect_id, c.members[e.actor].name, e.name, e.effect_type, e.stat, e.value, 'duration',e.duration,'max_stack',e.max_stack,'params',e.parameters,'target',e.target_spec.mode.value,'cap',e.capability.disposition.value,tuple(e.capability.blockers))
-        for r in e.triggers:
-            print('  TRIGGER', r.mode.value, r.event_key, r.interval, r.threshold, r.trigger_count_reducible)
-        print('  COND', [(r.mode.value,r.key,r.value) for r in e.condition_rules])
-print('SAFE PERIODICS')
-for e in c.effects:
-    safe=(TriggerDispatcher._periodic_permanent_self_direct_stack_shape_supported(e) or TriggerDispatcher._periodic_finite_self_crit_shape_supported(e) or TriggerDispatcher._periodic_finite_enemy_received_damage_shape_supported(e))
-    if safe:
-        print('SAFE',e.effect_id,c.members[e.actor].name,e.name,e.stat,[r.interval for r in e.triggers])
+print('GRENADE',grenade.effect_id,grenade.name,grenade.stat,[(r.mode.value,r.interval,r.event_key) for r in grenade.triggers])
+print('MODIFIER',modifier.effect_id,modifier.name,modifier.stat,modifier.value,modifier.duration,modifier.parameters)
 
-duration=30.0
+duration=35.0
 config={'duration':duration,'rng_mode':'expected'}
 enemy=dict(DEFAULT_ENEMY)
 policy=compile_burst_policy(moris,c,config)
+enemy_profile=EnemyStaticProfile(defense=float(enemy.get('def',31784.0)),element=enemy.get('code'),core_px=float(enemy.get('core_px',0.0) or 0.0),duration=duration)
+
+# Current Fast with a real score sink: fixed 2s grid, no effect_interval yet.
 fast=[]
-orig=TriggerDispatcher.dispatch_periodic
-def traced(dispatcher,effect_id,rule_index,*,time,context):
-    result=orig(dispatcher,effect_id,rule_index,time=time,context=context)
+sink=SimpleDamageScoreSink(c,enemy_profile)
+orig_fast=TriggerDispatcher.dispatch_periodic
+def traced_fast(dispatcher,effect_id,rule_index,*,time,context):
+    result=orig_fast(dispatcher,effect_id,rule_index,time=time,context=context)
     if effect_id==grenade.effect_id:
-        fast.append((time,effect_id in result.activated_effect_ids, dispatcher.effects.has_stat(ada,'effect_interval',now=time)))
+        fast.append((time,effect_id in result.activated_effect_ids, dispatcher.burst.full_burst))
     return result
-with patch.object(TriggerDispatcher,'dispatch_periodic',new=traced):
-    BurstRuntime(c,policy,EnemyStaticProfile(defense=float(enemy.get('def',31784.0)),element=enemy.get('code'),core_px=float(enemy.get('core_px',0.0) or 0.0),duration=duration)).run(duration=duration)
+with patch.object(TriggerDispatcher,'dispatch_periodic',new=traced_fast):
+    BurstRuntime(c,policy,enemy_profile,damage_sink=sink).run(duration=duration)
 print('FAST_GRENADE',fast)
-res=simulate(moris,config=config,enemy=enemy,verbose=True)
-print('MORIS_LOG_ATTRS', [x for x in dir(res.log) if not x.startswith('_')])
-for attr in dir(res.log):
-    if attr.startswith('_'): continue
-    try: rows=getattr(res.log,attr)
-    except Exception: continue
-    if not isinstance(rows,(list,tuple)): continue
-    hits=[row for row in rows if '섬광 수류탄' in repr(row) or '에이다' in repr(row)]
-    if hits:
-        print('MORIS',attr,len(hits))
-        for row in hits[:80]: print(' ',repr(row))
-print('MODIFIER_RUNTIME_EXEC',TriggerDispatcher(c, __import__('fast_engine.engine.state',fromlist=['StateStore']).StateStore.from_compiled_squad(c), EnemyStaticProfile(duration=1), __import__('fast_engine.engine.burst',fromlist=['BurstMachine']).BurstMachine(c,policy), __import__('fast_engine.engine.scheduler',fromlist=['EventScheduler']).EventScheduler()).is_runtime_executable_effect(modifier))
+print('FAST_GRENADE_DAMAGE',sink.char_total[ada])
+
+# Moris activation boundary oracle. Periodic damage routes through _activate after
+# every:Ns condition succeeds, so this captures exact grenade fire frames.
+moris_grenade=[]
+moris_modifier=[]
+orig_activate=BuffManager._activate
+def traced_activate(self,eff,caster,t,suppress_event=False):
+    if caster=='에이다' and eff.get('name')=='섬광 수류탄 투척':
+        moris_grenade.append(float(t))
+    if caster=='에이다' and eff.get('name')=='섬광 수류탄 투척 발동 시간 조건':
+        moris_modifier.append(float(t))
+    return orig_activate(self,eff,caster,t,suppress_event=suppress_event)
+with patch.object(BuffManager,'_activate',new=traced_activate):
+    res=simulate(moris,config=config,enemy=enemy,verbose=True)
+print('MORIS_GRENADE',moris_grenade)
+print('MORIS_MODIFIER',moris_modifier)
+print('MORIS_BURSTS',[(r.t,r.event,r.caster) for r in res.log.burst_log])
+
+# Compile/runtime support sanity.
+tmp_dispatcher=TriggerDispatcher(c, __import__('fast_engine.engine.state',fromlist=['StateStore']).StateStore.from_compiled_squad(c), enemy_profile, __import__('fast_engine.engine.burst',fromlist=['BurstMachine']).BurstMachine(c,policy), __import__('fast_engine.engine.scheduler',fromlist=['EventScheduler']).EventScheduler(), damage_sink=SimpleDamageScoreSink(c,enemy_profile))
+print('GRENADE_CAN_ACTIVATE',tmp_dispatcher.can_activate_effect(grenade))
+print('GRENADE_RUNTIME_EXEC',tmp_dispatcher.is_runtime_executable_effect(grenade))
+print('MODIFIER_CAN_ACTIVATE',tmp_dispatcher.can_activate_effect(modifier))
+print('MODIFIER_RUNTIME_EXEC',tmp_dispatcher.is_runtime_executable_effect(modifier))
