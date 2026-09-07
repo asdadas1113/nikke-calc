@@ -18,33 +18,37 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Inspect Little Mermaid and Crown candidate shapes
+      - name: Compare remaining public weapon changes
         run: |
-          echo '=== sequential support references ==='
-          grep -R -n "sequential_damage\|sequential_dmg" fast_engine/engine fast_engine/tests | head -250 || true
+          echo '=== related existing tests/docs ==='
+          grep -R -n "과충전 공식\|세븐스 드워프 : I\|깔끔한 마무리\|섬멸 모드" fast_engine/tests fast_engine/research | head -300 || true
           python - <<'PY'
           from context import spec
           from fast_engine.engine.compiler import compile_moris_squad
           from fast_engine.engine.score import static_score_blockers, _possible_ally_targets
           from fast_engine.engine.dispatcher import TriggerDispatcher
 
-          rosters = {
-            '스쿼드1': ['리틀 머메이드','크라운','라피 : 레드 후드','미하라 : 본딩 체인','헬름'],
-            '스쿼드5': ['아니스 : 스타','아르카나','이사벨','신데렐라','크라운'],
-            '레이드_일레그': ['아니스 : 스타','크라운','일레그 : 붐 앤 쇼크','헬름','루드밀라 : 윈터 오너'],
+          rosters={
+            '스쿼드2':['츠바이','나유타','프리바티','스노우 화이트 : 헤비암즈','리틀 머메이드'],
+            '레이드_헬름아쿠아스노우':['미란다','헬름 : 아쿠아마린','에이드 : 에이전트 바니','스노우 화이트','에이다'],
+            '레이드_네온벨벳':['리틀 머메이드','벨벳','나유타','네온 : 비전 아이','리버렐리오'],
+            '레이드_작열짬':['리타','그레이브','레이','앨리스','모더니아'],
           }
+          nameset={'과충전 공식','세븐스 드워프 : I','깔끔한 마무리','섬멸 모드'}
           for label,names in rosters.items():
               sq=compile_moris_squad(spec.build_squad(names))
-              print('\nROSTER',label, sq.names)
-              print('BLOCKERS', static_score_blockers(sq))
+              print('\nROSTER',label,sq.names)
+              print('BLOCKERS',[b for b in static_score_blockers(sq) if b.startswith('weapon_change:')])
               for e in sq.effects:
-                  if e.name == '로얄 에타이어 4' or e.name == '거품 난사' or any(k in (e.stat or '') for k in ('heal','life')):
-                      print('EFFECT',e.effect_id,e.actor,sq.members[e.actor].name,e.name,e.effect_type,e.stat,'value=',e.value,'dur=',e.duration,'stack=',e.max_stack,'tick=',e.tick_interval,'target=',e.target_spec.mode.value,'targets=',_possible_ally_targets(sq,e),'cap=',e.capability.disposition.value,e.capability.blockers,'params=',dict(e.parameters),'conds=',[(c.mode.value,c.key,c.threshold) for c in e.condition_rules],'triggers=',[(t.mode.value,t.event_key,t.threshold,t.raw) for t in e.triggers])
-              crown=next((e for e in sq.effects if e.name=='로얄 에타이어 4'),None)
-              if crown:
-                  print('CROWN_EXEC', TriggerDispatcher.is_executable_effect(crown))
-                  try:
-                      print('CROWN_HEAL_SAFE', TriggerDispatcher(sq).heal_received_dependency_score_safe(crown))
-                  except Exception as exc:
-                      print('CROWN_HEAL_SAFE_ERR',type(exc).__name__,exc)
+                  if e.name not in nameset: continue
+                  m=sq.members[e.actor]
+                  print('WEAPON_CHANGE',m.name,'base=',m.weapon_type,dict(m.weapon),'effect_id=',e.effect_id,'effect=',e.effect_type,e.stat,'value=',e.value,'dur=',e.duration,'stack=',e.max_stack,'target=',e.target_spec.mode.value,'params=',dict(e.parameters),'conds=',[(c.mode.value,c.key,getattr(c,'value',None)) for c in e.condition_rules],'triggers=',[(t.mode.value,t.event_key,t.threshold,t.raw) for t in e.triggers],'cap=',e.capability.disposition.value,e.capability.blockers)
+                  print('  rapid_shape=',TriggerDispatcher._temporary_self_rapid_weapon_change_shape_supported(e))
+                  print('  charge_shape=',TriggerDispatcher._temporary_self_charge_weapon_change_shape_supported(e))
+                  print('  rapid_charge_skill_shape=',TriggerDispatcher._temporary_self_rapid_to_charge_skill_weapon_change_shape_supported(e))
+                  for o in sq.effects:
+                      if o.effect_id==e.effect_id: continue
+                      refs=(any(c.key==e.name for c in o.condition_rules) or any((r.event_key or '')==f'event:state_end:{e.name}' for r in o.triggers) or o.parameters.get('target_effect')==e.name or o.parameters.get('scaling_ref')==e.name)
+                      if refs:
+                          print('  CONSUMER',sq.members[o.actor].name,o.name,o.effect_type,o.stat,'value=',o.value,'dur=',o.duration,'target=',o.target_spec.mode.value,'params=',dict(o.parameters),'conds=',[(c.mode.value,c.key,getattr(c,'value',None)) for c in o.condition_rules],'triggers=',[(r.mode.value,r.event_key,r.threshold,r.raw) for r in o.triggers])
           PY
