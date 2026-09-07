@@ -26,18 +26,23 @@ jobs:
         with:
           python-version: '3.13'
       - name: Apply staged Nayuta implementation
-        run: python -u .github/tmp_nayuta_apply.py
+        run: |
+          python -u .github/tmp_nayuta_apply.py
+          python -u .github/tmp_nayuta_regression_fix.py
       - name: Validate production diff scope
         run: |
           git diff --check
-          echo '=== staged diff ==='
-          git diff --name-only
-          test -n "$(git diff --name-only)"
-          if git diff --name-only | grep -v '^fast_engine/' ; then
+          echo '=== working tree ==='
+          git status --short
+          changed="$(git status --porcelain | sed -E 's/^.. //')"
+          test -n "$changed"
+          if printf '%s\n' "$changed" | grep -v '^fast_engine/' ; then
             echo 'Refusing non-fast_engine production diff'
             exit 1
           fi
           test -z "$(git diff --name-only -- calculator/)"
+      - name: Verify adjusted Nayuta regression isolation
+        run: python -m unittest fast_engine.tests.test_periodic_named_stack_delivery
       - name: Run focused and neighboring regressions
         run: |
           python -m unittest fast_engine.tests.test_damage_nayuta_cross_mode_weapon_change
