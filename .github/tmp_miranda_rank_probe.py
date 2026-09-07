@@ -9,8 +9,14 @@ from unittest.mock import patch
 from calculator.buff_manager import BuffManager
 from calculator.timeline import DEFAULT_ENEMY, simulate
 from context import snapshot, spec
+from fast_engine.engine.burst import compile_burst_policy
+from fast_engine.engine.burst_runtime import BurstRuntime
 from fast_engine.engine.compiler import compile_moris_squad
-from fast_engine.engine.score import static_score_blockers
+from fast_engine.engine.damage_runtime import SimpleDamageScoreSink
+from fast_engine.engine.dispatcher import TriggerDispatcher
+from fast_engine.engine.effects import ActiveEffectStore
+from fast_engine.engine.model import EnemyStaticProfile
+from fast_engine.engine.score import StaticNormalAttackObserver, static_score_blockers
 
 TEAM = '레이드_헬름아쿠아스노우'
 DURATION = 70.0
@@ -81,3 +87,37 @@ for row in result.log.buff_events:
 print('MORIS_BURSTS')
 for row in result.log.burst_log:
     print((row.t, row.event, row.caster))
+
+# Diagnostic only: force the existing lazy-target runtime to accept Wakeup 4
+# without changing production, to learn whether the pending-store mechanics can
+# already preserve its duration_bullets=1 lifetime.
+fast_targets = []
+orig_shape = TriggerDispatcher._lazy_rank_target_shape_supported
+orig_activate_one = ActiveEffectStore._activate_one
+
+def diagnostic_shape(effect):
+    return orig_shape(effect) or effect.effect_id == wake.effect_id
+
+def traced_activate_one(self, effect, target, cohort, now, scheduler, **kwargs):
+    if effect.effect_id == wake.effect_id:
+        fast_targets.append((float(now), self.squad.members[target].name, tuple(self.squad.members[i].name for i in cohort)))
+    return orig_activate_one(self, effect, target, cohort, now, scheduler, **kwargs)
+
+policy = compile_burst_policy(moris, compiled, {'duration': DURATION})
+enemy = EnemyStaticProfile(
+    defense=float(DEFAULT_ENEMY.get('def', 31784.0)),
+    element=DEFAULT_ENEMY.get('code'),
+    core_px=float(DEFAULT_ENEMY.get('core_px', 0.0) or 0.0),
+    duration=DURATION,
+)
+sink = SimpleDamageScoreSink(compiled, enemy)
+try:
+    with patch.object(TriggerDispatcher, '_lazy_rank_target_shape_supported', new=staticmethod(diagnostic_shape)), patch.object(ActiveEffectStore, '_activate_one', new=traced_activate_one):
+        runtime = BurstRuntime(compiled, policy, enemy, damage_sink=sink)
+        observer = StaticNormalAttackObserver(runtime, duration=DURATION)
+        runtime.run(duration=DURATION, score_observer=observer)
+    print('FAST_FORCED_LAZY_TARGETS', fast_targets)
+    print('FAST_PENDING_END', runtime.dispatcher.effects._pending_target)
+except Exception as exc:
+    print('FAST_FORCED_LAZY_ERROR', type(exc).__name__, repr(exc))
+    raise
