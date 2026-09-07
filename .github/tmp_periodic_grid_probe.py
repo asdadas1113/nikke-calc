@@ -1,3 +1,7 @@
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from context import snapshot, spec
 from fast_engine.engine.compiler import compile_moris_squad
 from fast_engine.engine.score import static_score_blockers
