@@ -25,10 +25,11 @@ jobs:
           python-version: '3.13'
       - name: Apply staged Nayuta implementation
         run: python -u .github/tmp_nayuta_apply.py
-      - name: Correct compiled target proof representation
+      - name: Patch exact proof and frame-observed base resume
         run: |
           python - <<'PY'
           from pathlib import Path
+
           p=Path('fast_engine/engine/score.py')
           s=p.read_text(encoding='utf-8')
           old='''        expected_target=("all_enemies" if stat == "damage" else "same_target")\n        if not (\n            consumer.actor == actor\n            and consumer.effect_type == "damage"\n            and stat in {"damage","bonus_damage"}\n            and stat not in seen\n            and target_mode == expected_target\n'''
@@ -36,20 +37,94 @@ jobs:
           if old not in s:
               raise SystemExit('target proof anchor missing')
           p.write_text(s.replace(old,new,1),encoding='utf-8')
+
+          p=Path('fast_engine/engine/dynamic_rapid.py')
+          s=p.read_text(encoding='utf-8')
+          old='''        "_squad_ammo_generation", "_squad_ammo_scheduled_time",\n        "_squad_ammo_dispatched_count",\n    )\n'''
+          new='''        "_squad_ammo_generation", "_squad_ammo_scheduled_time",\n        "_squad_ammo_dispatched_count", "_moris_frame_observed_actors",\n    )\n'''
+          if old not in s:
+              raise SystemExit('rapid slots anchor missing')
+          s=s.replace(old,new,1)
+          old='''        self._squad_ammo_generation = 0\n        self._squad_ammo_scheduled_time: float | None = None\n        self._squad_ammo_dispatched_count = 0\n\n    def attach_score_sink'''
+          new='''        self._squad_ammo_generation = 0\n        self._squad_ammo_scheduled_time: float | None = None\n        self._squad_ammo_dispatched_count = 0\n        self._moris_frame_observed_actors: set[int] = set()\n\n    def _weapon(self, actor: int, now: float) -> dict:\n        weapon=super()._weapon(actor,now)\n        if actor not in self._moris_frame_observed_actors or weapon.get("_moris_frame_observed"):\n            return weapon\n        marked=dict(weapon)\n        marked["_moris_frame_observed"]=True\n        return marked\n\n    def attach_score_sink'''
+          if old not in s:
+              raise SystemExit('rapid init anchor missing')
+          s=s.replace(old,new,1)
+          old='''        full=self._full_ammo(int(actor),float(now))\n        st.ammo=full\n'''
+          new='''        self._moris_frame_observed_actors.add(int(actor))\n        full=self._full_ammo(int(actor),float(now))\n        st.ammo=full\n'''
+          if old not in s:
+              raise SystemExit('rapid resume anchor missing')
+          p.write_text(s.replace(old,new,1),encoding='utf-8')
           PY
-      - name: Verify Moris post-expiry normal shots
+      - name: Probe isolated Nayuta lifecycle
         run: |
           python - <<'PY'
           from context import snapshot,spec
-          from calculator.timeline import simulate
-          from calculator.sim_result import _is_normal
-          case=snapshot.SQUADS['스쿼드2']
-          squad=spec.build_squad(list(case['members']))
-          cfg=spec.build_config(squad,{'duration':13.25,'first_burst_time':3.0})
-          result=simulate(squad,config=cfg,enemy={'def':0,'code':'','core_px':0,'has_parts':False},seed=42,verbose=True)
-          rows=[(h.t,h.skill_name) for h in result.hits if h.caster=='나유타' and _is_normal(h) and h.t>=13.19]
-          print('normal_after_13_19',rows)
-          assert len(rows)==2,rows
-          assert abs(rows[0][0]-13.2)<1e-6,rows
-          assert abs(rows[1][0]-13.241666666666667)<1e-6,rows
+          from fast_engine.engine.burst import BurstPolicy, BurstSignal
+          from fast_engine.engine.burst_runtime import BurstRuntime
+          from fast_engine.engine.compiler import compile_moris_squad
+          from fast_engine.engine.conditions import SignalContext
+          from fast_engine.engine.model import EnemyStaticProfile
+          from fast_engine.engine.scheduler import EventKind
+
+          squad=compile_moris_squad(spec.build_squad(list(snapshot.SQUADS['스쿼드2']['members'])))
+          actor=next(i for i,m in enumerate(squad.members) if m.name=='나유타')
+          mode=next(e for e in squad.members[actor].effects if e.name=='기억 연소')
+          privaty_ammo=next(e for e in squad.effects if e.name=='EX 매거진 3')
+          runtime=BurstRuntime(
+              squad,
+              BurstPolicy(duration=13.25,first_burst_time=3.0),
+              EnemyStaticProfile(defense=0.0,duration=13.25,core_px=0.0),
+          )
+          mode_times=[]; base_blocks=[]
+          runtime.weapons.attach_score_shot_sink((actor,),lambda a,t: mode_times.append(t))
+          runtime.weapons.attach_score_block_sink((actor,),lambda a,c,t: base_blocks.append((c,t)))
+          runtime.weapons.start(0.0)
+
+          def process_before(limit):
+              while runtime.scheduler and (runtime.scheduler.peek_time() or 0.0) < limit-1e-9:
+                  event=runtime.scheduler.pop()
+                  if event.kind is EventKind.WEAPON_BOUNDARY:
+                      runtime.weapons.handle_boundary(event)
+                      runtime.weapons.sync(event.time)
+                  elif event.kind is EventKind.PRE_SHOT_BOUNDARY:
+                      runtime.weapons.handle_pre_shot_boundary(event)
+                      runtime.weapons.sync(event.time)
+                  elif event.kind is EventKind.STATE_EXPIRE:
+                      runtime.dispatcher.handle_expiry(event)
+                      runtime.weapons.sync(event.time)
+                  elif event.kind is EventKind.STATE_END_NOTIFY:
+                      owner,name=event.payload
+                      runtime.dispatcher.dispatch(
+                          BurstSignal(event.time,f'event:state_end:{name}',int(owner),int(owner)),
+                          context=SignalContext(),
+                      )
+                      runtime.weapons.sync(event.time)
+                  else:
+                      runtime.weapons.advance_to(event.time,inclusive=False)
+              runtime.weapons.advance_to(limit,inclusive=False)
+
+          process_before(3.2)
+          runtime.dispatcher.effects.activate_group(mode,(actor,),3.2,runtime.scheduler)
+          runtime.weapons.sync(3.2)
+          process_before(3.4)
+          runtime.dispatcher.effects.activate_group(privaty_ammo,(actor,),3.4,runtime.scheduler)
+          runtime.weapons.sync(3.4)
+          process_before(13.25)
+
+          rapid=runtime.weapons._rapid_reload
+          expected=(5.016666666666667,7.05,9.066666666666666,11.083333333333334,13.1)
+          print('mode_times',mode_times)
+          print('base_blocks_tail',base_blocks[-5:])
+          print('full_13_2',rapid._full_ammo(actor,13.2))
+          print('rapid_state',rapid._states[actor])
+          print('frame_observed',actor in rapid._moris_frame_observed_actors)
+          assert len(mode_times)==5,mode_times
+          for actual,want in zip(mode_times,expected):
+              assert abs(actual-want)<1e-6,(actual,want)
+          assert rapid._full_ammo(actor,13.2)==215
+          assert rapid._states[actor].ammo==214,rapid._states[actor]
+          assert abs(rapid._states[actor].phase_end-13.25)<1e-6,rapid._states[actor]
+          assert actor in rapid._moris_frame_observed_actors
+          assert not runtime.weapons.is_skill_weapon_mode(actor,13.2)
           PY
