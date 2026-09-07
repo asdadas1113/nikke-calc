@@ -1,0 +1,40 @@
+name: Temporary next semantic frontier
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fast-engine-phase2-20260901
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Print exact public blocker frontier
+        run: |
+          python - <<'PY'
+          from collections import Counter
+          from fast_engine.research.public_blocker_frontier import scan_public_blockers, summarize_frontier
+          r=scan_public_blockers()
+          s=summarize_frontier(r, limit=50)
+          print('COUNTS', r['team_count'], r['certified_team_count'], r['coverage_gap_count'])
+          print('NEAREST', s['minimum_conceptual_count'], s['nearest_team_count'])
+          for row in sorted(r['rows'], key=lambda x:(len(x['blockers']), x['source_name'])):
+              print('ROW', row['source_name'], 'MEMBERS=', '|'.join(row['members']))
+              for b in row['blockers']:
+                  print('  BLOCKER', b)
+              for u in row['unsupported']:
+                  print('  UNSUPPORTED', u)
+          exact=Counter(b for row in r['rows'] for b in row['blockers'])
+          print('EXACT_PRESSURE')
+          for b,n in exact.most_common():
+              print(n, b)
+          PY
