@@ -1,0 +1,27 @@
+name: Temporary Privaty cadence probe
+
+on:
+  push:
+    branches:
+      - fast-engine-phase2-20260901
+  workflow_dispatch:
+
+concurrency:
+  group: temp-privaty-cadence-probe
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fast-engine-phase2-20260901
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Inspect Privaty cadence lifecycle
+        run: python -u .github/tmp_privaty_probe.py
