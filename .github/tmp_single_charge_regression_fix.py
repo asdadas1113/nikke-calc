@@ -81,4 +81,56 @@ if anchor not in s:
     raise SystemExit('single-charge test anchor missing')
 p.write_text(s.replace(anchor,insert,1),encoding='utf-8')
 
-print('updated stale neighboring expectations with exact remaining fail-closed scope')
+# Full-discovery stale frontier expectations: this checkpoint removes one cadence
+# blocker in the de-duplicated 23-membership audit and owns Snow White's exact
+# single-charge mode plus its one-shot pierce companion.
+for path in (
+    'fast_engine/tests/test_damage_full_charge_hit_charge_speed.py',
+    'fast_engine/tests/test_damage_stat_applied_charge_speed.py',
+):
+    replace_once(path, 'self.assertEqual(cadence, 53)', 'self.assertEqual(cadence, 52)')
+
+for path in (
+    'fast_engine/tests/test_damage_periodic_enemy_received.py',
+    'fast_engine/tests/test_damage_periodic_self_crit.py',
+):
+    replace_once(
+        path,
+        'self.assertIn("weapon_change:스노우 화이트:세븐스 드워프 : I", blockers)' if path.endswith('enemy_received.py') else "self.assertIn(\n            'weapon_change:스노우 화이트:세븐스 드워프 : I', blockers\n        )",
+        'self.assertNotIn("weapon_change:스노우 화이트:세븐스 드워프 : I", blockers)' if path.endswith('enemy_received.py') else "self.assertNotIn(\n            'weapon_change:스노우 화이트:세븐스 드워프 : I', blockers\n        )",
+    )
+    replace_once(
+        path,
+        'self.assertIn(\n            "normal_delivery:스노우 화이트:세븐스 드워프 : I 2:pierce_enabled",\n            blockers,\n        )' if path.endswith('enemy_received.py') else "self.assertIn(\n            'normal_delivery:스노우 화이트:세븐스 드워프 : I 2:pierce_enabled',\n            blockers,\n        )",
+        'self.assertNotIn(\n            "normal_delivery:스노우 화이트:세븐스 드워프 : I 2:pierce_enabled",\n            blockers,\n        )' if path.endswith('enemy_received.py') else "self.assertNotIn(\n            'normal_delivery:스노우 화이트:세븐스 드워프 : I 2:pierce_enabled',\n            blockers,\n        )",
+    )
+
+replace_once(
+    'fast_engine/tests/test_dynamic_weapon_change.py',
+'''    def test_class_changing_weapon_change_stays_blocked(self):
+        found = False
+        for name, case in snapshot.SQUADS.items():
+            if str(name).startswith("지그_") or "스노우 화이트" not in case["members"]:
+                continue
+            squad = spec.build_squad(list(case["members"]))
+            compiled = compile_moris_squad(squad)
+            if any(
+                blocker.startswith("weapon_change:스노우 화이트:")
+                for blocker in static_score_blockers(compiled)
+            ):
+                found = True
+                break
+        self.assertTrue(found)
+''',
+'''    def test_other_class_changing_weapon_changes_stay_blocked(self):
+        for name, blocker in (
+            ("레이드_네온벨벳", "weapon_change:벨벳:깔끔한 마무리"),
+            ("레이드_작열짬", "weapon_change:모더니아:섬멸 모드"),
+        ):
+            with self.subTest(name=name):
+                case = snapshot.SQUADS[name]
+                compiled = compile_moris_squad(spec.build_squad(list(case["members"])))
+                self.assertIn(blocker, static_score_blockers(compiled))
+''')
+
+print('updated all stale neighboring/full-discovery expectations with exact remaining fail-closed scope')
