@@ -19,7 +19,9 @@ jobs:
         with:
           python-version: '3.13'
       - name: Apply staged implementation
-        run: python -u .github/tmp_single_charge_apply.py
+        run: |
+          python -u .github/tmp_single_charge_apply.py
+          python -u .github/tmp_single_charge_fix1.py
       - name: Validate staged scope
         run: |
           git diff --check
