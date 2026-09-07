@@ -20,91 +20,133 @@ Fast Engine은 Moris 복제품이 아니라 optimizer용 고속 sparse-event ran
 가장 먼저 읽을 문서:
 
 1. `fast_engine/research/HANDOFF_FAST_ENGINE_20260906.md`
-2. `fast_engine/research/MORAN_RAPID_WEAPON_CHANGE_LIFECYCLE_CHECKPOINT_20260907.md`
-3. `fast_engine/research/CROWN_HEAL_RECEIVED_SHARED_LIFETIME_CHECKPOINT_20260906.md`
-4. `fast_engine/research/LITTLE_MERMAID_REPLACEMENT_SQUAD_AMMO_CHECKPOINT_20260906.md`
-5. `fast_engine/research/VOLUME_LIVE_AMMO_LAZY_RANK_CHECKPOINT_20260906.md`
-6. `fast_engine/research/MAID_MAST_HANGOVER_LIFECYCLE_CHECKPOINT_20260906.md`
-7. `fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md`
+2. `fast_engine/research/PRIVATY_CHARGE_LIVE_MAX_AMMO_SAFETY_CHECKPOINT_20260907.md`
+3. `fast_engine/research/MORAN_RAPID_WEAPON_CHANGE_LIFECYCLE_CHECKPOINT_20260907.md`
+4. `fast_engine/research/CROWN_HEAL_RECEIVED_SHARED_LIFETIME_CHECKPOINT_20260906.md`
+5. `fast_engine/research/LITTLE_MERMAID_REPLACEMENT_SQUAD_AMMO_CHECKPOINT_20260906.md`
+6. `fast_engine/research/VOLUME_LIVE_AMMO_LAZY_RANK_CHECKPOINT_20260906.md`
+7. `fast_engine/research/MAID_MAST_HANGOVER_LIFECYCLE_CHECKPOINT_20260906.md`
+8. `fast_engine/research/FALSE_SUPPORTED_SAFETY_REPAIR_CHECKPOINT_20260906.md`
 
 ## 1. latest completed semantic checkpoint
 
-**목단 `정정당당 승부다!` finite rapid weapon-change lifecycle 완료.**
+**Privaty `EX 매거진 2 + 3` 조사에서 발견한 charge live max-ammo safety repair 완료.**
 
-semantic commits:
+semantic production commit:
 
-- `a8e0b51cb122a0e424404ed2a49e485a09d6ebd4` — `Fast: own finite rapid weapon-change lifecycle`
-- `f769473f19e1f269027feb69e2c8566582211062` — `Fast: keep rapid weapon-change off baseline hot path`
-- `abbc8c4616b2bca724e70634fd166668185e8d6a` — `Fast: scope rapid weapon view to changed actors`
+- `87b061d76b87e9815f0474731fa0222d4115f123` — `Fast: align charge live max-ammo semantics`
 
-Moris oracle:
+중요: Privaty blocker 자체를 public certification한 것이 아니다.
 
-- base 목단: AR / auto / 12/s / max ammo 60 / coeff 14.71
-- `정정당당 승부다!`: self, 10s, `burst_cast`
-- changed weapon: SMG / auto / 24/s / infinite ammo / coeff 14.7
-- dependent `다 덤벼! 2`: `bonus_damage 47.18`, `self_state:정정당당 승부다!`, reducible `hit_count:5`
-- hit count는 weapon-change session별이 아니라 whole-combat phase
-- 24/s nominal deadline과 Moris 60Hz observed tick을 분리
-- mode 종료 시 literal 60이 아니라 active modifiers를 반영한 live effective full ammo로 restore
+남아 있는 exact blockers:
 
-Fast ownership은 exact finite self rapid weapon-change + dependent hit-count graph에만 열린다. generic weapon-change는 계속 fail closed다.
+- `cadence:프리바티:EX 매거진 2:reload_speed_pct`
+- `cadence:프리바티:EX 매거진 3:max_ammo_pct`
 
-상세는 `MORAN_RAPID_WEAPON_CHANGE_LIFECYCLE_CHECKPOINT_20260907.md` 참고.
+둘은 다음 네 public membership에서 모두 의도적으로 fail-closed다.
 
-## 2. Moran에서 발견한 performance safety
+- `스쿼드2`
+- `레이드_아니스서머메이든`
+- `레이드_라피앨리스`
+- `레이드_트리나홍련`
 
-semantic correctness 뒤 두 개의 sparse-performance 문제가 드러났다.
+상세는 `PRIVATY_CHARGE_LIVE_MAX_AMMO_SAFETY_CHECKPOINT_20260907.md` 참고.
 
-### 2.1 whole-squad live weapon callback
+## 2. Privaty Moris oracle
 
-20초 profiling run `34055659461` / job `101546969726`:
+compiled pair:
 
-- `sync()` 206회에 약 2.395s
-- Maid Mast `_weapon`: **271,449회**, 약 1.774s
-- Moran `_weapon`: **3,357회**, 약 0.031s
+- `EX 매거진 2`: all-allies `reload_speed_pct +51.16`, 10s, full-burst start
+- `EX 매거진 3`: all-allies `max_ammo_pct -50.66`, 10s, full-burst start
 
-실제 weapon-change actor가 목단 하나인데 unrelated rapid actors까지 dynamic weapon lookup을 수행하고 있었다.
+Moris 의미론:
 
-수정:
+1. max-ammo percentage source를 source-by-source로 base magazine에 적용해 반올림
+2. negative live cap이 current ammo보다 작아지면 active reload 중이 아닌 한 즉시 current ammo clamp
+3. reload duration은 reload start의 speed를 snapshot
+4. reload completion refill은 completion 당시 live max ammo 사용
+5. cap expiry가 current ammo를 위로 refill하지 않음
+6. effective magazine 최소 1
 
-- effective weapon callback을 executable rapid weapon-change actor set에만 attach
-- 나머지 rapid actors는 base-weapon hot path 유지
+public trace 예:
 
-### 2.2 boundaryless horizon rescan
+- Snow White : Heavy Arms `12 -> 11`
+- Aid / Maiden `12 -> 11`
+- Little Mermaid `267 -> 215`
+- Crown `697 -> 566`
+- Rapi : Red Hood `697 -> 566`
+- Privaty `39 -> 30`
 
-actor-scoping 후에도 180초 audit가 timeout됐다.
+## 3. 발견·수정한 Fast divergence
 
-원인:
+rapid runtime에는 이미 static/live split, source quantization, cap-drop clamp가 있었다.
 
-- local observable boundary가 없는 rapid actor가 `_predict_next_boundary()`에서 매 invalidation마다 horizon 끝까지 모든 physical shot을 재시뮬레이션
+charge runtime에는 두 차이가 있었다.
 
-수정:
+- live max-ammo percentage를 합산 후 한 번 반올림
+- live cap 하락 시 current ammo clamp 누락
 
-- `_has_local_boundary_interest()` 추가
-- last-bullet / hit threshold / pellet threshold / active dynamic bullet lifetime이 없으면 predictor 즉시 `None`
-- ordinary shots는 기존 `advance_to()` block compression으로 global event / score horizon까지 전진
-- squad-ammo pre-shot planner는 별도 경로 유지
+수정 후 `DynamicChargeCadenceRuntime`은:
 
-이 최적화는 의미론 완화가 아니라 기존 sparse architecture 복구다.
+- permanent unconditional self max-ammo source를 static-folded source로 별도 처리
+- static/live `max_ammo_pct`를 source별 quantize
+- active store에서 static-folded source를 제외해 double count 방지
+- non-reloading actor의 current ammo를 live cap 하락 시 즉시 clamp
+- active reload completion은 기존대로 completion 시점 live cap 사용
 
-## 3. production audit / current frontier
+첫 staged attempt에서 static-folded source를 active source로 다시 더해 Snow cap이 Moris `11` 대신 `3`이 되는 문제가 잡혔다. 기대값을 완화하지 않고 static/live split을 고쳐 해결했다.
 
-post-fix 180초 `스쿼드4` audit:
+## 4. Privaty pair를 열지 않은 이유
 
-- run `34055907810` / job `101547646303`
-- elapsed `1.5432331279999971s`
-- events `2459`
-- squad total `2106138999.9456573`
-- unsupported `()`
+### `스쿼드2`
 
-canonical public filter:
+- Tswei: existing rapid score safety 실패
+- Nayuta: existing rapid score safety 실패
+- Snow Heavy 자체는 reload upper `80.85%`로 charge safety 통과
 
-- `지그_*` source 제외
-- 5인 squad
-- `test_*` fixture member 제외
-- exact ordered membership dedupe
+Tswei/Nayuta의 별도 weapon/cadence dependency 때문에 all-allies pair ownership 불가.
 
-fresh frontier:
+### `레이드_아니스서머메이든`
+
+- Maiden : Ice Rose: charge + `cover_during_delay`
+- positive reload-speed upper bound `130.13%`
+- Moris의 `reload_speed >= 100%` cover branch가 Fast 미소유
+
+### `레이드_라피앨리스`
+
+- Alice: charge + `cover_during_delay`
+- upper bound `125.2%`
+- 같은 >=100% special branch로 fail-closed
+
+### `레이드_트리나홍련`
+
+- Trina: charge RL + `is_clip=True`
+- dynamic clip reload 미소유
+
+따라서 Privaty pair를 지금 열면 false-supported가 된다.
+
+## 5. validation / frontier
+
+신규 regression:
+
+- `fast_engine/tests/test_dynamic_charge_max_ammo_semantics.py` — 5 tests
+
+focused:
+
+- 신규 `5/5`
+- dynamic reload `12/12`
+- dynamic weapon-change `4/4`
+- performance contract `2/2`
+
+post-repair full Fast validation:
+
+- run `34070413183` / job `101586577274`
+- result: success
+- Fast full discovery `350/350`
+- structural median `141.31ms`, events `539`
+- RAPI parity unchanged: reference `236373847.0`, Fast `236465053.42473748`, relative error `0.0003858566668650809`
+
+canonical public frontier는 의도적으로 그대로다.
 
 - source cases `24`
 - unique memberships `23`
@@ -131,97 +173,58 @@ blocker families:
 - control `4`
 - periodic grid `1`
 
-직전 Crown checkpoint 대비:
-
-- certified `5 → 6`
-- gaps `18 → 17`
-- weapon change `12 → 7`
-- cadence `57 → 53`
-- 나머지 unchanged
-
-## 4. validation completed
-
-Moran focused contracts:
-
-- `test_damage_moran_weapon_change_lifecycle.py`: 6 tests
-- `test_damage_dynamic_reload_scoring.py`: 12 tests
-- neighboring dynamic weapon-change / performance tests green
-
-pre-cleanup canonical CI:
-
-- run `34056008391`
-- job `101547955891`
-- HEAD `0c91cde7b9d45260c59667b1140d678650d54f76`
-- result: **success**
-
-exact gates:
-
-- doclint characters `199`, implementation keys `309`, exceptions `18`
-- Fast damage `236/236`
-- Fast complete discovery `345/345`
-- structural performance median `197.62ms`, events `539`
-- full-discovery structural median `196.60ms`, events `539`
-- RAPI parity reference `236373847.0`, Fast `236465053.42473748`, relative error `0.0003858566668650809`
-- calculator `137/137` (`1` skip)
-- optimizer `374/374`
-- bridge `31/31` (`1` skip)
-- site `385/385`
-- golden `29/29`
-
-performance threshold는 변경하지 않았다.
-
-## 5. current phase
+## 6. current phase
 
 계속 **false-supported safety closure → semantics restoration** 단계다.
 
-완료된 주요 restoration에 다음을 추가한다.
+최근 완료 restoration:
 
 17. finite self rapid weapon-change + whole-combat hit-count conditioned damage lifecycle
 18. rapid nominal fire deadline과 sparse Moris 60Hz observation 유지
 19. rapid live effective weapon view를 실제 changed actor에만 한정
-20. boundaryless rapid planner의 horizon rescan 제거 / sparse fast-return
+20. boundaryless rapid planner horizon rescan 제거
+21. charge live max-ammo static/live source 분리와 source별 percentage quantization
+22. charge negative live cap의 non-reload current-ammo clamp
 
 raw coverage expansion이나 optimizer production integration으로 돌아가지 않는다.
 
-## 6. fresh pressure / 다음 단일 checkpoint
+## 7. dependency-adjusted pressure / 다음 단일 checkpoint
 
-post-Moran pressure run:
+raw top exact count만 보면 아직:
 
-- `34056292716` / job `101548691790`
+- Little Mermaid `거품 난사` 4회
+- Privaty `EX 매거진 2` 4회
+- Privaty `EX 매거진 3` 4회
 
-최다 exact blocker는 4회 동률:
+지만 이 셋은 이미 상위 dependency에 막혀 있다는 것이 확인됐다.
 
-- `skill_damage:리틀 머메이드:거품 난사:sequential_damage:10`
-- `cadence:프리바티:EX 매거진 2:reload_speed_pct`
-- `cadence:프리바티:EX 매거진 3:max_ammo_pct`
+Crown `로얄 에타이어 4` 3회도 reachable heal-provider dependency 때문에 의도적으로 남겨 둔 family다.
 
-Little Mermaid `거품 난사`는 이미 `레이드_델타`에서 exact all-certified-rapid squad-ammo pre-shot lifecycle을 소유한다. 남은 4 roster를 열려면 mixed/unsupported squad-ammo family를 넓혀야 해서 다음 checkpoint로는 상대적으로 넓다.
+따라서 다음 단일 checkpoint는 raw count보다 독립적으로 닫을 수 있는 ownership graph를 우선한다.
 
-Privaty는 네 membership에서 두 cadence blocker가 항상 함께 나타나고 compiled shape도 동일하다.
+**다음 단일 checkpoint: Nayuta `기억 연소` weapon-change lifecycle shape audit → exact ownership 여부 결정.**
 
-- `EX 매거진`: all-allies `atk_pct +23.61`, 10s, full-burst start
-- `EX 매거진 2`: all-allies `reload_speed_pct +51.16`, 10s, full-burst start
-- `EX 매거진 3`: all-allies `max_ammo_pct -50.66`, harmful, 10s, full-burst start
-- `EX 매거진 4`: all-allies `atk_dmg_pct +20.16`, 10s, full-burst start
+`weapon_change:나유타:기억 연소`는 현재 3 public membership에 반복된다.
 
-다음 단일 checkpoint:
-
-**Privaty `EX 매거진 2 + 3` all-allies reload-speed / negative max-ammo coupled cadence lifecycle**
+- `스쿼드2`
+- `레이드_네온벨벳`
+- `레이드_소다`
 
 재개 순서:
 
-1. 네 public membership의 recipient weapon/cadence를 전수 수집
-2. Moris에서 full-burst-start same-timestamp transaction trace
-3. negative max-ammo activation 시 current ammo 즉시 clamp 여부 확인
-4. buff 활성 중 reload start/completion과 live full-ammo 확인
-5. 10초 expiry 시 max-ammo/current-ammo 복구 semantics 확인
-6. reload-speed와 negative max-ammo를 따로 열지 말고 one lifecycle graph로 ownership proof 정의
-7. broader all-allies negative max-ammo / reload family fail-closed negative regression
-8. focused gate → full Fast → canonical CI → frontier 재계산
+1. 세 public membership의 Nayuta compiled effect / weapon / consumer graph 전수 수집
+2. Moris에서 weapon-change activation/end와 ammo/cadence transition trace
+3. Moran finite rapid weapon-change primitive와 동일한 축인지 비교
+4. 같은 이름 state를 보는 damage/cadence consumer가 있으면 lifecycle graph에 포함
+5. class-changing / infinite-ammo / clip / external recipient가 섞이면 즉시 fail-closed
+6. exact generic ownership proof + neighboring negative regression
+7. focused → full Fast → canonical → frontier 재계산
 
-## 7. cleanup / final clean gate
+shape audit에서 Moran primitive와 구조적으로 다르면 이 checkpoint는 확장하지 않고 fail-closed 근거만 기록한 뒤 Alice/Anis-Star 등 다음 dependency-adjusted 후보로 이동한다.
 
-Moran checkpoint 종료 시 모든 temporary Moran helper/probe/workflow를 제거한다.
+## 8. cleanup / final clean gate
+
+Privaty checkpoint 종료 시 temporary Privaty helper/probe/workflow를 전부 제거한다.
 
 최종 `.github/workflows`는 반드시:
 
@@ -230,6 +233,4 @@ Moran checkpoint 종료 시 모든 temporary Moran helper/probe/workflow를 제�
 
 두 파일만 남긴다.
 
-cleanup/docs 뒤 **clean HEAD canonical `ci.yml` 전체 gate를 한 번 더 성공 확인**하고 종료한다.
-
-최종 clean run ID를 기록하기 위한 추가 doc-only commit은 만들지 않는다. 다음 재개 시 branch HEAD, `master`, latest successful clean canonical run부터 확인한다.
+cleanup/docs 뒤 clean HEAD canonical `ci.yml` 전체 gate를 한 번 더 성공 확인한다. 최종 run ID 기록용 추가 doc-only commit은 만들지 않는다.
