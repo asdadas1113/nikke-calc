@@ -56,8 +56,8 @@ class PeriodicFiniteEnemyReceivedDamageTests(unittest.TestCase):
             "periodic_grid:에이다:섬광 수류탄 투척 발동 시간 조건:effect_interval",
             blockers,
         )
-        self.assertIn("weapon_change:스노우 화이트:세븐스 드워프 : I", blockers)
-        self.assertIn(
+        self.assertNotIn("weapon_change:스노우 화이트:세븐스 드워프 : I", blockers)
+        self.assertNotIn(
             "normal_delivery:스노우 화이트:세븐스 드워프 : I 2:pierce_enabled",
             blockers,
         )

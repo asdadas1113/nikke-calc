@@ -1201,6 +1201,57 @@ class TriggerDispatcher:
         )
 
     @classmethod
+    def _temporary_self_rapid_to_single_charge_weapon_change_shape_supported(
+        cls, effect: "CompiledEffect"
+    ) -> bool:
+        """Certify one self rapid -> ordinary SR shot consumed by bullet lifetime.
+
+        The mode has no time duration: Moris enters a one-round SR session on
+        ``burst_cast`` and removes the weapon change only after that full-charge
+        normal attack has been scored and its post-shot signals have fired.
+        """
+        params = effect.parameters
+        required = {
+            "weapon_type", "damage_coeff", "max_ammo", "charge_time",
+            "full_charge_mult", "duration_bullets",
+        }
+        allowed = required | {"favorite"}
+        favorite = params.get("favorite")
+        return (
+            effect.capability.disposition is CapabilityDisposition.PLANNED
+            and set(effect.capability.blockers) == {
+                "stat:None", "field:weapon_type", "field:damage_coeff",
+                "field:max_ammo", "field:charge_time",
+                "field:full_charge_mult", "field:duration_bullets",
+            }
+            and effect.effect_type == "weapon_change"
+            and effect.target_spec.mode is TargetMode.SELF
+            and effect.target_spec.runtime_supported
+            and bool(effect.name)
+            and effect.duration is None
+            and effect.max_stack in (None, 1, 1.0)
+            and effect.max_trigger is None
+            and effect.tick_interval is None
+            and not effect.condition_rules
+            and required.issubset(params)
+            and set(params).issubset(allowed)
+            and (favorite is None or float(favorite) == 1.0)
+            and params.get("weapon_type") == "SR"
+            and params.get("max_ammo") == 1
+            and params.get("duration_bullets") == 1
+            and "skill_damage" not in params
+            and isinstance(params.get("damage_coeff"), (int, float))
+            and float(params.get("damage_coeff")) > 0.0
+            and isinstance(params.get("charge_time"), (int, float))
+            and float(params.get("charge_time")) > 0.0
+            and isinstance(params.get("full_charge_mult"), (int, float))
+            and float(params.get("full_charge_mult")) > 0.0
+            and len(effect.triggers) == 1
+            and effect.triggers[0].mode is TriggerMode.EVENT
+            and effect.triggers[0].event_key == "burst_cast"
+        )
+
+    @classmethod
     def _temporary_self_rapid_to_charge_skill_weapon_change_shape_supported(
         cls, effect: "CompiledEffect"
     ) -> bool:
@@ -1244,6 +1295,19 @@ class TriggerDispatcher:
             and len(effect.triggers) == 1
             and effect.triggers[0].mode is TriggerMode.EVENT
             and effect.triggers[0].event_key == "burst_cast"
+        )
+
+    def _temporary_self_rapid_to_single_charge_weapon_change_runtime_supported(
+        self, effect: "CompiledEffect"
+    ) -> bool:
+        if not self._temporary_self_rapid_to_single_charge_weapon_change_shape_supported(effect):
+            return False
+        member = self.squad.members[effect.actor]
+        return (
+            str(member.weapon.get("fire_mode") or "") == "auto"
+            and not member.weapon.get("control")
+            and not member.weapon.get("is_clip")
+            and not member.weapon.get("cover_during_delay")
         )
 
     def _temporary_self_rapid_to_charge_skill_weapon_change_runtime_supported(
@@ -1717,6 +1781,7 @@ class TriggerDispatcher:
         if (
             self._temporary_self_charge_weapon_change_runtime_supported(effect)
             or self._temporary_self_rapid_weapon_change_runtime_supported(effect)
+            or self._temporary_self_rapid_to_single_charge_weapon_change_runtime_supported(effect)
             or self._temporary_self_rapid_to_charge_skill_weapon_change_runtime_supported(effect)
         ):
             return True
@@ -2266,6 +2331,7 @@ class TriggerDispatcher:
                 not (
                     self._temporary_self_charge_weapon_change_runtime_supported(effect)
                     or self._temporary_self_rapid_weapon_change_runtime_supported(effect)
+                    or self._temporary_self_rapid_to_single_charge_weapon_change_runtime_supported(effect)
                     or self._temporary_self_rapid_to_charge_skill_weapon_change_runtime_supported(effect)
                 )
                 or tuple(targets) != (effect.actor,)

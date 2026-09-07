@@ -39,10 +39,10 @@ class PeriodicFiniteSelfCritTests(unittest.TestCase):
             'skill_state_delivery:스노우 화이트:세븐스 드워프 : V&VI 2:crit_rate',
             blockers,
         )
-        self.assertIn(
+        self.assertNotIn(
             'weapon_change:스노우 화이트:세븐스 드워프 : I', blockers
         )
-        self.assertIn(
+        self.assertNotIn(
             'normal_delivery:스노우 화이트:세븐스 드워프 : I 2:pierce_enabled',
             blockers,
         )

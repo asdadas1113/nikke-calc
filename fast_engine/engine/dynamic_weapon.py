@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Callable, Sequence, TYPE_CHECKING
 
 from .dynamic_rapid import DynamicRapidCadenceRuntime
+from .frame_lattice import moris_observed_tick
 from .scheduler import EventScheduler, ScheduledEvent
 from .state import StateStore
 from .triggers import TriggerMode
@@ -60,6 +61,7 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         "_rapid_reload",
         "_charge_hold_release",
         "_mode_only_charge_actors",
+        "_mode_only_single_charge_actors",
         "_mode_only_weapon_change_ids",
         "_external_weapon_block_until",
     )
@@ -114,18 +116,33 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
                 hit_thresholds[actor] = tuple(sorted(values))
 
         mode_only_ids={}
+        single_charge_actors=set()
         for effect in squad.effects:
             member=squad.members[effect.actor]
+            params=effect.parameters
             if not (
                 effect.effect_type == "weapon_change"
                 and effect_filter(effect)
                 and str(member.weapon.get("fire_mode") or "") == "auto"
-                and effect.parameters.get("weapon_type") in {"SR","RL"}
-                and effect.parameters.get("skill_damage") is True
             ):
                 continue
+            skill_mode=(
+                params.get("weapon_type") in {"SR","RL"}
+                and params.get("skill_damage") is True
+            )
+            single_mode=(
+                params.get("weapon_type") == "SR"
+                and params.get("max_ammo") == 1
+                and params.get("duration_bullets") == 1
+                and "skill_damage" not in params
+            )
+            if not (skill_mode or single_mode):
+                continue
             mode_only_ids[effect.actor]=effect.effect_id
+            if single_mode:
+                single_charge_actors.add(effect.actor)
         self._mode_only_charge_actors=frozenset(mode_only_ids)
+        self._mode_only_single_charge_actors=frozenset(single_charge_actors)
         self._mode_only_weapon_change_ids=dict(mode_only_ids)
         self._external_weapon_block_until=None
         if self._mode_only_charge_actors:
@@ -439,8 +456,26 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
                 self._states.get(actor) is not None
                 and self._states[actor].weapon_change_id is not None
             )
+            if (
+                not active_before
+                and active_after
+                and actor in self._mode_only_single_charge_actors
+            ):
+                st=self._states[actor]
+                source_tick=moris_observed_tick(
+                    float(now), horizon=self.duration, epsilon=1e-9
+                )
+                st.charge_start=source_tick
+                st.phase_end=self._observe_phase_boundary(
+                    source_tick + self._effective_charge_time(actor,float(now))
+                )
+                self._invalidate(st)
+                self._plan(actor,float(now))
             if active_before and not active_after and actor in self._rapid_reload.actors:
-                self._rapid_reload.resume_with_live_full_magazine(actor,float(now))
+                if actor in self._mode_only_single_charge_actors:
+                    self._rapid_reload.resume_after_single_charge(actor,float(now))
+                else:
+                    self._rapid_reload.resume_with_live_full_magazine(actor,float(now))
         self._rapid_reload.sync(now)
         for actor in self._mode_only_charge_actors:
             if self.is_skill_weapon_mode(actor,now) and actor in self._states:
@@ -494,11 +529,11 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         if actor in self._raw_on_attack_actors:
             signals.append(DynamicCountSignal("on_attack", 1))
         if (
-            actor not in self._mode_only_charge_actors
+            not self.is_skill_weapon_mode(actor, float(event.time))
             and self.effects.has_dynamic_bullet_lifetime(actor, now=float(event.time))
         ):
-            # Skill-weapon mode shots are not normal ammunition shots for Moris
-            # bullet-duration consumption. Ordinary charge shots retain the old path.
+            # Ordinary charge shots consume duration_bullets after their damage
+            # and post-shot signals. Skill-weapon shots remain excluded.
             signals.append(DynamicCountSignal(_INTERNAL_BULLET_CONSUME_EVENT, 1))
         return DynamicChargeBoundary(
             actor,

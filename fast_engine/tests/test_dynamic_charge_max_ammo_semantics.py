@@ -73,14 +73,18 @@ class DynamicChargeMaxAmmoSemanticsTests(unittest.TestCase):
         self.assertEqual(st.ammo,14)
         self.assertNotEqual(st.phase,"reloading")
 
-    def test_privaty_public_pairs_remain_fail_closed_behind_recipient_dependencies(self):
+    def test_privaty_public_pairs_remain_fail_closed_behind_remaining_recipient_dependencies(self):
         names=("스쿼드2","레이드_아니스서머메이든","레이드_라피앨리스","레이드_트리나홍련")
         for name in names:
             with self.subTest(name=name):
                 case=snapshot.SQUADS[name]
                 compiled=compile_moris_squad(spec.build_squad(list(case["members"])))
                 blockers=static_score_blockers(compiled)
-                self.assertIn("cadence:프리바티:EX 매거진 2:reload_speed_pct",blockers)
+                reload_blocker="cadence:프리바티:EX 매거진 2:reload_speed_pct"
+                if name == "스쿼드2":
+                    self.assertNotIn(reload_blocker,blockers)
+                else:
+                    self.assertIn(reload_blocker,blockers)
                 self.assertIn("cadence:프리바티:EX 매거진 3:max_ammo_pct",blockers)
 
     def test_privaty_first_full_burst_clamps_snow_charge_magazine_like_moris(self):

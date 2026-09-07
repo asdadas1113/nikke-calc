@@ -85,20 +85,15 @@ class DynamicWeaponChangeTest(unittest.TestCase):
         self.assertEqual(effect.parameters.get("damage_coeff"), 51.46)
         self.assertEqual(effect.parameters.get("full_charge_mult"), 250)
 
-    def test_class_changing_weapon_change_stays_blocked(self):
-        found = False
-        for name, case in snapshot.SQUADS.items():
-            if str(name).startswith("지그_") or "스노우 화이트" not in case["members"]:
-                continue
-            squad = spec.build_squad(list(case["members"]))
-            compiled = compile_moris_squad(squad)
-            if any(
-                blocker.startswith("weapon_change:스노우 화이트:")
-                for blocker in static_score_blockers(compiled)
-            ):
-                found = True
-                break
-        self.assertTrue(found)
+    def test_other_class_changing_weapon_changes_stay_blocked(self):
+        for name, blocker in (
+            ("레이드_네온벨벳", "weapon_change:벨벳:깔끔한 마무리"),
+            ("레이드_작열짬", "weapon_change:모더니아:섬멸 모드"),
+        ):
+            with self.subTest(name=name):
+                case = snapshot.SQUADS[name]
+                compiled = compile_moris_squad(spec.build_squad(list(case["members"])))
+                self.assertIn(blocker, static_score_blockers(compiled))
 
 
 if __name__ == "__main__":

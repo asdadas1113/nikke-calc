@@ -305,6 +305,102 @@ def _temporary_self_rapid_weapon_change_score_supported(
     return True
 
 
+def _temporary_self_rapid_to_single_charge_weapon_change_score_supported(
+    squad: CompiledSquad, effect
+) -> bool:
+    if not TriggerDispatcher._temporary_self_rapid_to_single_charge_weapon_change_shape_supported(effect):
+        return False
+    actor = effect.actor
+    member = squad.members[actor]
+    if not (
+        str(member.weapon.get("fire_mode") or "") == "auto"
+        and not member.weapon.get("control")
+        and not member.weapon.get("is_clip")
+        and not member.weapon.get("cover_during_delay")
+        and effect.name
+    ):
+        return False
+
+    related = tuple(
+        other for other in squad.effects
+        if other.effect_type == "weapon_change"
+        and actor in _possible_ally_targets(squad, other)
+    )
+    if len(related) != 1 or related[0].effect_id != effect.effect_id:
+        return False
+
+    companions = tuple(
+        other for other in squad.members[actor].effects
+        if other.effect_id != effect.effect_id
+        and other.effect_type == "buff"
+        and (other.stat or "") == "pierce_enabled"
+        and len(other.triggers) == 1
+        and other.triggers[0].mode is TriggerMode.EVENT
+        and other.triggers[0].event_key == "burst_cast"
+    )
+    if len(companions) != 1:
+        return False
+    companion = companions[0]
+    favorite = companion.parameters.get("favorite")
+    if not (
+        companion.capability.disposition.value == "planned"
+        and set(companion.capability.blockers) == {
+            "category:state_trigger", "stat:pierce_enabled",
+            "field:duration_bullets",
+        }
+        and companion.target_spec.mode is TargetMode.SELF
+        and companion.target_spec.runtime_supported
+        and companion.value is None
+        and companion.duration is None
+        and companion.max_stack in (None, 1, 1.0)
+        and companion.max_trigger is None
+        and companion.tick_interval is None
+        and set(companion.parameters).issubset({"favorite", "duration_bullets"})
+        and companion.parameters.get("duration_bullets") == 1
+        and (favorite is None or float(favorite) == 1.0)
+        and not companion.condition_rules
+        and is_direct_damage_buff_runtime_supported(companion)
+    ):
+        return False
+
+    # Do not silently widen named-state ownership around the mode.
+    name = effect.name
+    for other in squad.effects:
+        if other.effect_id == effect.effect_id:
+            continue
+        if (
+            any(rule.key == name for rule in other.condition_rules)
+            or any((rule.event_key or "") == f"event:state_end:{name}" for rule in other.triggers)
+            or other.parameters.get("target_effect") == name
+            or other.parameters.get("scaling_ref") == name
+        ):
+            return False
+
+    # New raw post-shot event families are not part of this checkpoint. Existing
+    # reducible hit_count crossings remain handled by the charge cadence runtime.
+    if any(
+        TriggerDispatcher.is_executable_effect(other)
+        and any(rule.event_key in {"full_charge_hit", "on_attack"} for rule in other.triggers)
+        for other in squad.members[actor].effects
+    ):
+        return False
+    return True
+
+
+def _rapid_to_single_charge_actor_score_safe(squad: CompiledSquad, actor: int) -> bool:
+    rows = tuple(
+        effect for effect in squad.effects
+        if effect.effect_type == "weapon_change"
+        and actor in _possible_ally_targets(squad, effect)
+    )
+    return (
+        len(rows) == 1
+        and _temporary_self_rapid_to_single_charge_weapon_change_score_supported(
+            squad, rows[0]
+        )
+    )
+
+
 def _temporary_self_rapid_to_charge_skill_weapon_change_score_supported(
     squad: CompiledSquad, effect
 ) -> bool:
@@ -467,6 +563,7 @@ def _rapid_actor_score_safe(
         len(weapon_changes) == 1
         and (
             _temporary_self_rapid_weapon_change_score_supported(squad, weapon_changes[0])
+            or _temporary_self_rapid_to_single_charge_weapon_change_score_supported(squad, weapon_changes[0])
             or _temporary_self_rapid_to_charge_skill_weapon_change_score_supported(squad, weapon_changes[0])
         )
     ):
@@ -837,7 +934,10 @@ def _dynamic_charge_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
     cross={
         effect.actor for effect in squad.effects
         if effect.effect_type == "weapon_change"
-        and _temporary_self_rapid_to_charge_skill_weapon_change_score_supported(squad,effect)
+        and (
+            _temporary_self_rapid_to_single_charge_weapon_change_score_supported(squad,effect)
+            or _temporary_self_rapid_to_charge_skill_weapon_change_score_supported(squad,effect)
+        )
     }
     actors: set[int] = set(cross)
     charge = set(_charge_actor_indexes(squad))
@@ -901,6 +1001,7 @@ def _dynamic_rapid_reload_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
         if effect.effect_type == "weapon_change"
         and (
             _temporary_self_rapid_weapon_change_score_supported(squad, effect)
+            or _temporary_self_rapid_to_single_charge_weapon_change_score_supported(squad,effect)
             or _temporary_self_rapid_to_charge_skill_weapon_change_score_supported(squad,effect)
         )
         and _rapid_actor_score_safe(squad, effect.actor)
@@ -1168,6 +1269,7 @@ def _direct_damage_buff_score_supported(squad: CompiledSquad, effect) -> bool:
     return bool(targets) and all(
         static_bullet_lifetime_cadence_safe(squad, actor)
         or _charge_actor_score_safe(squad, actor)
+        or _rapid_to_single_charge_actor_score_safe(squad, actor)
         for actor in targets
     )
 
@@ -1519,6 +1621,7 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
             if not (
                 _temporary_self_charge_weapon_change_score_supported(squad, effect)
                 or _temporary_self_rapid_weapon_change_score_supported(squad, effect)
+                or _temporary_self_rapid_to_single_charge_weapon_change_score_supported(squad,effect)
                 or _temporary_self_rapid_to_charge_skill_weapon_change_score_supported(squad,effect)
             ):
                 blockers.append(f"weapon_change:{owner}:{effect.name or 'unnamed'}")

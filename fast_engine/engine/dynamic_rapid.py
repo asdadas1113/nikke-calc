@@ -10,7 +10,7 @@ from .dynamic_reload import (
     _RapidActorState,
 )
 from .scheduler import EventKind, ScheduledEvent
-from .frame_lattice import moris_observed_tick
+from .frame_lattice import moris_next_tick, moris_observed_tick
 from .weapon import _EPS
 
 
@@ -206,6 +206,23 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
         st.last_inter=0.0
         self._invalidate(st)
         self.state.set_ammo(int(actor),full)
+        self.refresh_squad_ammo_plan(float(now))
+
+    def resume_after_single_charge(self, actor: int, now: float) -> None:
+        """Resume base rapid on the next Moris frame with one restored round."""
+        st = self._states.get(int(actor))
+        if st is None:
+            raise RuntimeError("Fast rapid resume actor has no runtime state")
+        self._moris_frame_observed_actors.add(int(actor))
+        first = moris_next_tick(float(now), horizon=self.duration)
+        st.ammo = 1
+        st.phase = "firing"
+        st.phase_end = first
+        st.fire_deadline = first
+        st.warmup = 0.0
+        st.last_inter = 0.0
+        self._invalidate(st)
+        self.state.set_ammo(int(actor), 1)
         self.refresh_squad_ammo_plan(float(now))
 
     def _cover_end(self, actor: int) -> float:
