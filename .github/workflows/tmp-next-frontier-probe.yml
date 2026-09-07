@@ -1,0 +1,21 @@
+name: Temporary next frontier probe
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+  workflow_dispatch:
+jobs:
+  probe:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fast-engine-phase2-20260901
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Verify protected baseline
+        run: test "$(git rev-parse origin/master)" = "fb2fd9157aa14499daf6b9f185beb685d4393f90"
+      - name: Print current frontier
+        run: python -u .github/tmp_next_frontier_probe.py
