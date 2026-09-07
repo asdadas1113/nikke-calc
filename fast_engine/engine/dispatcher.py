@@ -1597,8 +1597,31 @@ class TriggerDispatcher:
         return cls._generic_allies_harmful_stack_decrement_provider(squad, effect) is not None
 
     @staticmethod
+    def _finite_self_effect_interval_shape_supported(effect: "CompiledEffect") -> bool:
+        target_effect = effect.parameters.get("target_effect")
+        return (
+            effect.effect_type == "buff"
+            and (effect.stat or "") == "effect_interval"
+            and effect.target_spec.mode is TargetMode.SELF
+            and effect.value is not None
+            and effect.duration is not None
+            and float(effect.duration) > 0.0
+            and effect.max_stack in (None, 1, 1.0)
+            and effect.tick_interval is None
+            and isinstance(target_effect, str)
+            and bool(target_effect)
+            and set(effect.parameters) == {"target_effect"}
+            and not effect.condition_rules
+            and len(effect.triggers) == 1
+            and effect.triggers[0].mode is TriggerMode.EVENT
+            and effect.triggers[0].event_key == "burst_cast"
+        )
+
+    @staticmethod
     def is_executable_effect(effect: "CompiledEffect") -> bool:
         stat = effect.stat or ""
+        if TriggerDispatcher._finite_self_effect_interval_shape_supported(effect):
+            return True
         if TriggerDispatcher._charge_speed_bullet_lifetime_shape_supported(effect):
             return True
         if (

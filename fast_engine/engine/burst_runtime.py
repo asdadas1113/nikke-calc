@@ -13,6 +13,11 @@ from .damage_state import DamageTermResolver
 from .dispatcher import TriggerDispatcher
 from .frame_lattice import moris_observed_tick
 from .dynamic_weapon import MultiSignalChargeCadenceRuntime
+from .dynamic_periodic import (
+    DynamicPeriodicCadenceRuntime,
+    DynamicPeriodicSyncToken,
+    DynamicPeriodicTickToken,
+)
 from .last_bullet import simulate_static_last_bullet_boundaries
 from .model import CompiledSquad, EnemyStaticProfile
 from .scheduler import EventKind, EventScheduler
@@ -42,7 +47,7 @@ class BurstRuntime:
 
     __slots__ = (
         "squad", "enemy", "policy", "scheduler", "state", "machine",
-        "dispatcher", "weapons", "damage_sink",
+        "dispatcher", "weapons", "periodics", "damage_sink",
     )
 
     _STATIC_LAST_BULLET_INVALIDATORS = frozenset({
@@ -104,6 +109,14 @@ class BurstRuntime:
             self.scheduler,
             damage_sink=damage_sink,
         )
+        self.periodics = DynamicPeriodicCadenceRuntime(
+            squad,
+            self.dispatcher.effects,
+            self.scheduler,
+            horizon=policy.duration,
+            modifier_filter=self.dispatcher.is_runtime_executable_effect,
+            effect_filter=self.dispatcher.can_activate_effect,
+        )
         self.weapons = MultiSignalChargeCadenceRuntime(
             squad,
             self.dispatcher.effects,
@@ -132,6 +145,8 @@ class BurstRuntime:
             if not self.dispatcher.can_activate_effect(effect):
                 continue
             rule = effect.triggers[indexed.rule_index]
+            if self.periodics.owns(effect.effect_id, indexed.rule_index):
+                continue
             if rule.mode is not TriggerMode.PERIODIC or rule.interval is None:
                 continue
             interval = float(rule.interval)
@@ -433,6 +448,7 @@ class BurstRuntime:
                 ),
             )
         self._schedule_static_last_bullets(horizon, dynamic_actors)
+        self.periodics.start()
         self._schedule_initial_periodics(horizon)
 
     def run(
@@ -592,8 +608,16 @@ class BurstRuntime:
                 score_end_of_time(event.time)
                 continue
 
+            if event.kind is EventKind.PERIODIC_SYNC:
+                token = event.payload
+                if isinstance(token, DynamicPeriodicSyncToken):
+                    self.periodics.handle_sync(token, event.time)
+                score_end_of_time(event.time)
+                continue
+
             if event.kind is EventKind.STATE_EXPIRE:
                 self.dispatcher.handle_expiry(event)
+                self.periodics.sync(event.time)
                 self.weapons.sync(event.time)
                 score_end_of_time(event.time)
                 continue
@@ -616,27 +640,39 @@ class BurstRuntime:
 
             if event.kind is EventKind.PERIODIC_TICK:
                 token = event.payload
-                if not isinstance(token, PeriodicTickToken):
+                if isinstance(token, DynamicPeriodicTickToken):
+                    if not self.periodics.accepts(token):
+                        score_end_of_time(event.time)
+                        continue
+                    self.dispatcher.dispatch_periodic(
+                        token.effect_id,
+                        token.rule_index,
+                        time=event.time,
+                        context=SignalContext(),
+                    )
+                    self.periodics.after_tick(token)
+                elif isinstance(token, PeriodicTickToken):
+                    self.dispatcher.dispatch_periodic(
+                        token.effect_id,
+                        token.rule_index,
+                        time=event.time,
+                        context=SignalContext(),
+                    )
+                    next_nominal = token.nominal_time + token.interval
+                    if next_nominal < horizon:
+                        next_t = moris_observed_tick(next_nominal, horizon=horizon)
+                        if next_t < horizon:
+                            self.scheduler.schedule(
+                                next_t,
+                                EventKind.PERIODIC_TICK,
+                                actor=event.actor,
+                                payload=PeriodicTickToken(
+                                    token.effect_id, token.rule_index, token.interval, next_nominal
+                                ),
+                            )
+                else:
                     score_end_of_time(event.time)
                     continue
-                self.dispatcher.dispatch_periodic(
-                    token.effect_id,
-                    token.rule_index,
-                    time=event.time,
-                    context=SignalContext(),
-                )
-                next_nominal = token.nominal_time + token.interval
-                if next_nominal < horizon:
-                    next_t = moris_observed_tick(next_nominal, horizon=horizon)
-                    if next_t < horizon:
-                        self.scheduler.schedule(
-                            next_t,
-                            EventKind.PERIODIC_TICK,
-                            actor=event.actor,
-                            payload=PeriodicTickToken(
-                                token.effect_id, token.rule_index, token.interval, next_nominal
-                            ),
-                        )
                 self.weapons.sync(event.time)
                 score_end_of_time(event.time)
                 continue
@@ -666,6 +702,10 @@ class BurstRuntime:
                         (signal.time, signal.source_actor, signal.stage or "")
                     )
                 self.dispatcher.dispatch(signal, context=SignalContext())
+                if signal.event_key == "burst_cast":
+                    self.periodics.defer_burst_cast_sync(
+                        signal.source_actor, signal.time
+                    )
             if event.kind is EventKind.FULL_BURST_START:
                 fb_starts.append(event.time)
                 for actor in range(len(self.squad.members)):

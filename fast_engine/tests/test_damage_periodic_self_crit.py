@@ -50,7 +50,7 @@ class PeriodicFiniteSelfCritTests(unittest.TestCase):
             'normal_delivery:헬름 : 아쿠아마린:이지스 캐논 견제 사격 2:received_dmg_pct',
             blockers,
         )
-        self.assertIn(
+        self.assertNotIn(
             'periodic_grid:에이다:섬광 수류탄 투척 발동 시간 조건:effect_interval',
             blockers,
         )
@@ -113,7 +113,20 @@ class PeriodicFiniteSelfCritTests(unittest.TestCase):
                 grid_mutator
             )
         )
-        self.assertFalse(TriggerDispatcher.is_executable_effect(grid_mutator))
+        self.assertTrue(
+            TriggerDispatcher._finite_self_effect_interval_shape_supported(
+                grid_mutator
+            )
+        )
+        self.assertTrue(TriggerDispatcher.is_executable_effect(grid_mutator))
+        from dataclasses import replace
+        malformed = replace(grid_mutator, parameters={})
+        self.assertFalse(
+            TriggerDispatcher._finite_self_effect_interval_shape_supported(
+                malformed
+            )
+        )
+        self.assertFalse(TriggerDispatcher.is_executable_effect(malformed))
 
 
 if __name__ == '__main__':

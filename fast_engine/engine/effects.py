@@ -780,6 +780,27 @@ class ActiveEffectStore:
         self._materialize_pending_stat(stat, now)
         return bool(self._active_keys(self._by_target_stat, target, stat, now))
 
+    def sum_targeted_stat(
+        self,
+        target: int,
+        stat: str,
+        target_effect: str,
+        *,
+        now: float,
+    ) -> float:
+        """Sum one stat only from effects explicitly naming ``target_effect``."""
+        self._materialize_pending_stat(stat, now)
+        total = 0.0
+        for key in self._active_keys(self._by_target_stat, target, stat, now):
+            active = self._active[key]
+            effect = self._effects[active.effect_id]
+            if effect.parameters.get("target_effect") != target_effect:
+                continue
+            total += float(effect.value or 0.0) * self.effect_value_scale(
+                effect, active, now=now
+            )
+        return total
+
     def sum_stat(self, target: int, stat: str, *, now: float) -> float:
         self._materialize_pending_stat(stat, now)
         total = 0.0

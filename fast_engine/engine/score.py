@@ -1585,6 +1585,38 @@ def _unsupported_remove_named_buff_changes_scored_state(
     return False
 
 
+def _finite_targeted_effect_interval_score_supported(
+    squad: CompiledSquad, effect
+) -> bool:
+    if not TriggerDispatcher._finite_self_effect_interval_shape_supported(effect):
+        return False
+    from .damage_runtime import SimpleDamageScoreSink
+    damage_sink = SimpleDamageScoreSink(
+        squad,
+        EnemyStaticProfile(defense=0.0, duration=1.0),
+        certified_squad_ammo_effect_ids=_certified_squad_ammo_effect_ids(squad),
+    )
+    target_name = effect.parameters.get("target_effect")
+    targets = [
+        candidate for candidate in squad.effects
+        if candidate.actor == effect.actor and candidate.name == target_name
+    ]
+    if len(targets) != 1:
+        return False
+    target = targets[0]
+    periodic = [
+        rule for rule in target.triggers
+        if rule.mode is TriggerMode.PERIODIC
+        and rule.interval is not None
+        and float(rule.interval) > 0.0
+    ]
+    return (
+        len(periodic) == 1
+        and target.effect_type == "damage"
+        and damage_sink.supports(target)
+    )
+
+
 def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
     blockers: list[str] = []
     for actor, member in enumerate(squad.members):
@@ -1671,6 +1703,13 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
             continue
 
         if has_score_periodic and stat in _PERIODIC_GRID_INVALIDATORS:
+            if (
+                stat == "effect_interval"
+                and _finite_targeted_effect_interval_score_supported(
+                    squad, effect
+                )
+            ):
+                continue
             blockers.append(f"periodic_grid:{label}")
 
     return tuple(dict.fromkeys(blockers))

@@ -52,7 +52,7 @@ class PeriodicFiniteEnemyReceivedDamageTests(unittest.TestCase):
             "skill_state_delivery:헬름 : 아쿠아마린:이지스 캐논 견제 사격 2:received_dmg_pct",
             blockers,
         )
-        self.assertIn(
+        self.assertNotIn(
             "periodic_grid:에이다:섬광 수류탄 투척 발동 시간 조건:effect_interval",
             blockers,
         )
