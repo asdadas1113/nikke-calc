@@ -63,6 +63,7 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         "_mode_only_charge_actors",
         "_mode_only_single_charge_actors",
         "_mode_only_weapon_change_ids",
+        "_mode_only_rapid_actors",
         "_external_weapon_block_until",
     )
 
@@ -144,6 +145,18 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         self._mode_only_charge_actors=frozenset(mode_only_ids)
         self._mode_only_single_charge_actors=frozenset(single_charge_actors)
         self._mode_only_weapon_change_ids=dict(mode_only_ids)
+        mode_only_rapid_ids = {
+            effect.actor: effect.effect_id
+            for effect in squad.effects
+            if effect.effect_type == "weapon_change"
+            and effect_filter(effect)
+            and str(squad.members[effect.actor].weapon.get("fire_mode") or "") == "charge"
+            and effect.parameters.get("weapon_type") == "MG"
+            and effect.parameters.get("max_ammo") == -1
+        }
+        self._mode_only_rapid_actors = frozenset(mode_only_rapid_ids)
+        if self._mode_only_rapid_actors:
+            self.attach_suspended_weapon_change_actors(self._mode_only_rapid_actors)
         self._external_weapon_block_until=None
         if self._mode_only_charge_actors:
             self.attach_mode_only_charge_actors(self._mode_only_charge_actors)
@@ -180,6 +193,8 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
             duration=duration,
             effect_filter=effect_filter,
         )
+        if self._mode_only_rapid_actors:
+            self._rapid_reload.attach_mode_only_rapid_actors(self._mode_only_rapid_actors)
         rapid_weapon_change_actors = frozenset(
             effect.actor
             for effect in squad.effects
@@ -188,7 +203,7 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
             and str(squad.members[effect.actor].weapon.get("fire_mode") or "")
             in {"auto", "auto_warmup"}
             and effect.parameters.get("weapon_type") == "SMG"
-        )
+        ) | self._mode_only_rapid_actors
         if rapid_weapon_change_actors:
             self._rapid_reload.attach_effective_weapon(
                 self.effective_weapon, rapid_weapon_change_actors
@@ -238,6 +253,11 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         sink: Callable[[int, int, float], None],
     ) -> None:
         self._rapid_reload.attach_score_sink(actors, sink)
+
+    def attach_event_count_getter(
+        self, callback: Callable[[int, str], int]
+    ) -> None:
+        self._rapid_reload.attach_event_count_getter(callback)
 
     def _combined_weapon_block_until(self, actor: int, now: float) -> float | None:
         until = (
@@ -446,6 +466,8 @@ class MultiSignalChargeCadenceRuntime(DynamicChargeCadenceRuntime):
         self._rapid_reload.advance_to(t, inclusive=inclusive)
 
     def sync(self, now: float) -> None:
+        # Flush compressed MG hit-count residual before base charge resume.
+        self._rapid_reload.sync_mode_only_rapid(float(now))
         was_active={
             actor: (self._states.get(actor) is not None and self._states[actor].weapon_change_id is not None)
             for actor in self._mode_only_charge_actors

@@ -79,7 +79,7 @@ class StatAppliedChargeSpeedTests(unittest.TestCase):
 
         self.assertEqual(len(seen), 23)
         self.assertEqual(certified, 7)
-        self.assertEqual(cadence, 52)
+        self.assertEqual(cadence, 51)
         self.assertEqual(
             matches,
             {("브래디", "나누고 싶은 맛", "event:stat_applied:split_dmg_pct")},

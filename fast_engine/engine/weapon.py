@@ -39,6 +39,26 @@ _CERTIFIED_CROSS_TYPE_WEAPON_CHANGE_DEFAULTS = {
         "core_model_n": 2.55,
         "control": {},
     },
+    "MG": {
+        "fire_mode": "auto_warmup",
+        "fire_rate": 1.0,
+        "fire_rate_max": 70.0,
+        "warmup_bullets": 41.39917201655967,
+        "warmup_cooldown_time": 1.0,
+        "post_fire_delay": 0.0,
+        "post_reload_delay": 0.0,
+        "reload_start_delay": 0.0,
+        "cover_during_delay": False,
+        "charge_time": 0.0,
+        "pellets": 1,
+        "muzzles": 1,
+        "is_clip": False,
+        "normal_hit_coeff": 1.0,
+        "core_base_diameter": 10.0,
+        "core_acc_slope": 0.0,
+        "core_model_n": 2.55,
+        "control": {},
+    },
     "SR": {
         "fire_mode": "charge", "fire_rate": 1.0, "post_fire_delay": 0.215,
         "post_reload_delay": 0.0, "reload_start_delay": 0.0,
@@ -624,7 +644,7 @@ class DynamicChargeCadenceRuntime:
     __slots__ = (
         "squad", "effects", "state", "scheduler", "duration", "effect_filter",
         "actors", "emits_each_charge_hit", "_thresholds", "_states",
-        "_mode_only_actors",
+        "_mode_only_actors", "_suspended_weapon_change_actors",
     )
 
     def __init__(
@@ -676,6 +696,7 @@ class DynamicChargeCadenceRuntime:
         self._thresholds = thresholds
         self._states: dict[int, _ChargeActorState] = {}
         self._mode_only_actors: frozenset[int] = frozenset()
+        self._suspended_weapon_change_actors: frozenset[int] = frozenset()
 
     def attach_mode_only_charge_actors(
         self, actors: tuple[int, ...] | frozenset[int]
@@ -687,6 +708,23 @@ class DynamicChargeCadenceRuntime:
             raise IndexError("Fast mode-only charge actor out of range")
         self._mode_only_actors=selected
         self.actors=tuple(sorted(set(self.actors) | set(selected)))
+
+    def attach_suspended_weapon_change_actors(
+        self, actors: tuple[int, ...] | frozenset[int]
+    ) -> None:
+        """Suspend base charge progression while an owned non-charge mode is active."""
+        if self._states:
+            raise RuntimeError("Fast suspended weapon-change actors must be attached before weapon start")
+        selected = frozenset(int(actor) for actor in actors)
+        if any(actor < 0 or actor >= len(self.squad.members) for actor in selected):
+            raise IndexError("Fast suspended weapon-change actor out of range")
+        if any(
+            str(self.squad.members[actor].weapon.get("fire_mode") or "") != "charge"
+            for actor in selected
+        ):
+            raise NotImplementedError("Fast suspended weapon-change base must be charge")
+        self._suspended_weapon_change_actors = selected
+        self.actors = tuple(sorted(set(self.actors) | set(selected)))
 
     def is_mode_only_charge_active(self, actor: int, now: float) -> bool:
         return (
@@ -929,6 +967,8 @@ class DynamicChargeCadenceRuntime:
         self, actor: int, t: float, *, inclusive: bool
     ) -> None:
         st = self._states[actor]
+        if actor in self._suspended_weapon_change_actors and st.weapon_change_id is not None:
+            return
         while True:
             due = st.phase_end <= t + _EPS if inclusive else st.phase_end < t - _EPS
             if not due:
@@ -955,6 +995,8 @@ class DynamicChargeCadenceRuntime:
         self, actor: int, now: float
     ) -> tuple[float, int] | None:
         src = self._states[actor]
+        if actor in self._suspended_weapon_change_actors and src.weapon_change_id is not None:
+            return None
         st = replace(src)
         # Prediction assumes cadence state is unchanged until the next global
         # event. Any real state mutation calls sync() and invalidates this plan.
@@ -1062,6 +1104,33 @@ class DynamicChargeCadenceRuntime:
                     self._plan(actor,now)
                 self.state.set_ammo(actor,st.ammo)
                 continue
+
+            if actor in self._suspended_weapon_change_actors:
+                current_wc_id = self._weapon_change_id(actor, now)
+                was_active = st.weapon_change_id is not None
+                is_active = current_wc_id is not None
+                if is_active:
+                    if not was_active or current_wc_id != st.weapon_change_id:
+                        st.weapon_change_id = current_wc_id
+                        st.pending_weapon_change_refill = False
+                        self._invalidate(st)
+                    continue
+                if was_active:
+                    # Moris freezes the base charge state while the temporary
+                    # rapid weapon owns CharState.tick. Mode exit restores a
+                    # live-full base magazine and resumes an already-matured
+                    # phase on the first outer frame observing raw expiry.
+                    st.weapon_change_id = None
+                    st.pending_weapon_change_refill = False
+                    st.ammo = self._full_ammo(actor, now)
+                    resume = self._observe_phase_boundary(float(now))
+                    if st.phase_end <= resume + _EPS:
+                        st.phase_end = resume
+                    st.signature = self._signature(actor, now)
+                    self._invalidate(st)
+                    self._plan(actor, now)
+                    self.state.set_ammo(actor, st.ammo)
+                    continue
 
             while st.phase != "charging" and st.phase_end <= now + _EPS:
                 self._finish_nonshot_phase(st, st.phase_end, now)

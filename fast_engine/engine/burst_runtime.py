@@ -126,6 +126,7 @@ class BurstRuntime:
             effect_filter=self.dispatcher.is_runtime_executable_effect,
         )
         self.weapons.attach_weapon_block_until(self.dispatcher.control_block_until)
+        self.weapons.attach_event_count_getter(self.dispatcher.event_count)
         self.machine.attach_candidate_availability(
             lambda actor, now: self.dispatcher.control_block_until(actor, now) is None,
             self.dispatcher.control_block_until,

@@ -305,6 +305,69 @@ def _temporary_self_rapid_weapon_change_score_supported(
     return True
 
 
+def _temporary_self_charge_to_rapid_weapon_change_score_supported(
+    squad: CompiledSquad, effect
+) -> bool:
+    if not TriggerDispatcher._temporary_self_charge_to_rapid_weapon_change_shape_supported(effect):
+        return False
+    actor = effect.actor
+    member = squad.members[actor]
+    if not (
+        str(member.weapon.get("fire_mode") or "") == "charge"
+        and not member.weapon.get("control")
+        and not member.weapon.get("is_clip")
+        and effect.name
+    ):
+        return False
+    if (
+        member.weapon.get("cover_during_delay")
+        and _reload_speed_positive_upper_bound(squad, actor) >= 100.0 - 1e-9
+    ):
+        return False
+    related = tuple(
+        other for other in squad.effects
+        if other.effect_type == "weapon_change"
+        and actor in _possible_ally_targets(squad, other)
+    )
+    if len(related) != 1 or related[0].effect_id != effect.effect_id:
+        return False
+    name = effect.name
+    for other in squad.effects:
+        if other.effect_id == effect.effect_id:
+            continue
+        if (
+            any(rule.key == name for rule in other.condition_rules)
+            or any((rule.event_key or "") == f"event:state_end:{name}" for rule in other.triggers)
+            or other.parameters.get("target_effect") == name
+            or other.parameters.get("scaling_ref") == name
+        ):
+            return False
+    forbidden = {
+        "pellet_hit", "on_attack", "crit_hit", "core_hit",
+        "last_bullet", "last_bullet_fire", "full_reload", "event:full_reload",
+        "squad_ammo_consume",
+    }
+    for other in squad.members[actor].effects:
+        for rule in other.triggers:
+            key = rule.event_key or ""
+            if key == "hit_count":
+                if not (
+                    rule.mode is TriggerMode.MODULO
+                    and rule.trigger_count_reducible
+                    and int(rule.threshold or 0) > 0
+                ):
+                    return False
+            elif key in forbidden and TriggerDispatcher.is_executable_effect(other):
+                return False
+    if any(
+        TriggerDispatcher.is_executable_effect(other)
+        and any(rule.event_key == "squad_body_hit" for rule in other.triggers)
+        for other in squad.effects
+    ):
+        return False
+    return True
+
+
 def _temporary_self_rapid_to_single_charge_weapon_change_score_supported(
     squad: CompiledSquad, effect
 ) -> bool:
@@ -506,7 +569,10 @@ def _charge_actor_score_safe(squad: CompiledSquad, actor: int) -> bool:
     )
     if weapon_changes and not (
         len(weapon_changes) == 1
-        and _temporary_self_charge_weapon_change_score_supported(squad, weapon_changes[0])
+        and (
+            _temporary_self_charge_weapon_change_score_supported(squad, weapon_changes[0])
+            or _temporary_self_charge_to_rapid_weapon_change_score_supported(squad, weapon_changes[0])
+        )
     ):
         return False
 
@@ -980,7 +1046,10 @@ def _dynamic_charge_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
         effect.actor
         for effect in squad.effects
         if effect.effect_type == "weapon_change"
-        and _temporary_self_charge_weapon_change_score_supported(squad, effect)
+        and (
+            _temporary_self_charge_weapon_change_score_supported(squad, effect)
+            or _temporary_self_charge_to_rapid_weapon_change_score_supported(squad, effect)
+        )
     )
     return tuple(sorted(actors))
 
@@ -1012,6 +1081,12 @@ def _dynamic_rapid_reload_score_actors(squad: CompiledSquad) -> tuple[int, ...]:
         row.actor
         for row in certified_stack3_self_stun_remove_lifecycles(squad)
         if _rapid_actor_score_safe(squad, row.actor)
+    )
+    actors.update(
+        effect.actor
+        for effect in squad.effects
+        if effect.effect_type == "weapon_change"
+        and _temporary_self_charge_to_rapid_weapon_change_score_supported(squad, effect)
     )
     actors.update(
         effect.actor
@@ -1678,6 +1753,7 @@ def static_normal_score_blockers(squad: CompiledSquad) -> tuple[str, ...]:
         if effect.effect_type == "weapon_change":
             if not (
                 _temporary_self_charge_weapon_change_score_supported(squad, effect)
+                or _temporary_self_charge_to_rapid_weapon_change_score_supported(squad, effect)
                 or _temporary_self_rapid_weapon_change_score_supported(squad, effect)
                 or _temporary_self_rapid_to_single_charge_weapon_change_score_supported(squad,effect)
                 or _temporary_self_rapid_to_charge_skill_weapon_change_score_supported(squad,effect)

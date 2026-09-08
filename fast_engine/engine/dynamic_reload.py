@@ -92,6 +92,7 @@ class DynamicRapidReloadRuntime:
         "_score_sink",
         "_effective_weapon",
         "_effective_weapon_actors",
+        "_mode_only_rapid_actors",
     )
 
     def __init__(
@@ -116,6 +117,7 @@ class DynamicRapidReloadRuntime:
         self._score_sink: Callable[[int, int, float], None] | None = None
         self._effective_weapon: Callable[[int, float], dict] | None = None
         self._effective_weapon_actors: frozenset[int] = frozenset()
+        self._mode_only_rapid_actors: frozenset[int] = frozenset()
 
         hit_thresholds: dict[int, tuple[int, ...]] = {}
         pellet_thresholds: dict[int, tuple[int, ...]] = {}
@@ -148,6 +150,16 @@ class DynamicRapidReloadRuntime:
         self._hit_thresholds = hit_thresholds
         self._pellet_thresholds = pellet_thresholds
         self._last_bullet_actors = frozenset(last_bullet_actors)
+
+    def attach_mode_only_rapid_actors(
+        self, actors: tuple[int, ...] | frozenset[int]
+    ) -> None:
+        if self._states:
+            raise RuntimeError("Fast mode-only rapid actors must be attached before weapon start")
+        selected = frozenset(int(actor) for actor in actors)
+        if any(actor < 0 or actor >= len(self.squad.members) for actor in selected):
+            raise IndexError("Fast mode-only rapid actor out of range")
+        self._mode_only_rapid_actors = selected
 
     def attach_effective_weapon(
         self,
@@ -184,9 +196,9 @@ class DynamicRapidReloadRuntime:
                 raise IndexError(f"actor out of range: {actor}")
             member = self.squad.members[actor]
             mode = str(member.weapon.get("fire_mode") or "auto")
-            if mode not in {"auto", "auto_warmup"}:
+            if mode not in {"auto", "auto_warmup"} and actor not in self._mode_only_rapid_actors:
                 raise NotImplementedError(
-                    "Fast dynamic rapid reload only supports auto/MG weapons: "
+                    "Fast dynamic rapid reload only supports auto/MG or owned mode-only rapid weapons: "
                     + member.name
                 )
             if member.weapon.get("is_clip"):
@@ -260,15 +272,22 @@ class DynamicRapidReloadRuntime:
         machine = self._machine(st.actor)
         weapon = self._weapon(st.actor, st.phase_end)
         mode = str(weapon.get("fire_mode") or "auto")
+        static_factor = max(0.01, 1.0 + machine.mods.attack_speed_pct / 100.0)
         if mode == "auto":
-            base_rate = max(float(self.squad.members[st.actor].weapon.get("fire_rate") or 1.0), 1e-9)
-            static_factor = machine._fixed_rate() / base_rate
-            rate = min(60.0, max(0.01, float(weapon.get("fire_rate") or base_rate) * static_factor))
+            rate = min(
+                60.0,
+                max(0.01, float(weapon.get("fire_rate") or 1.0) * static_factor),
+            )
             return 1.0 / rate
+        if mode != "auto_warmup":
+            raise NotImplementedError(f"Fast rapid effective fire_mode={mode!r}")
 
-        rate = machine._mg_rate(st.warmup)
+        fr_min = float(weapon.get("fire_rate") or 1.0)
+        fr_max = float(weapon.get("fire_rate_max") or fr_min)
+        cap = float(weapon.get("warmup_bullets") or 1.0)
+        base = fr_min + (fr_max - fr_min) * min(st.warmup, cap) / cap
+        rate = min(60.0, max(0.01, base * static_factor))
         inter = 1.0 / rate
-        cap = float(self.squad.members[st.actor].weapon.get("warmup_bullets") or 1.0)
         warmup_speed = self.effects.sum_stat(
             st.actor,
             "mg_warmup_speed_pct",
@@ -455,6 +474,12 @@ class DynamicRapidReloadRuntime:
 
     def start(self, now: float = 0.0) -> None:
         for actor in self.actors:
+            if actor in self._mode_only_rapid_actors:
+                self._states[actor] = _RapidActorState(
+                    actor=actor, ammo=0, phase="dormant", phase_end=float("inf"),
+                    fire_deadline=float("inf"), signature=None,
+                )
+                continue
             full = self._full_ammo(actor, now)
             st = _RapidActorState(
                 actor=actor,
@@ -471,6 +496,8 @@ class DynamicRapidReloadRuntime:
     def sync(self, now: float) -> None:
         for actor in self.actors:
             st = self._states[actor]
+            if actor in self._mode_only_rapid_actors:
+                continue
             signature = self._signature(actor, now)
             full = int(signature[3])
             weapon_changed = st.signature is not None and signature[0] != st.signature[0]

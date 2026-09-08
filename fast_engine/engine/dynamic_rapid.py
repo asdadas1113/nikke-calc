@@ -23,6 +23,12 @@ class DynamicSquadAmmoToken:
     count_increment: int
 
 
+@dataclass(frozen=True, slots=True)
+class DynamicRapidResidualToken:
+    actor: int
+    count_increment: int
+
+
 def is_supported_rapid_cover_control(member) -> bool:
     """Return whether Fast can execute this actor's current cover control exactly.
 
@@ -84,6 +90,7 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
         "_cover_until", "_weapon_block_until", "_squad_ammo_thresholds",
         "_squad_ammo_generation", "_squad_ammo_scheduled_time",
         "_squad_ammo_dispatched_count", "_moris_frame_observed_actors",
+        "_event_count_getter",
     )
 
     def __init__(self, *args, **kwargs) -> None:
@@ -95,6 +102,7 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
         self._squad_ammo_scheduled_time: float | None = None
         self._squad_ammo_dispatched_count = 0
         self._moris_frame_observed_actors: set[int] = set()
+        self._event_count_getter: Callable[[int, str], int] | None = None
 
     def _weapon(self, actor: int, now: float) -> dict:
         weapon=super()._weapon(actor,now)
@@ -103,6 +111,74 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
         marked=dict(weapon)
         marked["_moris_frame_observed"]=True
         return marked
+
+    def attach_event_count_getter(
+        self, callback: Callable[[int, str], int]
+    ) -> None:
+        self._event_count_getter = callback
+
+    def sync_mode_only_rapid(self, now: float) -> None:
+        """Synchronize owned charge->rapid sessions before base-charge resume."""
+        for actor in self._mode_only_rapid_actors:
+            st = self._states.get(actor)
+            if st is None:
+                continue
+            weapon = self._weapon(actor, float(now))
+            is_active = (
+                weapon.get("_weapon_change_effect_id") is not None
+                and str(weapon.get("fire_mode") or "") in {"auto", "auto_warmup"}
+            )
+            was_active = st.phase != "dormant"
+            if is_active:
+                signature = self._signature(actor, float(now))
+                if not was_active:
+                    if self._event_count_getter is None:
+                        raise RuntimeError("Fast mode-only rapid actor has no event-count getter")
+                    source = moris_observed_tick(
+                        float(now), horizon=self.duration, epsilon=1e-9
+                    )
+                    seed = int(self._event_count_getter(actor, "hit_count"))
+                    st.ammo = self._full_ammo(actor, float(now))
+                    st.phase = "firing"
+                    st.phase_end = source
+                    st.fire_deadline = source
+                    st.hit_count = seed
+                    st.dispatched_hit_count = seed
+                    st.pellet_count = 0
+                    st.dispatched_pellet_count = 0
+                    st.warmup = 0.0
+                    st.last_shot = -999.0
+                    st.last_inter = 0.0
+                    st.signature = signature
+                    self._invalidate(st)
+                    self._plan(actor, source)
+                    self.state.set_ammo(actor, st.ammo)
+                elif signature != st.signature:
+                    st.signature = signature
+                    self._invalidate(st)
+                    self._plan(actor, float(now))
+                continue
+
+            if not was_active:
+                continue
+            residual = st.hit_count - st.dispatched_hit_count
+            if residual < 0:
+                raise RuntimeError("Fast mode-only rapid hit-count phase regressed")
+            if residual:
+                self.scheduler.schedule(
+                    float(now), EventKind.WEAPON_BOUNDARY, actor=actor,
+                    payload=DynamicRapidResidualToken(actor, residual),
+                )
+                st.dispatched_hit_count = st.hit_count
+            st.ammo = 0
+            st.phase = "dormant"
+            st.phase_end = float("inf")
+            st.fire_deadline = float("inf")
+            st.signature = None
+            st.warmup = 0.0
+            st.last_inter = 0.0
+            self._invalidate(st)
+            self.state.set_ammo(actor, 0)
 
     def attach_score_sink(
         self,
@@ -278,7 +354,7 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
         return False
 
     def _cool_warmup_before_shot(self, st: _RapidActorState, shot_time: float) -> None:
-        weapon = self.squad.members[st.actor].weapon
+        weapon = self._weapon(st.actor, float(shot_time))
         if str(weapon.get("fire_mode") or "") != "auto_warmup":
             return
         if st.warmup <= 0.0:
@@ -286,7 +362,16 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
         idle = float(shot_time) - st.last_shot
         if idle <= 0.0:
             return
-        inter = st.last_inter or (1.0 / max(self._machine(st.actor)._mg_rate(st.warmup), 0.01))
+        if st.last_inter:
+            inter = st.last_inter
+        else:
+            machine = self._machine(st.actor)
+            factor = max(0.01, 1.0 + machine.mods.attack_speed_pct / 100.0)
+            fr_min = float(weapon.get("fire_rate") or 1.0)
+            fr_max = float(weapon.get("fire_rate_max") or fr_min)
+            cap = float(weapon.get("warmup_bullets") or 1.0)
+            base = fr_min + (fr_max - fr_min) * min(st.warmup, cap) / cap
+            inter = 1.0 / min(60.0, max(0.01, base * factor))
         if idle <= inter * 1.5:
             return
         cap = float(weapon.get("warmup_bullets") or 1.0)
@@ -400,6 +485,17 @@ class DynamicRapidCadenceRuntime(DynamicRapidReloadRuntime):
                 continue
             self._finish_nonshot_phase(probe, when)
         return None
+
+    def handle_boundary(self, event: ScheduledEvent) -> DynamicRapidBoundary | None:
+        token = event.payload
+        if isinstance(token, DynamicRapidResidualToken):
+            if token.count_increment <= 0:
+                return None
+            return DynamicRapidBoundary(
+                token.actor,
+                (DynamicRapidCountSignal("hit_count", token.count_increment),),
+            )
+        return super().handle_boundary(event)
 
     def begin_full_burst(
         self,

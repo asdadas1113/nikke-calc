@@ -86,14 +86,11 @@ class DynamicWeaponChangeTest(unittest.TestCase):
         self.assertEqual(effect.parameters.get("full_charge_mult"), 250)
 
     def test_other_class_changing_weapon_changes_stay_blocked(self):
-        for name, blocker in (
-            ("레이드_네온벨벳", "weapon_change:벨벳:깔끔한 마무리"),
-            ("레이드_작열짬", "weapon_change:모더니아:섬멸 모드"),
-        ):
-            with self.subTest(name=name):
-                case = snapshot.SQUADS[name]
-                compiled = compile_moris_squad(spec.build_squad(list(case["members"])))
-                self.assertIn(blocker, static_score_blockers(compiled))
+        name = "레이드_작열짬"
+        blocker = "weapon_change:모더니아:섬멸 모드"
+        case = snapshot.SQUADS[name]
+        compiled = compile_moris_squad(spec.build_squad(list(case["members"])))
+        self.assertIn(blocker, static_score_blockers(compiled))
 
 
 if __name__ == "__main__":
