@@ -21,54 +21,21 @@ jobs:
         run: |
           python -u .github/tmp_little_mermaid_mixed_patch.py
           python -u .github/tmp_little_mermaid_mixed_fix.py
+          python -u .github/tmp_little_mermaid_mixed_fix2.py
       - name: Compile staged Fast code
         run: python -m compileall -q fast_engine
-      - name: Trace threshold-32 planning
+      - name: Focused mixed squad-ammo tests
+        run: python -m unittest -v fast_engine.tests.test_damage_little_mermaid_mixed_squad_ammo
+      - name: Neighboring Little Mermaid and cadence tests
         run: |
-          python - <<'PY'
-          from dataclasses import replace
-          from unittest.mock import patch
-          from context import snapshot,spec
-          from fast_engine.engine.dynamic_rapid import DynamicRapidCadenceRuntime
-          from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.tests.test_damage_little_mermaid_mixed_squad_ammo import _compiled,_barrage,_replace_effect,_runtime
-
-          base=_compiled(); barrage=_barrage(base)
-          rule=replace(barrage.triggers[0],threshold=32.0,raw='squad_ammo_consume:32')
-          squad=_replace_effect(base,barrage.effect_id,replace(barrage,triggers=(rule,)))
-          rows=[]
-          orig_plan=DynamicRapidCadenceRuntime._plan_squad_ammo
-          def traced_plan(self,now):
-              probe=self._predict_next_squad_ammo_boundary() if self._states else None
-              ext=()
-              if self._squad_ammo_external_shots_getter is not None:
-                  ext=self._squad_ammo_external_shots_getter()[:3]
-              rows.append(('PLAN',float(now),self._current_squad_ammo_count() if self._states else None,probe,ext,self._squad_ammo_scheduled_time,self._squad_ammo_external_expected))
-              return orig_plan(self,now)
-          orig_pre=DynamicRapidCadenceRuntime.handle_pre_shot_boundary
-          def traced_pre(self,event):
-              rows.append(('PRE_ENTER',float(event.time),event.actor,repr(event.payload),self._current_squad_ammo_count(),self._squad_ammo_external_expected))
-              out=orig_pre(self,event)
-              rows.append(('PRE_EXIT',float(event.time),event.actor,repr(out),self._current_squad_ammo_count(),self._squad_ammo_external_expected))
-              return out
-          orig_ext=DynamicRapidCadenceRuntime.record_external_squad_ammo
-          def traced_ext(self,actor,now):
-              rows.append(('EXT_ENTER',float(now),actor,self._current_squad_ammo_count(),self._squad_ammo_external_expected))
-              out=orig_ext(self,actor,now)
-              rows.append(('EXT_EXIT',float(now),actor,out,self._current_squad_ammo_count(),self._squad_ammo_external_expected))
-              return out
-          signals=[]
-          orig_dispatch=TriggerDispatcher.dispatch_team_hit
-          def traced_dispatch(dispatcher,event_key,**kwargs):
-              if event_key=='squad_ammo_consume':
-                  signals.append((float(kwargs['time']),int(kwargs['attacker']),int(kwargs.get('count_increment',1))))
-              return orig_dispatch(dispatcher,event_key,**kwargs)
-          with patch.object(DynamicRapidCadenceRuntime,'_plan_squad_ammo',new=traced_plan), \
-               patch.object(DynamicRapidCadenceRuntime,'handle_pre_shot_boundary',new=traced_pre), \
-               patch.object(DynamicRapidCadenceRuntime,'record_external_squad_ammo',new=traced_ext), \
-               patch.object(TriggerDispatcher,'dispatch_team_hit',new=traced_dispatch):
-              runtime=_runtime(squad,1.1)
-              runtime.run(duration=1.1)
-          print('SIGNALS=',signals)
-          for row in rows[:120]: print(row)
-          PY
+          python -m unittest -v \
+            fast_engine.tests.test_damage_little_mermaid_lifecycle \
+            fast_engine.tests.test_damage_charge_to_rapid_weapon_change \
+            fast_engine.tests.test_damage_nayuta_cross_mode_weapon_change \
+            fast_engine.tests.test_dynamic_weapon_change
+      - name: Scope diff
+        run: |
+          test -z "$(git diff --name-only -- calculator)"
+          git diff --check -- fast_engine
+          git diff --stat -- fast_engine
+          git status --short
