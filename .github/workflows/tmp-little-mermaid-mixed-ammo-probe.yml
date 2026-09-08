@@ -22,37 +22,86 @@ jobs:
           python -u .github/tmp_little_mermaid_mixed_patch.py
           python -u .github/tmp_little_mermaid_mixed_fix.py
           python -u .github/tmp_little_mermaid_mixed_fix2.py
-      - name: Compile staged Fast code
-        run: python -m compileall -q fast_engine
-      - name: Compare Helm charge shots
+      - name: Inspect Helm compiled cadence surface
         run: |
           python - <<'PY'
-          from unittest.mock import patch
-          from calculator.buff_manager import BuffManager
-          from calculator.timeline import simulate
           from context import snapshot,spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          import fast_engine.engine.score as score
+          squad=compile_moris_squad(spec.build_squad(list(snapshot.SQUADS['스쿼드1']['members'])))
+          actor=4; m=squad.members[actor]
+          print('HELM_WEAPON=',m.weapon)
+          print('CHARGE_SAFE=',score._charge_actor_score_safe(squad,actor))
+          for e in squad.effects:
+              targets=score._possible_ally_targets(squad,e)
+              if actor not in targets and e.actor != actor: continue
+              if (e.stat or '') in {
+                  'reload_speed_pct','reload_time_pct','max_ammo_pct','max_ammo_flat','max_ammo_infinite',
+                  'ammo_charge_pct','ammo_charge_flat','charge_speed_pct','charge_time_pct','charge_time_fixed',
+                  'force_reload'
+              } or e.actor==actor:
+                  print('EFFECT',e.effect_id,'owner=',e.actor,'name=',e.name,'type=',e.effect_type,'stat=',e.stat,'value=',e.value,
+                        'duration=',e.duration,'target=',e.target_spec.raw,'params=',dict(e.parameters),
+                        'triggers=',[(r.mode.value,r.event_key,r.threshold,r.raw) for r in e.triggers],
+                        'conditions=',[(r.mode.value,r.key,r.value) for r in e.condition_rules],
+                        'cap=',e.capability.disposition.value,tuple(e.capability.blockers),'targets=',targets,
+                        'exec=',score.TriggerDispatcher.is_executable_effect(e))
+          print('DYN_RELOAD_ACTORS=',score._dynamic_reload_score_actors(squad))
+          print('DYN_AMMO_ACTORS=',score._dynamic_ammo_charge_score_actors(squad))
+          print('DYN_MAX_ACTORS=',score._dynamic_max_ammo_score_actors(squad))
+          PY
+      - name: Trace Fast Helm state around reload
+        run: |
+          python - <<'PY'
           from fast_engine.tests.test_damage_little_mermaid_mixed_squad_ammo import _compiled,_runtime
-
-          squad=_compiled()
-          runtime=_runtime(squad,12.0)
-          fast=[]
-          runtime.weapons.attach_score_shot_sink((4,),lambda actor,time: fast.append(float(time)))
-          runtime.run(duration=12.0)
-
-          moris=[]
-          orig=BuffManager._notify
-          def traced(self,event,t,caster):
-              if event=='squad_ammo_consume' and caster=='헬름':
-                  moris.append(float(t))
-              return orig(self,event,t,caster)
-          raw=spec.build_squad(list(snapshot.SQUADS['스쿼드1']['members']))
-          with patch.object(BuffManager,'_notify',new=traced):
-              simulate(raw,config={'duration':12.0,'rng_mode':'expected'},seed=42,verbose=False)
-          print('FAST_HELM=',fast)
-          print('MORIS_HELM=',moris)
-          for i,(f,m) in enumerate(zip(fast,moris),1):
-              if abs(f-m)>1e-9:
-                  print('FIRST_HELM_DIVERGENCE=',i,'FAST',f,'MORIS',m,'DELTA',f-m)
-                  break
-          print('COUNTS=',len(fast),len(moris))
+          from fast_engine.engine.weapon import DynamicChargeCadenceRuntime
+          from unittest.mock import patch
+          squad=_compiled(); rows=[]
+          orig_after=DynamicChargeCadenceRuntime._after_shot
+          orig_finish=DynamicChargeCadenceRuntime._finish_nonshot_phase
+          orig_enter=DynamicChargeCadenceRuntime._enter_charge
+          def after(self,st,t):
+              if st.actor==4: rows.append(('BEFORE_SHOT',float(t),st.ammo,st.phase,float(st.phase_end),self._full_ammo(4,float(t)),self._reload_factor(4,float(t))))
+              out=orig_after(self,st,t)
+              if st.actor==4: rows.append(('AFTER_SHOT',float(t),st.ammo,st.phase,float(st.phase_end),self._full_ammo(4,float(t)),self._reload_factor(4,float(t))))
+              return out
+          def finish(self,st,t,mods):
+              if st.actor==4: rows.append(('BEFORE_PHASE',float(t),st.ammo,st.phase,float(st.phase_end),self._full_ammo(4,float(mods)),self._reload_factor(4,float(mods))))
+              out=orig_finish(self,st,t,mods)
+              if st.actor==4: rows.append(('AFTER_PHASE',float(t),st.ammo,st.phase,float(st.phase_end),self._full_ammo(4,float(mods)),self._reload_factor(4,float(mods))))
+              return out
+          def enter(self,st,at,mods):
+              if st.actor==4: rows.append(('ENTER_CHARGE',float(at),st.ammo,st.phase,float(st.phase_end),self._effective_charge_time(4,float(mods))))
+              return orig_enter(self,st,at,mods)
+          with patch.object(DynamicChargeCadenceRuntime,'_after_shot',new=after), patch.object(DynamicChargeCadenceRuntime,'_finish_nonshot_phase',new=finish), patch.object(DynamicChargeCadenceRuntime,'_enter_charge',new=enter):
+              runtime=_runtime(squad,10.2)
+              runtime.run(duration=10.2)
+          for row in rows:
+              if 7.5 <= row[1] <= 10.1: print(row)
+          PY
+      - name: Trace Moris Helm ammo/reload rows
+        run: |
+          python - <<'PY'
+          from context import snapshot,spec
+          from calculator.timeline import simulate
+          squad=spec.build_squad(list(snapshot.SQUADS['스쿼드1']['members']))
+          result=simulate(squad,config={'duration':10.2,'rng_mode':'expected'},seed=42,verbose=True)
+          print('AMMO_ROWS')
+          for row in result.log.ammo_log:
+              if row.caster=='헬름' and 7.5 <= float(row.t) <= 10.1:
+                  print(row)
+          for attr in [a for a in dir(result.log) if not a.startswith('_')]:
+              try: vals=getattr(result.log,attr)
+              except Exception: continue
+              if not isinstance(vals,(list,tuple)): continue
+              hits=[]
+              for row in vals:
+                  text=repr(row)
+                  if '헬름' in text and any(k in text.lower() for k in ('reload','charge','ammo')):
+                      try: t=float(getattr(row,'t'))
+                      except Exception: t=-1
+                      if 7.5 <= t <= 10.1: hits.append(text)
+              if hits:
+                  print('ATTR',attr)
+                  for text in hits[:100]: print(text)
           PY
