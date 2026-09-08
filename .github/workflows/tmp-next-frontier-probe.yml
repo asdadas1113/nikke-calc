@@ -81,7 +81,7 @@ jobs:
       - name: Full Fast discovery
         run: python -m unittest discover -s fast_engine/tests -p 'test_*.py'
       - name: Public blocker frontier
-        run: python -u fast_engine/research/public_blocker_frontier.py
+        run: PYTHONPATH=fast_engine/research python -u -m fast_engine.research.public_blocker_frontier
       - name: Scope and diff
         run: |
           test -z "$(git diff --name-only -- calculator)"
