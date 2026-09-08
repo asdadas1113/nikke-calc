@@ -17,31 +17,22 @@ jobs:
           python-version: '3.13'
       - name: Verify protected baseline
         run: test "$(git rev-parse origin/master)" = "fb2fd9157aa14499daf6b9f185beb685d4393f90"
-      - name: Trace charge contribution and full crossing ownership
+      - name: Apply mixed squad-ammo staging patch
+        run: python -u .github/tmp_little_mermaid_mixed_patch.py
+      - name: Compile staged Fast code
+        run: python -m compileall -q fast_engine
+      - name: Focused mixed squad-ammo tests
+        run: python -m unittest -v fast_engine.tests.test_damage_little_mermaid_mixed_squad_ammo
+      - name: Neighboring Little Mermaid and cadence tests
         run: |
-          python - <<'PY'
-          from unittest.mock import patch
-          from calculator.buff_manager import BuffManager
-          from calculator.timeline import simulate
-          from context import snapshot,spec
-
-          orig=BuffManager._notify
-          squad=spec.build_squad(list(snapshot.SQUADS['스쿼드1']['members']))
-          helm=[]; crossings=[]
-          def traced(self,event,t,caster):
-              if event=='squad_ammo_consume':
-                  before=self._event_counts.get('__squad__',{}).get(event,0)
-                  after=before+1
-                  if caster=='헬름' and len(helm)<12:
-                      helm.append((after,float(t),caster))
-                  if after % 500 == 0:
-                      crossings.append((after,float(t),caster))
-              return orig(self,event,t,caster)
-          with patch.object(BuffManager,'_notify',new=traced):
-              simulate(squad,config={'duration':180.0,'rng_mode':'expected'},seed=42,verbose=False)
-          print('HELM_COUNTS=',helm)
-          print('CROSSING_COUNT=',len(crossings))
-          print('CROSSING_CASTERS=',sorted({name:sum(1 for _,_,c in crossings if c==name) for name in set(c for _,_,c in crossings)}.items()))
-          print('CHARGE_CROSSINGS=',[row for row in crossings if row[2]=='헬름'][:20])
-          print('FIRST20=',crossings[:20])
-          PY
+          python -m unittest -v \
+            fast_engine.tests.test_damage_little_mermaid_lifecycle \
+            fast_engine.tests.test_damage_charge_to_rapid_weapon_change \
+            fast_engine.tests.test_damage_nayuta_cross_mode_weapon_change \
+            fast_engine.tests.test_dynamic_weapon_change
+      - name: Scope diff
+        run: |
+          test -z "$(git diff --name-only -- calculator)"
+          git diff --check -- fast_engine
+          git diff --stat -- fast_engine
+          git status --short
