@@ -17,74 +17,77 @@ jobs:
           python-version: '3.13'
       - name: Verify protected baseline
         run: test "$(git rev-parse origin/master)" = "fb2fd9157aa14499daf6b9f185beb685d4393f90"
-      - name: Locate Moris squad ammo implementation
+      - name: Trace Moris mixed squad-ammo oracle
         run: |
-          grep -R -n "squad_ammo_consume\|sequential_damage" calculator context fast_engine/engine | head -160 || true
-      - name: Inspect Fast proof and public shapes
+          python - <<'PY'
+          from unittest.mock import patch
+          from calculator.buff_manager import BuffManager
+          from calculator.timeline import simulate
+          from context import snapshot, spec
+
+          orig_notify=BuffManager._notify
+          orig_activate=BuffManager._activate
+
+          for team in ('스쿼드1','레이드_네온벨벳'):
+              trace=[]
+              crossings=[]
+              activations=[]
+              def traced_notify(self,event,t,caster):
+                  if event=='squad_ammo_consume':
+                      before=self._event_counts.get('__squad__',{}).get(event,0)
+                      after=before+1
+                      if after % 500 == 0:
+                          trace.append(('notify_enter',after,float(t),caster))
+                          crossings.append((after,float(t),caster))
+                      out=orig_notify(self,event,t,caster)
+                      if after % 500 == 0:
+                          trace.append(('notify_exit',after,float(t),caster))
+                      return out
+                  return orig_notify(self,event,t,caster)
+              def traced_activate(self,eff,caster,t,*args,**kwargs):
+                  if eff.get('name')=='거품 난사':
+                      count=self._event_counts.get('__squad__',{}).get('squad_ammo_consume',0)
+                      trace.append(('barrage_activate',count,float(t),caster))
+                      activations.append((count,float(t),caster))
+                  return orig_activate(self,eff,caster,t,*args,**kwargs)
+              squad=spec.build_squad(list(snapshot.SQUADS[team]['members']))
+              with patch.object(BuffManager,'_notify',new=traced_notify), patch.object(BuffManager,'_activate',new=traced_activate):
+                  result=simulate(squad,config={'duration':30.0,'rng_mode':'expected'},seed=42,verbose=True)
+              print('\n===',team,'===')
+              print('members=',snapshot.SQUADS[team]['members'])
+              print('crossings=',crossings[:12])
+              print('activations=',activations[:12])
+              print('trace=',trace[:36])
+              print('same=',[(c[0],c[1],c[2],a[1]) for c,a in zip(crossings,activations)][:12])
+              for count,t,caster in crossings[:8]:
+                  same_ammo=[(float(row.t),row.caster,row.ammo) for row in result.log.ammo_log if abs(float(row.t)-t)<1e-9]
+                  print('AT',count,t,'crossing_actor=',caster,'ammo_rows=',same_ammo)
+          PY
+      - name: Inspect mixed Fast ownership seams
         run: |
           python - <<'PY'
           import inspect
-          from context import snapshot, spec
+          from context import snapshot,spec
           from fast_engine.engine.compiler import compile_moris_squad
           import fast_engine.engine.score as score
-          import fast_engine.engine.dynamic_rapid as rapid
+          from fast_engine.engine.dynamic_weapon import MultiSignalChargeCadenceRuntime
+          from fast_engine.engine.dynamic_rapid import DynamicRapidCadenceRuntime
+          from fast_engine.engine.weapon import DynamicChargeCadenceRuntime
 
-          print('=== SCORE PROOF ===')
-          print(inspect.getsource(score._squad_ammo_sequential_damage_score_supported))
-          print('=== RAPID SQUAD AMMO METHODS ===')
-          for name in dir(rapid.DynamicRapidCadenceRuntime):
-              if 'squad_ammo' in name:
-                  obj=getattr(rapid.DynamicRapidCadenceRuntime,name)
-                  if callable(obj):
-                      try: print(inspect.getsource(obj))
-                      except (OSError,TypeError): pass
-
-          for team in ('레이드_델타','레이드_네온벨벳','스쿼드1'):
+          for name,obj in (
+              ('proof',score._squad_ammo_sequential_damage_score_supported),
+              ('dynamic_charge_actors',score._dynamic_charge_score_actors),
+              ('composite_attach',MultiSignalChargeCadenceRuntime.attach_squad_ammo_thresholds),
+              ('rapid_attach',DynamicRapidCadenceRuntime.attach_squad_ammo_thresholds),
+              ('rapid_predict',DynamicRapidCadenceRuntime._predict_next_squad_ammo_boundary),
+              ('charge_predict',DynamicChargeCadenceRuntime._predict_next_boundary),
+          ):
+              print('\n===',name,'===')
+              print(inspect.getsource(obj))
+          for team in ('스쿼드1','레이드_네온벨벳'):
               moris=spec.build_squad(list(snapshot.SQUADS[team]['members']))
               squad=compile_moris_squad(moris)
-              print('\n=== TEAM',team,'===')
-              print('members=',[m.name for m in squad.members])
-              rapid_safe=getattr(score,'_rapid_actor_score_safe',None)
-              charge_safe=getattr(score,'_charge_actor_score_safe',None)
-              for i,m in enumerate(squad.members):
-                  print('ACTOR',i,m.name,'weapon_type=',m.weapon_type,'fire_mode=',m.weapon.get('fire_mode'),
-                        'rapid_safe=',rapid_safe(squad,i) if rapid_safe else None,
-                        'charge_safe=',charge_safe(squad,i) if charge_safe else None,
-                        'control=',m.weapon.get('control'),'clip=',m.weapon.get('is_clip'))
-              for e in squad.effects:
-                  if e.name=='거품 난사' or (e.stat or '').startswith('sequential_damage:') or any((r.event_key or '')=='squad_ammo_consume' for r in e.triggers):
-                      print('EFFECT',e.effect_id,'actor=',e.actor,'name=',e.name,'type=',e.effect_type,'stat=',e.stat,'value=',e.value,
-                            'duration=',e.duration,'max_stack=',e.max_stack,'max_trigger=',e.max_trigger,'tick_interval=',e.tick_interval,
-                            'target=',e.target_spec.raw,'params=',dict(e.parameters),
-                            'triggers=',[(r.mode.value,r.event_key,r.threshold,r.raw,r.trigger_count_reducible) for r in e.triggers],
-                            'conditions=',[(r.mode.value,r.key,r.value) for r in e.condition_rules],
-                            'cap=',e.capability.disposition.value,tuple(e.capability.blockers))
-                      if e.name=='거품 난사':
-                          print('OWNED?',score._squad_ammo_sequential_damage_score_supported(squad,e))
-              print('BLOCKERS=',score.static_score_blockers(squad))
-          PY
-      - name: Inspect Moris logs on mixed teams
-        run: |
-          python - <<'PY'
-          from calculator.timeline import simulate
-          from context import snapshot, spec
-          for team in ('레이드_델타','레이드_네온벨벳','스쿼드1'):
-              squad=spec.build_squad(list(snapshot.SQUADS[team]['members']))
-              result=simulate(squad,config={'duration':12.0,'rng_mode':'expected'},seed=42,verbose=True)
-              log=result.log
-              print('\n=== MORIS LOG',team,'===')
-              print('log_attrs=',[a for a in dir(log) if not a.startswith('_')])
-              found=0
-              for attr in [a for a in dir(log) if not a.startswith('_')]:
-                  try: rows=getattr(log,attr)
-                  except Exception: continue
-                  if not isinstance(rows,(list,tuple)): continue
-                  for row in rows:
-                      text=repr(row)
-                      if '거품 난사' in text or 'squad_ammo' in text or 'ammo_consume' in text:
-                          print(attr,text)
-                          found+=1
-                          if found>=120: break
-                  if found>=120: break
-              print('matched_rows=',found,'squad_total=',result.squad_total)
+              print('\nTEAM',team)
+              print('dynamic_charge=',score._dynamic_charge_score_actors(squad))
+              print('dynamic_rapid=',score._dynamic_rapid_reload_score_actors(squad))
           PY
