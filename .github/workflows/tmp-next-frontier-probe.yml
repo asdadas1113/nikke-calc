@@ -3,6 +3,8 @@ on:
   push:
     branches: [fast-engine-phase2-20260901]
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   probe:
     if: github.actor != 'github-actions[bot]'
@@ -88,3 +90,12 @@ jobs:
           git diff --check -- fast_engine
           git diff --stat -- fast_engine
           git status --short
+      - name: Promote Fast semantic checkpoint
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fast_engine
+          git diff --cached --quiet && exit 1
+          test -z "$(git diff --cached --name-only -- calculator)"
+          git commit -m "Fast: support finite charge-to-rapid weapon changes"
+          git push origin HEAD:fast-engine-phase2-20260901
