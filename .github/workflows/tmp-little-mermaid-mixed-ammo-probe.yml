@@ -1,0 +1,90 @@
+name: Temporary Little Mermaid mixed ammo probe
+on:
+  push:
+    branches: [fast-engine-phase2-20260901]
+  workflow_dispatch:
+jobs:
+  probe:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fast-engine-phase2-20260901
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Verify protected baseline
+        run: test "$(git rev-parse origin/master)" = "fb2fd9157aa14499daf6b9f185beb685d4393f90"
+      - name: Locate Moris squad ammo implementation
+        run: |
+          grep -R -n "squad_ammo_consume\|sequential_damage" calculator context fast_engine/engine | head -160 || true
+      - name: Inspect Fast proof and public shapes
+        run: |
+          python - <<'PY'
+          import inspect
+          from context import snapshot, spec
+          from fast_engine.engine.compiler import compile_moris_squad
+          import fast_engine.engine.score as score
+          import fast_engine.engine.dynamic_rapid as rapid
+
+          print('=== SCORE PROOF ===')
+          print(inspect.getsource(score._squad_ammo_sequential_damage_score_supported))
+          print('=== RAPID SQUAD AMMO METHODS ===')
+          for name in dir(rapid.DynamicRapidCadenceRuntime):
+              if 'squad_ammo' in name:
+                  obj=getattr(rapid.DynamicRapidCadenceRuntime,name)
+                  if callable(obj):
+                      try: print(inspect.getsource(obj))
+                      except (OSError,TypeError): pass
+
+          for team in ('레이드_델타','레이드_네온벨벳','스쿼드1'):
+              moris=spec.build_squad(list(snapshot.SQUADS[team]['members']))
+              squad=compile_moris_squad(moris)
+              print('\n=== TEAM',team,'===')
+              print('members=',[m.name for m in squad.members])
+              rapid_safe=getattr(score,'_rapid_actor_score_safe',None)
+              charge_safe=getattr(score,'_charge_actor_score_safe',None)
+              for i,m in enumerate(squad.members):
+                  print('ACTOR',i,m.name,'weapon_type=',m.weapon_type,'fire_mode=',m.weapon.get('fire_mode'),
+                        'rapid_safe=',rapid_safe(squad,i) if rapid_safe else None,
+                        'charge_safe=',charge_safe(squad,i) if charge_safe else None,
+                        'control=',m.weapon.get('control'),'clip=',m.weapon.get('is_clip'))
+              for e in squad.effects:
+                  if e.name=='거품 난사' or (e.stat or '').startswith('sequential_damage:') or any((r.event_key or '')=='squad_ammo_consume' for r in e.triggers):
+                      print('EFFECT',e.effect_id,'actor=',e.actor,'name=',e.name,'type=',e.effect_type,'stat=',e.stat,'value=',e.value,
+                            'duration=',e.duration,'max_stack=',e.max_stack,'max_trigger=',e.max_trigger,'tick_interval=',e.tick_interval,
+                            'target=',e.target_spec.raw,'params=',dict(e.parameters),
+                            'triggers=',[(r.mode.value,r.event_key,r.threshold,r.raw,r.trigger_count_reducible) for r in e.triggers],
+                            'conditions=',[(r.mode.value,r.key,r.value) for r in e.condition_rules],
+                            'cap=',e.capability.disposition.value,tuple(e.capability.blockers))
+                      if e.name=='거품 난사':
+                          print('OWNED?',score._squad_ammo_sequential_damage_score_supported(squad,e))
+              print('BLOCKERS=',score.static_score_blockers(squad))
+          PY
+      - name: Inspect Moris logs on mixed teams
+        run: |
+          python - <<'PY'
+          from calculator.timeline import simulate
+          from context import snapshot, spec
+          for team in ('레이드_델타','레이드_네온벨벳','스쿼드1'):
+              squad=spec.build_squad(list(snapshot.SQUADS[team]['members']))
+              result=simulate(squad,config={'duration':12.0,'rng_mode':'expected'},seed=42,verbose=True)
+              log=result.log
+              print('\n=== MORIS LOG',team,'===')
+              print('log_attrs=',[a for a in dir(log) if not a.startswith('_')])
+              found=0
+              for attr in [a for a in dir(log) if not a.startswith('_')]:
+                  try: rows=getattr(log,attr)
+                  except Exception: continue
+                  if not isinstance(rows,(list,tuple)): continue
+                  for row in rows:
+                      text=repr(row)
+                      if '거품 난사' in text or 'squad_ammo' in text or 'ammo_consume' in text:
+                          print(attr,text)
+                          found+=1
+                          if found>=120: break
+                  if found>=120: break
+              print('matched_rows=',found,'squad_total=',result.squad_total)
+          PY
