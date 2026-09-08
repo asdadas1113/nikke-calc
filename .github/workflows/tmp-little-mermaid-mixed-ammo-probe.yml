@@ -24,49 +24,35 @@ jobs:
           python -u .github/tmp_little_mermaid_mixed_fix2.py
       - name: Compile staged Fast code
         run: python -m compileall -q fast_engine
-      - name: Locate first physical divergence
+      - name: Compare Helm charge shots
         run: |
           python - <<'PY'
-          from dataclasses import replace
           from unittest.mock import patch
           from calculator.buff_manager import BuffManager
           from calculator.timeline import simulate
           from context import snapshot,spec
-          from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.tests.test_damage_little_mermaid_mixed_squad_ammo import _compiled,_barrage,_replace_effect,_runtime
+          from fast_engine.tests.test_damage_little_mermaid_mixed_squad_ammo import _compiled,_runtime
 
-          base=_compiled(); barrage=_barrage(base)
-          rule=replace(barrage.triggers[0],threshold=1.0,raw='squad_ammo_consume:1')
-          squad=_replace_effect(base,barrage.effect_id,replace(barrage,triggers=(rule,)))
+          squad=_compiled()
+          runtime=_runtime(squad,12.0)
           fast=[]
-          orig_fast=TriggerDispatcher.dispatch_team_hit
-          def fast_trace(dispatcher,event_key,**kwargs):
-              if event_key=='squad_ammo_consume':
-                  fast.append((len(fast)+1,float(kwargs['time']),squad.members[int(kwargs['attacker'])].name))
-              return orig_fast(dispatcher,event_key,**kwargs)
-          with patch.object(TriggerDispatcher,'dispatch_team_hit',new=fast_trace):
-              runtime=_runtime(squad,10.0)
-              runtime.run(duration=10.0)
+          runtime.weapons.attach_score_shot_sink((4,),lambda actor,time: fast.append(float(time)))
+          runtime.run(duration=12.0)
 
           moris=[]
-          orig_moris=BuffManager._notify
-          def moris_trace(self,event,t,caster):
-              if event=='squad_ammo_consume':
-                  moris.append((len(moris)+1,float(t),caster))
-              return orig_moris(self,event,t,caster)
+          orig=BuffManager._notify
+          def traced(self,event,t,caster):
+              if event=='squad_ammo_consume' and caster=='헬름':
+                  moris.append(float(t))
+              return orig(self,event,t,caster)
           raw=spec.build_squad(list(snapshot.SQUADS['스쿼드1']['members']))
-          with patch.object(BuffManager,'_notify',new=moris_trace):
-              simulate(raw,config={'duration':10.0,'rng_mode':'expected'},seed=42,verbose=False)
-
-          print('LENS=',len(fast),len(moris))
-          div=None
+          with patch.object(BuffManager,'_notify',new=traced):
+              simulate(raw,config={'duration':12.0,'rng_mode':'expected'},seed=42,verbose=False)
+          print('FAST_HELM=',fast)
+          print('MORIS_HELM=',moris)
           for i,(f,m) in enumerate(zip(fast,moris),1):
-              if abs(f[1]-m[1])>1e-9 or f[2]!=m[2]:
-                  div=i; print('FIRST_DIVERGENCE=',i,'FAST',f,'MORIS',m); break
-          if div is not None:
-              lo=max(0,div-8); hi=min(len(fast),div+8)
-              print('FAST_WINDOW=',fast[lo:hi])
-              print('MORIS_WINDOW=',moris[lo:hi])
-          print('FAST_500=',[row for row in fast if row[0]%500==0][:6])
-          print('MORIS_500=',[row for row in moris if row[0]%500==0][:6])
+              if abs(f-m)>1e-9:
+                  print('FIRST_HELM_DIVERGENCE=',i,'FAST',f,'MORIS',m,'DELTA',f-m)
+                  break
+          print('COUNTS=',len(fast),len(moris))
           PY
