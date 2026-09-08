@@ -17,77 +17,31 @@ jobs:
           python-version: '3.13'
       - name: Verify protected baseline
         run: test "$(git rev-parse origin/master)" = "fb2fd9157aa14499daf6b9f185beb685d4393f90"
-      - name: Trace Moris mixed squad-ammo oracle
+      - name: Trace charge contribution and full crossing ownership
         run: |
           python - <<'PY'
           from unittest.mock import patch
           from calculator.buff_manager import BuffManager
           from calculator.timeline import simulate
-          from context import snapshot, spec
-
-          orig_notify=BuffManager._notify
-          orig_activate=BuffManager._activate
-
-          for team in ('스쿼드1','레이드_네온벨벳'):
-              trace=[]
-              crossings=[]
-              activations=[]
-              def traced_notify(self,event,t,caster):
-                  if event=='squad_ammo_consume':
-                      before=self._event_counts.get('__squad__',{}).get(event,0)
-                      after=before+1
-                      if after % 500 == 0:
-                          trace.append(('notify_enter',after,float(t),caster))
-                          crossings.append((after,float(t),caster))
-                      out=orig_notify(self,event,t,caster)
-                      if after % 500 == 0:
-                          trace.append(('notify_exit',after,float(t),caster))
-                      return out
-                  return orig_notify(self,event,t,caster)
-              def traced_activate(self,eff,caster,t,*args,**kwargs):
-                  if eff.get('name')=='거품 난사':
-                      count=self._event_counts.get('__squad__',{}).get('squad_ammo_consume',0)
-                      trace.append(('barrage_activate',count,float(t),caster))
-                      activations.append((count,float(t),caster))
-                  return orig_activate(self,eff,caster,t,*args,**kwargs)
-              squad=spec.build_squad(list(snapshot.SQUADS[team]['members']))
-              with patch.object(BuffManager,'_notify',new=traced_notify), patch.object(BuffManager,'_activate',new=traced_activate):
-                  result=simulate(squad,config={'duration':30.0,'rng_mode':'expected'},seed=42,verbose=True)
-              print('\n===',team,'===')
-              print('members=',snapshot.SQUADS[team]['members'])
-              print('crossings=',crossings[:12])
-              print('activations=',activations[:12])
-              print('trace=',trace[:36])
-              print('same=',[(c[0],c[1],c[2],a[1]) for c,a in zip(crossings,activations)][:12])
-              for count,t,caster in crossings[:8]:
-                  same_ammo=[(float(row.t),row.caster,row.ammo) for row in result.log.ammo_log if abs(float(row.t)-t)<1e-9]
-                  print('AT',count,t,'crossing_actor=',caster,'ammo_rows=',same_ammo)
-          PY
-      - name: Inspect mixed Fast ownership seams
-        run: |
-          python - <<'PY'
-          import inspect
           from context import snapshot,spec
-          from fast_engine.engine.compiler import compile_moris_squad
-          import fast_engine.engine.score as score
-          from fast_engine.engine.dynamic_weapon import MultiSignalChargeCadenceRuntime
-          from fast_engine.engine.dynamic_rapid import DynamicRapidCadenceRuntime
-          from fast_engine.engine.weapon import DynamicChargeCadenceRuntime
 
-          for name,obj in (
-              ('proof',score._squad_ammo_sequential_damage_score_supported),
-              ('dynamic_charge_actors',score._dynamic_charge_score_actors),
-              ('composite_attach',MultiSignalChargeCadenceRuntime.attach_squad_ammo_thresholds),
-              ('rapid_attach',DynamicRapidCadenceRuntime.attach_squad_ammo_thresholds),
-              ('rapid_predict',DynamicRapidCadenceRuntime._predict_next_squad_ammo_boundary),
-              ('charge_predict',DynamicChargeCadenceRuntime._predict_next_boundary),
-          ):
-              print('\n===',name,'===')
-              print(inspect.getsource(obj))
-          for team in ('스쿼드1','레이드_네온벨벳'):
-              moris=spec.build_squad(list(snapshot.SQUADS[team]['members']))
-              squad=compile_moris_squad(moris)
-              print('\nTEAM',team)
-              print('dynamic_charge=',score._dynamic_charge_score_actors(squad))
-              print('dynamic_rapid=',score._dynamic_rapid_reload_score_actors(squad))
+          orig=BuffManager._notify
+          squad=spec.build_squad(list(snapshot.SQUADS['스쿼드1']['members']))
+          helm=[]; crossings=[]
+          def traced(self,event,t,caster):
+              if event=='squad_ammo_consume':
+                  before=self._event_counts.get('__squad__',{}).get(event,0)
+                  after=before+1
+                  if caster=='헬름' and len(helm)<12:
+                      helm.append((after,float(t),caster))
+                  if after % 500 == 0:
+                      crossings.append((after,float(t),caster))
+              return orig(self,event,t,caster)
+          with patch.object(BuffManager,'_notify',new=traced):
+              simulate(squad,config={'duration':180.0,'rng_mode':'expected'},seed=42,verbose=False)
+          print('HELM_COUNTS=',helm)
+          print('CROSSING_COUNT=',len(crossings))
+          print('CROSSING_CASTERS=',sorted({name:sum(1 for _,_,c in crossings if c==name) for name in set(c for _,_,c in crossings)}.items()))
+          print('CHARGE_CROSSINGS=',[row for row in crossings if row[2]=='헬름'][:20])
+          print('FIRST20=',crossings[:20])
           PY
