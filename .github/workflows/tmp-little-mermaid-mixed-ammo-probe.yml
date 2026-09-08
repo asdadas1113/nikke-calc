@@ -18,51 +18,23 @@ jobs:
       - name: Verify protected baseline
         run: test "$(git rev-parse origin/master)" = "fb2fd9157aa14499daf6b9f185beb685d4393f90"
       - name: Apply mixed squad-ammo staging patch
-        run: python -u .github/tmp_little_mermaid_mixed_patch.py
+        run: |
+          python -u .github/tmp_little_mermaid_mixed_patch.py
+          python -u .github/tmp_little_mermaid_mixed_fix.py
       - name: Compile staged Fast code
         run: python -m compileall -q fast_engine
-      - name: Compare first physical ammo sequence
-        run: |
-          python - <<'PY'
-          from dataclasses import replace
-          from unittest.mock import patch
-          from calculator.buff_manager import BuffManager
-          from calculator.timeline import simulate
-          from context import snapshot,spec
-          from fast_engine.engine.dispatcher import TriggerDispatcher
-          from fast_engine.tests.test_damage_little_mermaid_mixed_squad_ammo import _compiled,_barrage,_replace_effect,_runtime
-
-          base=_compiled()
-          barrage=_barrage(base)
-          rule=replace(barrage.triggers[0],threshold=1.0,raw='squad_ammo_consume:1')
-          squad=_replace_effect(base,barrage.effect_id,replace(barrage,triggers=(rule,)))
-          runtime=_runtime(squad,1.1)
-          fast=[]
-          orig_fast=TriggerDispatcher.dispatch_team_hit
-          def fast_trace(dispatcher,event_key,**kwargs):
-              if event_key=='squad_ammo_consume':
-                  fast.append((len(fast)+1,float(kwargs['time']),squad.members[int(kwargs['attacker'])].name))
-              return orig_fast(dispatcher,event_key,**kwargs)
-          with patch.object(TriggerDispatcher,'dispatch_team_hit',new=fast_trace):
-              runtime.run(duration=1.1)
-
-          moris=[]
-          orig_moris=BuffManager._notify
-          def moris_trace(self,event,t,caster):
-              if event=='squad_ammo_consume':
-                  moris.append((len(moris)+1,float(t),caster))
-              return orig_moris(self,event,t,caster)
-          raw=spec.build_squad(list(snapshot.SQUADS['스쿼드1']['members']))
-          # Raw Moris threshold is irrelevant; trace every physical consume.
-          with patch.object(BuffManager,'_notify',new=moris_trace):
-              simulate(raw,config={'duration':1.1,'rng_mode':'expected'},seed=42,verbose=False)
-          print('FAST=',fast[:45])
-          print('MORIS=',moris[:45])
-          for i,(f,m) in enumerate(zip(fast,moris),1):
-              if abs(f[1]-m[1])>1e-9 or f[2]!=m[2]:
-                  print('FIRST_DIVERGENCE=',i,'FAST',f,'MORIS',m)
-                  break
-          print('LENS=',len(fast),len(moris))
-          PY
       - name: Focused mixed squad-ammo tests
         run: python -m unittest -v fast_engine.tests.test_damage_little_mermaid_mixed_squad_ammo
+      - name: Neighboring Little Mermaid and cadence tests
+        run: |
+          python -m unittest -v \
+            fast_engine.tests.test_damage_little_mermaid_lifecycle \
+            fast_engine.tests.test_damage_charge_to_rapid_weapon_change \
+            fast_engine.tests.test_damage_nayuta_cross_mode_weapon_change \
+            fast_engine.tests.test_dynamic_weapon_change
+      - name: Scope diff
+        run: |
+          test -z "$(git diff --name-only -- calculator)"
+          git diff --check -- fast_engine
+          git diff --stat -- fast_engine
+          git status --short
